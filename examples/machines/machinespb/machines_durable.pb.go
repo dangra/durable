@@ -54,6 +54,12 @@ type ValidateHandler interface {
 	Run(context.Context, ValidateInvocation) error
 }
 
+// ValidateFunc adapts a function to ValidateHandler, in the style of
+// http.HandlerFunc.
+type ValidateFunc func(ctx context.Context, inv ValidateInvocation) error
+
+func (f ValidateFunc) Run(ctx context.Context, inv ValidateInvocation) error { return f(ctx, inv) }
+
 // SelectHostInvocation is passed to SelectHostHandler methods.
 type SelectHostInvocation struct {
 	core *durable.Invocation
@@ -81,6 +87,14 @@ func (inv SelectHostInvocation) State[T proto.Message](step durable.StateStepRef
 // SelectHostHandler implements step "select-host/v1".
 type SelectHostHandler interface {
 	Run(context.Context, SelectHostInvocation) (*SelectHost, error)
+}
+
+// SelectHostFunc adapts a function to SelectHostHandler, in the style of
+// http.HandlerFunc.
+type SelectHostFunc func(ctx context.Context, inv SelectHostInvocation) (*SelectHost, error)
+
+func (f SelectHostFunc) Run(ctx context.Context, inv SelectHostInvocation) (*SelectHost, error) {
+	return f(ctx, inv)
 }
 
 // ReserveCapacityInvocation is passed to ReserveCapacityHandler methods.
@@ -114,6 +128,20 @@ type ReserveCapacityHandler interface {
 	Unwind(context.Context, ReserveCapacityInvocation, durable.Failure) error
 }
 
+// ReserveCapacityFuncs adapts a pair of functions to ReserveCapacityHandler.
+type ReserveCapacityFuncs struct {
+	RunFunc    func(ctx context.Context, inv ReserveCapacityInvocation) (*ReserveCapacity, error)
+	UnwindFunc func(context.Context, ReserveCapacityInvocation, durable.Failure) error
+}
+
+func (f ReserveCapacityFuncs) Run(ctx context.Context, inv ReserveCapacityInvocation) (*ReserveCapacity, error) {
+	return f.RunFunc(ctx, inv)
+}
+
+func (f ReserveCapacityFuncs) Unwind(ctx context.Context, inv ReserveCapacityInvocation, failure durable.Failure) error {
+	return f.UnwindFunc(ctx, inv, failure)
+}
+
 // CreateMachineInvocation is passed to CreateMachineHandler methods.
 type CreateMachineInvocation struct {
 	core *durable.Invocation
@@ -141,6 +169,14 @@ func (inv CreateMachineInvocation) State[T proto.Message](step durable.StateStep
 // CreateMachineHandler implements step "create-machine/v1".
 type CreateMachineHandler interface {
 	Run(context.Context, CreateMachineInvocation) (*CreateMachine, error)
+}
+
+// CreateMachineFunc adapts a function to CreateMachineHandler, in the style of
+// http.HandlerFunc.
+type CreateMachineFunc func(ctx context.Context, inv CreateMachineInvocation) (*CreateMachine, error)
+
+func (f CreateMachineFunc) Run(ctx context.Context, inv CreateMachineInvocation) (*CreateMachine, error) {
+	return f(ctx, inv)
 }
 
 // ProvisionMachineReducer produces the pipeline output from the immutable input

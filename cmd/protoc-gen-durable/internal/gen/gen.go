@@ -317,6 +317,47 @@ func emitHandler(g *protogen.GeneratedFile, s *stepDecl) {
 	}
 	g.P("}")
 	g.P()
+	emitHandlerFuncs(g, s)
+}
+
+// emitHandlerFuncs emits http.HandlerFunc-style adapters: a func type for
+// single-method handler interfaces, a struct of funcs for unwind-bearing
+// ones (a func type cannot implement a two-method interface).
+func emitHandlerFuncs(g *protogen.GeneratedFile, s *stepDecl) {
+	goName := s.msg.GoIdent.GoName
+	inv := goName + "Invocation"
+	ctx := g.QualifiedGoIdent(contextPkg.Ident("Context"))
+
+	runSig := "(ctx " + ctx + ", inv " + inv + ") "
+	if s.hasState {
+		runSig += "(*" + g.QualifiedGoIdent(s.msg.GoIdent) + ", error)"
+	} else {
+		runSig += "error"
+	}
+
+	if !s.opts.GetUnwind() {
+		g.P("// ", goName, "Func adapts a function to ", goName, "Handler, in the style of")
+		g.P("// http.HandlerFunc.")
+		g.P("type ", goName, "Func func", runSig)
+		g.P()
+		g.P("func (f ", goName, "Func) Run", runSig, " { return f(ctx, inv) }")
+		g.P()
+		return
+	}
+
+	failure := g.QualifiedGoIdent(durablePkg.Ident("Failure"))
+	g.P("// ", goName, "Funcs adapts a pair of functions to ", goName, "Handler.")
+	g.P("type ", goName, "Funcs struct {")
+	g.P("RunFunc func", runSig)
+	g.P("UnwindFunc func(", ctx, ", ", inv, ", ", failure, ") error")
+	g.P("}")
+	g.P()
+	g.P("func (f ", goName, "Funcs) Run", runSig, " { return f.RunFunc(ctx, inv) }")
+	g.P()
+	g.P("func (f ", goName, "Funcs) Unwind(ctx ", ctx, ", inv ", inv, ", failure ", failure, ") error {")
+	g.P("return f.UnwindFunc(ctx, inv, failure)")
+	g.P("}")
+	g.P()
 }
 
 func emitReducerType(g *protogen.GeneratedFile, pl *pipelineDecl) {

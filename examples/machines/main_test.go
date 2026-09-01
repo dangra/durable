@@ -120,3 +120,42 @@ func TestProvisionMachineInputValidationFailsFast(t *testing.T) {
 		t.Fatalf("result = %+v, want validate/v1 root failure", result)
 	}
 }
+
+// TestFuncAdapters builds the same pipeline using the generated
+// http.HandlerFunc-style adapters instead of struct handlers.
+func TestFuncAdapters(t *testing.T) {
+	c := newCloud()
+	reserve := &reserveCapacity{cloud: c}
+	def := machinespb.NewProvisionMachine(
+		machinespb.ValidateFunc(validate{}.Run),
+		&selectHost{cloud: c},
+		machinespb.ReserveCapacityFuncs{
+			RunFunc:    reserve.Run,
+			UnwindFunc: reserve.Unwind,
+		},
+		&createMachine{cloud: c},
+		reduceProvisionMachine,
+	)
+
+	engine := durable.NewEngine(durabletest.NewMemStore())
+	provision, err := def.Bind(engine)
+	if err != nil {
+		t.Fatalf("Bind: %v", err)
+	}
+	if err := engine.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer engine.Stop(context.Background())
+
+	run, _, err := provision.Schedule(context.Background(), "machine-4", &machinespb.ProvisionMachineInput{
+		Region:   "ord",
+		MemoryMb: 2048,
+	})
+	if err != nil {
+		t.Fatalf("Schedule: %v", err)
+	}
+	result, err := run.Wait(context.Background())
+	if err != nil || !result.Succeeded() {
+		t.Fatalf("Wait = %+v, %v; want success", result, err)
+	}
+}

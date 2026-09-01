@@ -1,0 +1,47 @@
+// Protobuf extensions declaring durable Pipelines and Steps.
+//
+// See spec/05-codegen.md.
+syntax = "proto3";
+
+package durable.v1;
+
+import "google/protobuf/descriptor.proto";
+
+option go_package = "github.com/dangra/durable/durablepb;durablepb";
+
+// StepOptions declares a protobuf message as a durable Step.
+message StepOptions {
+  // Durable Step identity, e.g. "reserve-capacity/v1". Required.
+  string id = 1;
+
+  // Whether successful forward execution may later participate in unwind.
+  bool unwind = 2;
+
+  // Whether the Step is retired: structurally present, but no new forward
+  // operation may begin for it.
+  bool retired = 3;
+}
+
+// PipelineOptions declares a protobuf marker message as a durable Pipeline.
+message PipelineOptions {
+  // Durable Pipeline identity, e.g. "provision-machine". Required.
+  string id = 1;
+
+  // Fully-qualified Input message type, e.g. ".machines.v1.ProvisionMachineInput".
+  string input = 2;
+
+  // Fully-qualified Output message type.
+  string output = 3;
+
+  // Ordered Step topology as fully-qualified Step message types.
+  repeated string steps = 4;
+}
+
+extend google.protobuf.MessageOptions {
+  // NOTE: these numbers are in the 50000-99999 range reserved for
+  // organization-internal use. Before publishing, replace them with
+  // globally allocated extension numbers from the protobuf global
+  // extension registry.
+  StepOptions step = 51841;
+  PipelineOptions pipeline = 51842;
+}

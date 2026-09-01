@@ -2,4 +2,9 @@ module github.com/dangra/durable
 
 go 1.27.0
 
-require google.golang.org/protobuf v1.36.12
+require (
+	go.etcd.io/bbolt v1.5.0
+	google.golang.org/protobuf v1.36.12
+)
+
+require golang.org/x/sys v0.45.0 // indirect

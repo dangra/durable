@@ -1,0 +1,626 @@
+package durable_test
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/wrapperspb"
+
+	"github.com/dangra/durable"
+	"github.com/dangra/durable/durabletest"
+)
+
+var fastRetry = durable.WithRetryPolicy(durable.RetryPolicy{
+	Initial:    time.Millisecond,
+	Max:        5 * time.Millisecond,
+	Multiplier: 2,
+})
+
+func str(s string) *wrapperspb.StringValue { return wrapperspb.String(s) }
+
+func newString() *wrapperspb.StringValue { return &wrapperspb.StringValue{} }
+
+// refFor builds the typed reference a generator would emit for a
+// state-producing step whose state is a StringValue.
+func refFor(id durable.StepID) durable.StateStepRef[*wrapperspb.StringValue] {
+	return durable.NewStateStepRef(id, newString)
+}
+
+func stateless(id durable.StepID, run func(context.Context, *durable.Invocation) error) durable.StepConfig {
+	return durable.StepConfig{
+		ID: id,
+		Run: func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+			return nil, run(ctx, inv)
+		},
+	}
+}
+
+func startEngine(t *testing.T, store durable.Store, defs ...*durable.Definition) (*durable.Engine, []*durable.Pipeline) {
+	t.Helper()
+	e := durable.NewEngine(store, fastRetry, durable.WithRecoveryBackoff(0))
+	var pipes []*durable.Pipeline
+	for _, d := range defs {
+		p, err := d.Bind(e)
+		if err != nil {
+			t.Fatalf("Bind: %v", err)
+		}
+		pipes = append(pipes, p)
+	}
+	if err := e.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = e.Stop(ctx)
+	})
+	return e, pipes
+}
+
+func TestForwardSuccessWithReducer(t *testing.T) {
+	selectRef := refFor("select-host/v1")
+	def := durable.NewDefinition(durable.DefinitionConfig{
+		ID: "provision",
+		Steps: []durable.StepConfig{
+			stateless("validate/v1", func(ctx context.Context, inv *durable.Invocation) error {
+				in, ok := inv.InputMessage().(*wrapperspb.StringValue)
+				if !ok || in.GetValue() != "ord" {
+					return durable.Fail(errors.New("unexpected input"))
+				}
+				return nil
+			}),
+			{
+				ID:       "select-host/v1",
+				HasState: true,
+				Run: func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+					return str("host-7"), nil
+				},
+			},
+		},
+		NewInput: func() proto.Message { return &wrapperspb.StringValue{} },
+		Reduce: func(v *durable.ReduceView) proto.Message {
+			host, ok := durable.LookupState(v, selectRef)
+			if !ok {
+				panic("select-host state unavailable")
+			}
+			in := v.InputMessage().(*wrapperspb.StringValue)
+			return str(in.GetValue() + ":" + host.GetValue())
+		},
+	})
+
+	_, pipes := startEngine(t, durabletest.NewMemStore(), def)
+	run, created, err := pipes[0].Schedule(context.Background(), "machine-1", str("ord"))
+	if err != nil || !created {
+		t.Fatalf("Schedule = created=%v err=%v", created, err)
+	}
+	res, err := run.Wait(context.Background())
+	if err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	if !res.Succeeded() {
+		t.Fatalf("Outcome = %v, want success (root failure: %+v)", res.Outcome, res.RootFailure)
+	}
+	b, err := run.OutputBytes(context.Background())
+	if err != nil {
+		t.Fatalf("OutputBytes: %v", err)
+	}
+	out := &wrapperspb.StringValue{}
+	if err := proto.Unmarshal(b, out); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	if out.GetValue() != "ord:host-7" {
+		t.Fatalf("Output = %q, want %q", out.GetValue(), "ord:host-7")
+	}
+}
+
+func TestRetryUntilSuccess(t *testing.T) {
+	var attempts atomic.Uint64
+	def := durable.NewDefinition(durable.DefinitionConfig{
+		ID: "retrying",
+		Steps: []durable.StepConfig{
+			stateless("flaky/v1", func(ctx context.Context, inv *durable.Invocation) error {
+				attempts.Store(inv.Attempt())
+				if inv.Attempt() < 3 {
+					return errors.New("transient")
+				}
+				return nil
+			}),
+		},
+	})
+	_, pipes := startEngine(t, durabletest.NewMemStore(), def)
+	run, _, err := pipes[0].Schedule(context.Background(), "r", nil)
+	if err != nil {
+		t.Fatalf("Schedule: %v", err)
+	}
+	res, err := run.Wait(context.Background())
+	if err != nil || !res.Succeeded() {
+		t.Fatalf("Wait = %+v, %v; want success", res, err)
+	}
+	if got := attempts.Load(); got != 3 {
+		t.Fatalf("final attempt = %d, want 3", got)
+	}
+}
+
+func TestHandlerPanicIsRetried(t *testing.T) {
+	def := durable.NewDefinition(durable.DefinitionConfig{
+		ID: "panicky",
+		Steps: []durable.StepConfig{
+			stateless("boom/v1", func(ctx context.Context, inv *durable.Invocation) error {
+				if inv.Attempt() == 1 {
+					panic("kaboom")
+				}
+				return nil
+			}),
+		},
+	})
+	_, pipes := startEngine(t, durabletest.NewMemStore(), def)
+	run, _, _ := pipes[0].Schedule(context.Background(), "r", nil)
+	res, err := run.Wait(context.Background())
+	if err != nil || !res.Succeeded() {
+		t.Fatalf("Wait = %+v, %v; want success after panic retry", res, err)
+	}
+}
+
+func TestPermanentFailureUnwinds(t *testing.T) {
+	reserveRef := refFor("reserve/v1")
+	var mu sync.Mutex
+	var unwoundSteps []durable.StepID
+	var failureSeenByA durable.Failure
+
+	def := durable.NewDefinition(durable.DefinitionConfig{
+		ID: "failing",
+		Steps: []durable.StepConfig{
+			{
+				ID:     "a/v1",
+				Unwind: true,
+				Run: func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+					return nil, nil
+				},
+				UnwindFunc: func(ctx context.Context, inv *durable.Invocation, f durable.Failure) error {
+					mu.Lock()
+					unwoundSteps = append(unwoundSteps, inv.StepID())
+					failureSeenByA = f
+					mu.Unlock()
+					return nil
+				},
+			},
+			{
+				ID:       "reserve/v1",
+				Unwind:   true,
+				HasState: true,
+				Run: func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+					return str("res-42"), nil
+				},
+				UnwindFunc: func(ctx context.Context, inv *durable.Invocation, f durable.Failure) error {
+					state, ok := durable.LookupState(inv, reserveRef)
+					if !ok || state.GetValue() != "res-42" {
+						return durable.Fail(errors.New("own state unavailable during unwind"))
+					}
+					mu.Lock()
+					unwoundSteps = append(unwoundSteps, inv.StepID())
+					mu.Unlock()
+					return durable.Fail(errors.New("release rejected"))
+				},
+			},
+			stateless("create/v1", func(ctx context.Context, inv *durable.Invocation) error {
+				return durable.Fail(errors.New("quota exceeded"))
+			}),
+		},
+	})
+
+	_, pipes := startEngine(t, durabletest.NewMemStore(), def)
+	run, _, _ := pipes[0].Schedule(context.Background(), "r", nil)
+	res, err := run.Wait(context.Background())
+	if err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	if !res.Failed() {
+		t.Fatalf("Outcome = %v, want failure", res.Outcome)
+	}
+	if res.RootFailure == nil || res.RootFailure.StepID != "create/v1" {
+		t.Fatalf("RootFailure = %+v, want step create/v1", res.RootFailure)
+	}
+	if !strings.Contains(res.RootFailure.Message, "quota exceeded") {
+		t.Fatalf("RootFailure.Message = %q", res.RootFailure.Message)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	want := []durable.StepID{"reserve/v1", "a/v1"}
+	if len(unwoundSteps) != 2 || unwoundSteps[0] != want[0] || unwoundSteps[1] != want[1] {
+		t.Fatalf("unwind order = %v, want %v", unwoundSteps, want)
+	}
+	// A unwinds after reserve permanently failed: it must see that failure.
+	if failureSeenByA.Root.StepID != "create/v1" {
+		t.Fatalf("failure.Root.StepID = %q", failureSeenByA.Root.StepID)
+	}
+	if len(failureSeenByA.UnwindFailures) != 1 || failureSeenByA.UnwindFailures[0].StepID != "reserve/v1" {
+		t.Fatalf("failure.UnwindFailures = %+v, want reserve/v1", failureSeenByA.UnwindFailures)
+	}
+	if len(res.UnwindFailures) != 1 || res.UnwindFailures[0].StepID != "reserve/v1" {
+		t.Fatalf("Result.UnwindFailures = %+v, want reserve/v1", res.UnwindFailures)
+	}
+	// Failed Runs have no Pipeline Output.
+	if b, _ := run.OutputBytes(context.Background()); b != nil {
+		t.Fatalf("OutputBytes = %v, want nil for failed run", b)
+	}
+}
+
+func TestDuplicateScheduling(t *testing.T) {
+	release := make(chan struct{})
+	def := durable.NewDefinition(durable.DefinitionConfig{
+		ID: "dedup",
+		Steps: []durable.StepConfig{
+			stateless("wait/v1", func(ctx context.Context, inv *durable.Invocation) error {
+				select {
+				case <-release:
+					return nil
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}),
+		},
+		NewInput: func() proto.Message { return &wrapperspb.StringValue{} },
+	})
+	_, pipes := startEngine(t, durabletest.NewMemStore(), def)
+	p := pipes[0]
+
+	run1, created, err := p.Schedule(context.Background(), "res-1", str("in"))
+	if err != nil || !created {
+		t.Fatalf("first Schedule = created=%v err=%v", created, err)
+	}
+	run2, created, err := p.Schedule(context.Background(), "res-1", str("in"))
+	if err != nil || created {
+		t.Fatalf("equivalent Schedule = created=%v err=%v", created, err)
+	}
+	if run1.ID() != run2.ID() {
+		t.Fatalf("equivalent Schedule returned %s, want %s", run2.ID(), run1.ID())
+	}
+
+	_, created, err = p.Schedule(context.Background(), "res-1", str("different"))
+	var conflict *durable.ScheduleConflictError
+	if !errors.As(err, &conflict) || created {
+		t.Fatalf("conflicting Schedule = created=%v err=%v, want ScheduleConflictError", created, err)
+	}
+	if conflict.RunID != run1.ID() {
+		t.Fatalf("conflict.RunID = %s, want %s", conflict.RunID, run1.ID())
+	}
+
+	// A different resource is a different slot.
+	_, created, err = p.Schedule(context.Background(), "res-2", str("in"))
+	if err != nil || !created {
+		t.Fatalf("other-slot Schedule = created=%v err=%v", created, err)
+	}
+
+	close(release)
+	if res, err := run1.Wait(context.Background()); err != nil || !res.Succeeded() {
+		t.Fatalf("Wait = %+v, %v", res, err)
+	}
+
+	// With the slot free again, scheduling creates a new Run.
+	run3, created, err := p.Schedule(context.Background(), "res-1", str("in"))
+	if err != nil || !created {
+		t.Fatalf("post-terminal Schedule = created=%v err=%v", created, err)
+	}
+	if run3.ID() == run1.ID() {
+		t.Fatal("post-terminal Schedule reused RunID")
+	}
+}
+
+func TestScheduleValidation(t *testing.T) {
+	withInput := durable.NewDefinition(durable.DefinitionConfig{
+		ID:       "with-input",
+		Steps:    []durable.StepConfig{stateless("s/v1", func(context.Context, *durable.Invocation) error { return nil })},
+		NewInput: func() proto.Message { return &wrapperspb.StringValue{} },
+	})
+
+	// Before Start.
+	e := durable.NewEngine(durabletest.NewMemStore())
+	p, err := withInput.Bind(e)
+	if err != nil {
+		t.Fatalf("Bind: %v", err)
+	}
+	if _, _, err := p.Schedule(context.Background(), "r", str("x")); !errors.Is(err, durable.ErrEngineNotStarted) {
+		t.Fatalf("Schedule before Start = %v, want ErrEngineNotStarted", err)
+	}
+	if err := e.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer e.Stop(context.Background())
+
+	// Nil input for an input-declaring pipeline.
+	if _, _, err := p.Schedule(context.Background(), "r", nil); err == nil {
+		t.Fatal("Schedule with nil input succeeded, want error")
+	}
+}
+
+func TestRecoveryResumesAcrossEngines(t *testing.T) {
+	store := durabletest.NewMemStore()
+	var attempts atomic.Uint64
+
+	makeDef := func(succeed bool) *durable.Definition {
+		return durable.NewDefinition(durable.DefinitionConfig{
+			ID: "recoverable",
+			Steps: []durable.StepConfig{
+				stateless("only/v1", func(ctx context.Context, inv *durable.Invocation) error {
+					attempts.Store(inv.Attempt())
+					if !succeed {
+						return errors.New("still deploying")
+					}
+					return nil
+				}),
+			},
+		})
+	}
+
+	// Deployment 1: the step never succeeds.
+	e1 := durable.NewEngine(store, fastRetry)
+	p1, _ := makeDef(false).Bind(e1)
+	if err := e1.Start(context.Background()); err != nil {
+		t.Fatalf("Start1: %v", err)
+	}
+	run, _, err := p1.Schedule(context.Background(), "r", nil)
+	if err != nil {
+		t.Fatalf("Schedule: %v", err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for attempts.Load() < 2 {
+		if time.Now().After(deadline) {
+			t.Fatal("step never retried")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if err := e1.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop1: %v", err)
+	}
+	attemptsAtShutdown := attempts.Load()
+
+	// Deployment 2: same store, corrected handler.
+	e2 := durable.NewEngine(store, fastRetry, durable.WithRecoveryBackoff(0))
+	p2, _ := makeDef(true).Bind(e2)
+	if err := e2.Start(context.Background()); err != nil {
+		t.Fatalf("Start2: %v", err)
+	}
+	defer e2.Stop(context.Background())
+
+	run2, err := p2.Run(context.Background(), run.ID())
+	if err != nil {
+		t.Fatalf("Run lookup: %v", err)
+	}
+	res, err := run2.Wait(context.Background())
+	if err != nil || !res.Succeeded() {
+		t.Fatalf("Wait = %+v, %v; want success after recovery", res, err)
+	}
+	if attempts.Load() <= attemptsAtShutdown {
+		t.Fatalf("attempt numbering restarted: %d <= %d", attempts.Load(), attemptsAtShutdown)
+	}
+}
+
+// seedRun persists a nonterminal record with pre-existing execution facts,
+// simulating a Run started under an earlier deployment.
+func seedRun(t *testing.T, store durable.Store, pipeline durable.PipelineID, steps map[durable.StepID]*durable.StepRecord) durable.RunID {
+	t.Helper()
+	rec := &durable.RunRecord{
+		RunID:      durable.RunID("seeded-" + t.Name()),
+		PipelineID: pipeline,
+		ResourceID: "seed-resource",
+		Phase:      durable.PhaseForward,
+		Steps:      steps,
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
+	}
+	if _, created, err := store.CreateRun(context.Background(), rec); err != nil || !created {
+		t.Fatalf("seeding run: created=%v err=%v", created, err)
+	}
+	return rec.RunID
+}
+
+func TestRetiredStepIsBypassed(t *testing.T) {
+	store := durabletest.NewMemStore()
+	runID := seedRun(t, store, "evolving", map[durable.StepID]*durable.StepRecord{
+		"a/v1": {ForwardStatus: durable.OpSucceeded},
+	})
+
+	var bRan, cRan atomic.Bool
+	def := durable.NewDefinition(durable.DefinitionConfig{
+		ID: "evolving",
+		Steps: []durable.StepConfig{
+			stateless("a/v1", func(context.Context, *durable.Invocation) error { return nil }),
+			{
+				ID:      "b/v1",
+				Retired: true,
+				Run: func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+					bRan.Store(true)
+					return nil, nil
+				},
+			},
+			stateless("c/v1", func(context.Context, *durable.Invocation) error {
+				cRan.Store(true)
+				return nil
+			}),
+		},
+	})
+	_, pipes := startEngine(t, store, def)
+
+	run, err := pipes[0].Run(context.Background(), runID)
+	if err != nil {
+		t.Fatalf("Run lookup: %v", err)
+	}
+	res, err := run.Wait(context.Background())
+	if err != nil || !res.Succeeded() {
+		t.Fatalf("Wait = %+v, %v", res, err)
+	}
+	if bRan.Load() {
+		t.Fatal("retired never-started step executed")
+	}
+	if !cRan.Load() {
+		t.Fatal("step after retired step did not execute")
+	}
+}
+
+func TestRetiredUnresolvedStepContinues(t *testing.T) {
+	store := durabletest.NewMemStore()
+	runID := seedRun(t, store, "evolving", map[durable.StepID]*durable.StepRecord{
+		"a/v1": {ForwardStatus: durable.OpSucceeded},
+		"b/v1": {ForwardStatus: durable.OpUnresolved, ForwardAttempts: 2},
+	})
+
+	var bAttempt atomic.Uint64
+	def := durable.NewDefinition(durable.DefinitionConfig{
+		ID: "evolving",
+		Steps: []durable.StepConfig{
+			stateless("a/v1", func(context.Context, *durable.Invocation) error { return nil }),
+			{
+				ID:      "b/v1",
+				Retired: true,
+				Run: func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+					bAttempt.Store(inv.Attempt())
+					return nil, nil
+				},
+			},
+		},
+	})
+	_, pipes := startEngine(t, store, def)
+
+	run, _ := pipes[0].Run(context.Background(), runID)
+	res, err := run.Wait(context.Background())
+	if err != nil || !res.Succeeded() {
+		t.Fatalf("Wait = %+v, %v", res, err)
+	}
+	if got := bAttempt.Load(); got != 3 {
+		t.Fatalf("retired unresolved step ran with attempt %d, want 3 (continuing prior attempts)", got)
+	}
+}
+
+func TestUnresolvedStepRemovedIsInvalid(t *testing.T) {
+	store := durabletest.NewMemStore()
+	runID := seedRun(t, store, "evolving", map[durable.StepID]*durable.StepRecord{
+		"a/v1": {ForwardStatus: durable.OpSucceeded},
+		"b/v1": {ForwardStatus: durable.OpUnresolved, ForwardAttempts: 1},
+	})
+
+	def := durable.NewDefinition(durable.DefinitionConfig{
+		ID: "evolving",
+		Steps: []durable.StepConfig{
+			stateless("a/v1", func(context.Context, *durable.Invocation) error { return nil }),
+			// b/v1 removed while unresolved.
+			stateless("c/v1", func(context.Context, *durable.Invocation) error { return nil }),
+		},
+	})
+	_, pipes := startEngine(t, store, def)
+
+	run, _ := pipes[0].Run(context.Background(), runID)
+	_, err := run.Wait(context.Background())
+	var ie *durable.InvalidRunError
+	if !errors.As(err, &ie) {
+		t.Fatalf("Wait = %v, want InvalidRunError", err)
+	}
+	st, err := run.Status(context.Background())
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if st.State != durable.RunStateInvalid || st.InvalidReason == "" {
+		t.Fatalf("Status = %+v, want RunStateInvalid with reason", st)
+	}
+}
+
+func TestInvalidReducerRepairedByRedeploy(t *testing.T) {
+	store := durabletest.NewMemStore()
+
+	makeDef := func(broken bool) *durable.Definition {
+		return durable.NewDefinition(durable.DefinitionConfig{
+			ID: "reduced",
+			Steps: []durable.StepConfig{
+				stateless("s/v1", func(context.Context, *durable.Invocation) error { return nil }),
+			},
+			Reduce: func(v *durable.ReduceView) proto.Message {
+				if broken {
+					panic("bad reducer")
+				}
+				return str("ok")
+			},
+		})
+	}
+
+	// Deployment 1: broken reducer invalidates the Run without retry loops.
+	e1 := durable.NewEngine(store, fastRetry)
+	p1, _ := makeDef(true).Bind(e1)
+	if err := e1.Start(context.Background()); err != nil {
+		t.Fatalf("Start1: %v", err)
+	}
+	run, _, err := p1.Schedule(context.Background(), "r", nil)
+	if err != nil {
+		t.Fatalf("Schedule: %v", err)
+	}
+	_, err = run.Wait(context.Background())
+	var ie *durable.InvalidRunError
+	if !errors.As(err, &ie) {
+		t.Fatalf("Wait = %v, want InvalidRunError", err)
+	}
+	if err := e1.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop1: %v", err)
+	}
+
+	// Deployment 2: corrected reducer completes the same nonterminal Run.
+	e2 := durable.NewEngine(store, fastRetry, durable.WithRecoveryBackoff(0))
+	p2, _ := makeDef(false).Bind(e2)
+	if err := e2.Start(context.Background()); err != nil {
+		t.Fatalf("Start2: %v", err)
+	}
+	defer e2.Stop(context.Background())
+
+	run2, err := p2.Run(context.Background(), run.ID())
+	if err != nil {
+		t.Fatalf("Run lookup: %v", err)
+	}
+	res, err := run2.Wait(context.Background())
+	if err != nil || !res.Succeeded() {
+		t.Fatalf("Wait after repair = %+v, %v; want success", res, err)
+	}
+}
+
+func TestNilStateFromStateProducingHandlerIsInvalid(t *testing.T) {
+	def := durable.NewDefinition(durable.DefinitionConfig{
+		ID: "nilstate",
+		Steps: []durable.StepConfig{
+			{
+				ID:       "s/v1",
+				HasState: true,
+				Run: func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+					return nil, nil
+				},
+			},
+		},
+	})
+	_, pipes := startEngine(t, durabletest.NewMemStore(), def)
+	run, _, _ := pipes[0].Schedule(context.Background(), "r", nil)
+	_, err := run.Wait(context.Background())
+	var ie *durable.InvalidRunError
+	if !errors.As(err, &ie) {
+		t.Fatalf("Wait = %v, want InvalidRunError", err)
+	}
+}
+
+func TestStepOwnershipIsExclusive(t *testing.T) {
+	e := durable.NewEngine(durabletest.NewMemStore())
+	mk := func(pipeline durable.PipelineID) *durable.Definition {
+		return durable.NewDefinition(durable.DefinitionConfig{
+			ID: pipeline,
+			Steps: []durable.StepConfig{
+				stateless("shared/v1", func(context.Context, *durable.Invocation) error { return nil }),
+			},
+		})
+	}
+	if _, err := mk("p1").Bind(e); err != nil {
+		t.Fatalf("first Bind: %v", err)
+	}
+	if _, err := mk("p2").Bind(e); err == nil {
+		t.Fatal("second Bind sharing a step succeeded, want error")
+	}
+}

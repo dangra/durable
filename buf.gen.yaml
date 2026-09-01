@@ -3,3 +3,6 @@ plugins:
   - local: protoc-gen-go
     out: .
     opt: module=github.com/dangra/durable
+  - local: ["go", "run", "github.com/dangra/durable/cmd/protoc-gen-durable"]
+    out: .
+    opt: module=github.com/dangra/durable

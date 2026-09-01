@@ -1,0 +1,57 @@
+// The provision-machine example pipeline from the durable specification.
+syntax = "proto3";
+
+package machines.v1;
+
+import "durable/v1/options.proto";
+
+option go_package = "github.com/dangra/durable/examples/machines/machinespb;machinespb";
+
+message ProvisionMachineInput {
+  string region = 1;
+  uint64 memory_mb = 2;
+  uint32 cpus = 3;
+}
+
+message ProvisionMachineOutput {
+  string machine_id = 1;
+  string host_id = 2;
+}
+
+message Validate {
+  option (durable.v1.step) = {id: "validate/v1"};
+}
+
+message SelectHost {
+  option (durable.v1.step) = {id: "select-host/v1"};
+
+  string host_id = 1;
+}
+
+message ReserveCapacity {
+  option (durable.v1.step) = {
+    id: "reserve-capacity/v1"
+    unwind: true
+  };
+
+  string reservation_id = 1;
+}
+
+message CreateMachine {
+  option (durable.v1.step) = {id: "create-machine/v1"};
+
+  string machine_id = 1;
+}
+
+message ProvisionMachine {
+  option (durable.v1.pipeline) = {
+    id: "provision-machine"
+    input: ".machines.v1.ProvisionMachineInput"
+    output: ".machines.v1.ProvisionMachineOutput"
+
+    steps: ".machines.v1.Validate"
+    steps: ".machines.v1.SelectHost"
+    steps: ".machines.v1.ReserveCapacity"
+    steps: ".machines.v1.CreateMachine"
+  };
+}

@@ -1,11 +1,11 @@
 # `durable`: Durable Linear Pipelines with Unwind Semantics
 
-**Status:** Draft 0.6  
+**Status:** Draft 0.7  
 **Target:** Go 1.27+  
 **Persistence:** Local transactional database such as SQLite or bbolt  
 **Schema and code generation:** Protocol Buffers, Buf, and `protoc-gen-durable`
 
-## 1. Overview
+# 1. Overview
 
 `durable` is a Go library for executing fixed, linear pipelines whose progress survives process crashes and restarts.
 
@@ -15,7 +15,7 @@ A pipeline consists of an ordered sequence of steps:
 A -> B -> C -> D
 ```
 
-Each step executes with **at-least-once semantics** and therefore MUST be idempotent.
+Each executed operation uses **at-least-once semantics** and therefore its handler MUST be idempotent.
 
 Successful completion of a step automatically advances execution to the next step. Successful completion of the final step completes the pipeline.
 
@@ -39,66 +39,62 @@ A -> B -> C -> D
          C <- B <- A
 ```
 
-Only steps that declare unwind behavior execute an `Unwind` handler.
+Only steps declaring unwind behavior execute an `Unwind` handler.
 
-Successfully completed steps without unwind behavior are resolved automatically while walking backward.
+Successfully completed steps without unwind behavior require no backward action.
 
 An unwind operation may itself fail permanently. That failure is recorded and unwind continues with the previous successfully completed step.
 
 Every run may contain:
 
-- an immutable pipeline definition,
+- an immutable materialized pipeline definition,
 - an optional immutable typed pipeline input,
 - zero or more immutable per-step durable states,
-- an optional immutable typed pipeline output,
-- an exact durable execution identity.
-
-Changes to pipeline declarations affect newly created runs only.
+- an optional typed pipeline output represented by the final step state,
+- durable failure and retry state,
+- one globally unique execution identity.
 
 ---
 
-# 2. Design principles
+# 2. Scope
 
-`durable` follows several core principles.
+`durable` deliberately models a constrained execution system.
 
-### Constrained execution model
-
-Pipelines are fixed, linear sequences.
-
-`durable` intentionally does not attempt to model arbitrary workflow graphs.
-
-### Explicit durable state
-
-Execution position, retry state, input, step state, failures, and terminal output are persisted explicitly.
-
-`durable` does not use deterministic program replay.
-
-### Ordinary Go handlers
-
-Application code remains ordinary Go.
-
-Generated interfaces expose only capabilities that a step or pipeline actually declares.
-
-### Immutable execution data
-
-The following are immutable once committed:
+It supports:
 
 ```text
-Pipeline definition
-Pipeline input
-Step state
-Pipeline output
+fixed linear topology
++
+durable execution position
++
+automatic retry
++
+explicit permanent failure
++
+reverse unwind
++
+typed immutable run data
 ```
 
-### Explicit permanent failure
+It does not attempt to become a general workflow engine.
 
-Ordinary errors mean retry.
+Initial non-goals include:
 
-```go
-durable.Fail(err)
-```
-
-is the explicit declaration that the current operation should no longer be retried.
+- distributed execution,
+- distributed consensus,
+- remote workers,
+- distributed queues,
+- parallel branches,
+- DAG execution,
+- dynamic topology,
+- loops,
+- child pipelines,
+- deterministic program replay,
+- exactly-once external side effects,
+- arbitrary in-flight workflow migration,
+- BPMN semantics,
+- Petri-net semantics,
+- distributed transactions.
 
 ---
 
@@ -117,7 +113,7 @@ RunID
     which exact execution?
 
 StepID
-    which durable step?
+    which durable step semantics?
 ```
 
 Go types:
@@ -129,13 +125,15 @@ type RunID string
 type StepID string
 ```
 
-They MUST be distinct defined types, not aliases.
+They MUST be distinct defined types rather than aliases.
 
 ---
 
-# 4. Pipeline resource slots
+# 4. Pipeline resource slot
 
-A pipeline execution occupies a logical scheduling slot identified by:
+A pipeline operates on a logical resource.
+
+The scheduling slot is:
 
 ```text
 (PipelineID, ResourceID)
@@ -151,7 +149,7 @@ provision-machine / machine-123
 
 may have only one active run.
 
-Another pipeline may operate simultaneously on the same resource:
+Another pipeline may independently operate on the same resource:
 
 ```text
 provision-machine / machine-123
@@ -164,7 +162,7 @@ Cross-pipeline exclusion is outside the initial scope.
 
 # 5. Run
 
-A **Run** is one immutable execution of a pipeline for a resource.
+A **Run** is one exact immutable execution of a pipeline for a resource.
 
 Example:
 
@@ -174,7 +172,7 @@ ResourceID = machine-123
 RunID      = 01K...
 ```
 
-A resource may accumulate multiple historical runs:
+A resource slot may accumulate historical runs:
 
 ```text
 provision-machine / machine-123
@@ -195,19 +193,22 @@ Only one may be nonterminal at once.
 
 # 6. RunID
 
-`RunID` uniquely identifies one exact execution.
+`RunID` identifies one exact execution.
 
-Unlike `ResourceID`, it does not identify a logical resource.
+It is not:
 
-Unlike a pipeline revision number, it does not identify source code or topology.
+- the resource identity,
+- a pipeline revision,
+- a schema version.
 
-A `RunID` is a portable durable value suitable for:
+A `RunID` is suitable for:
 
-- logging,
 - persistence,
-- APIs,
+- logging,
+- API boundaries,
 - correlation,
-- lookup after restart.
+- historical lookup,
+- waiting after process restart.
 
 ---
 
@@ -222,22 +223,22 @@ reserve-capacity/v1
 reserve-capacity/v2
 ```
 
-Changing a step incompatibly requires introducing a new `StepID`.
-
-A `StepID` MUST NOT depend on:
-
-- protobuf message name,
-- Go package name,
-- Go type name,
-- display name.
-
 Compatible protobuf schema evolution does not necessarily require a new `StepID`.
+
+An incompatible semantic change MUST introduce a new `StepID`.
+
+`StepID` MUST NOT depend on:
+
+- protobuf message names,
+- Go package names,
+- generated Go type names,
+- display names.
 
 ---
 
 # 8. Protocol Buffer declarations
 
-`durable` uses protobuf custom options to declare steps and pipelines.
+`durable` uses protobuf custom options.
 
 Conceptually:
 
@@ -257,8 +258,7 @@ message StepOptions {
 message PipelineOptions {
   string id = 1;
   string input = 2;
-  string output = 3;
-  repeated string steps = 4;
+  repeated string steps = 3;
 }
 
 message TombstoneOptions {
@@ -272,18 +272,20 @@ enum UnwindPolicy {
 }
 
 extend google.protobuf.MessageOptions {
-  StepOptions step = 51000;
-  PipelineOptions pipeline = 51001;
+  StepOptions step = <globally-allocated-extension-number>;
+  PipelineOptions pipeline = <globally-allocated-extension-number>;
 }
 ```
 
-The exact tombstone representation may evolve independently.
+Published extension numbers MUST be allocated from the protobuf global extension registry.
+
+Hard-coded numbers in protobuf's organizational/internal-use range MUST NOT be published as the public `durable` contract.
 
 ---
 
 # 9. Pipeline input
 
-A pipeline MAY declare an input protobuf type.
+A pipeline MAY declare a protobuf input type.
 
 Example:
 
@@ -306,12 +308,14 @@ message ProvisionMachine {
 }
 ```
 
+The input represents immutable execution intent.
+
 Scheduling:
 
 ```go
 run, created, err := provision.Schedule(
     ctx,
-    machineID,
+    durable.ResourceID(machineID),
     &machines.ProvisionMachineInput{
         Region:   "ord",
         MemoryMb: 8192,
@@ -320,15 +324,23 @@ run, created, err := provision.Schedule(
 )
 ```
 
-Pipeline input represents immutable run intent.
+Once the run is accepted, its input MUST NOT change.
 
-Once accepted, it MUST NOT change.
-
-A process restart MUST observe exactly the same input.
+A resumed run MUST observe exactly the same input.
 
 ---
 
-# 10. Duplicate scheduling and input equality
+# 10. Input compatibility
+
+The pipeline input type is part of the public contract identified by `PipelineID`.
+
+Compatible protobuf evolution is allowed.
+
+An incompatible change to the pipeline input contract SHOULD require a new `PipelineID`.
+
+---
+
+# 11. Duplicate scheduling
 
 If no nonterminal run occupies `(PipelineID, ResourceID)`:
 
@@ -337,28 +349,54 @@ create new run
 created = true
 ```
 
-If an active run exists with equivalent input:
+If a nonterminal run exists with equivalent input:
 
 ```text
 return existing run
 created = false
 ```
 
-If an active run exists with different input:
+If a nonterminal run exists with different input:
 
 ```text
 return scheduling conflict
 ```
 
-The new input MUST NOT silently replace or mutate the existing run's input.
+For protobuf inputs, equality MUST use protobuf semantic equality.
 
-For protobuf inputs, semantic protobuf equality MAY be used.
-
-Pipelines without input omit the input argument entirely.
+The library MUST NOT silently replace or ignore conflicting intent.
 
 ---
 
-# 11. Step declaration
+# 12. ScheduleConflictError
+
+A scheduling conflict SHOULD be represented by a typed error.
+
+Conceptually:
+
+```go
+type ScheduleConflictError struct {
+    RunID RunID
+}
+
+func (e *ScheduleConflictError) Error() string
+```
+
+The error identifies the currently occupying run.
+
+For a conflict:
+
+```text
+run     = zero value
+created = false
+err     = *ScheduleConflictError
+```
+
+The caller may use the included `RunID` to inspect the existing run.
+
+---
+
+# 13. Step declaration
 
 A protobuf message annotated with `durable.step` declares a durable step.
 
@@ -376,19 +414,19 @@ message ReserveCapacity {
 }
 ```
 
-A step declaration has two independent capability dimensions:
+A step declaration has two independent capabilities:
 
 ```text
 protobuf fields present
-    -> step establishes durable state
+    -> successful Run establishes durable Step State
 
 unwind = true
-    -> step requires an Unwind operation
+    -> successful step requires an Unwind operation after later failure
 ```
 
 ---
 
-# 12. Step state
+# 14. Step State
 
 A successful step MAY establish immutable durable state.
 
@@ -407,7 +445,7 @@ message ReserveCapacity {
 }
 ```
 
-A successful handler might return:
+A successful handler may return:
 
 ```go
 return &machines.ReserveCapacity{
@@ -416,17 +454,15 @@ return &machines.ReserveCapacity{
 }, nil
 ```
 
-That value becomes the durable state established by the step.
+That value becomes the committed Step State for `reserve-capacity/v1` within the run.
 
 ---
 
-# 13. Step capability matrix
+# 15. Step capability matrix
 
-The generated Go API MUST expose only capabilities actually declared by the step.
+Generated Go interfaces MUST expose only capabilities declared by the step.
 
-## No state, no unwind
-
-Proto:
+## 15.1 No state, no unwind
 
 ```proto
 message Validate {
@@ -441,17 +477,13 @@ Generated:
 ```go
 type ValidateHandler interface {
     Run(
-        context.Context,
-        ValidateInvocation,
+        ctx context.Context,
+        inv ValidateInvocation,
     ) error
 }
 ```
 
----
-
-## State, no unwind
-
-Proto:
+## 15.2 State, no unwind
 
 ```proto
 message SelectHost {
@@ -468,17 +500,13 @@ Generated:
 ```go
 type SelectHostHandler interface {
     Run(
-        context.Context,
-        SelectHostInvocation,
+        ctx context.Context,
+        inv SelectHostInvocation,
     ) (*SelectHost, error)
 }
 ```
 
----
-
-## No state, with unwind
-
-Proto:
+## 15.3 No state, with unwind
 
 ```proto
 message MarkProvisioning {
@@ -494,23 +522,19 @@ Generated:
 ```go
 type MarkProvisioningHandler interface {
     Run(
-        context.Context,
-        MarkProvisioningInvocation,
+        ctx context.Context,
+        inv MarkProvisioningInvocation,
     ) error
 
     Unwind(
-        context.Context,
-        MarkProvisioningInvocation,
-        durable.Failure,
+        ctx context.Context,
+        inv MarkProvisioningInvocation,
+        failure durable.Failure,
     ) error
 }
 ```
 
----
-
-## State and unwind
-
-Proto:
+## 15.4 State and unwind
 
 ```proto
 message ReserveCapacity {
@@ -528,66 +552,41 @@ Generated:
 ```go
 type ReserveCapacityHandler interface {
     Run(
-        context.Context,
-        ReserveCapacityInvocation,
+        ctx context.Context,
+        inv ReserveCapacityInvocation,
     ) (*ReserveCapacity, error)
 
     Unwind(
-        context.Context,
-        ReserveCapacityInvocation,
+        ctx context.Context,
+        inv ReserveCapacityInvocation,
         state *ReserveCapacity,
         failure durable.Failure,
     ) error
 }
 ```
 
-The parameter is called `state` because it represents the immutable durable state established by the successful forward operation.
+The `state` parameter is the immutable Step State committed by the successful forward execution.
 
 ---
 
-# 14. Generated API principle
+# 16. Generated API principle
 
-The protobuf declaration is the semantic contract.
+The protobuf declaration is authoritative.
 
-Generated Go code MUST reflect that contract exactly.
-
-Specifically:
-
-```text
-no fields + unwind=false
-
-    Run(...) error
-
-
-fields + unwind=false
-
-    Run(...) (*Step, error)
-
-
-no fields + unwind=true
-
-    Run(...) error
-    Unwind(..., Failure) error
-
-
-fields + unwind=true
-
-    Run(...) (*Step, error)
-    Unwind(..., state *Step, Failure) error
-```
+Generated code MUST expose exactly the declared capabilities.
 
 The framework MUST NOT require:
 
-- dummy state objects,
-- empty protobuf returns,
+- dummy protobuf state,
+- empty protobuf results,
 - synthetic no-op unwind handlers,
-- marker methods purely for dispatch.
+- marker methods solely for runtime dispatch.
 
 ---
 
-# 15. Step state success boundary
+# 17. Step State success boundary
 
-For state-producing steps:
+For a state-producing step:
 
 ```text
 Run -> (state, nil)
@@ -595,30 +594,36 @@ Run -> (state, nil)
     persist state
     mark step successful
     advance
+```
 
+For retryable failure:
 
+```text
 Run -> (_, ordinary error)
 
     discard returned state
     retry
+```
 
+For permanent failure:
 
+```text
 Run -> (_, durable.Fail(err))
 
     discard returned state
-    permanently fail operation
+    establish root failure
     begin unwind
 ```
 
-Step state exists if and only if forward execution has durably succeeded.
+Step State exists if and only if the forward step has durably succeeded.
 
-The state and successful transition MUST be committed as one logical atomic operation.
+Step success and Step State MUST be committed as one logical atomic transition.
 
 ---
 
-# 16. Step state immutability
+# 18. Step State immutability
 
-Once committed, step state MUST NOT be changed.
+Once committed, Step State MUST NOT change.
 
 The initial public API MUST NOT expose:
 
@@ -628,13 +633,13 @@ UpdateState(...)
 MutateState(...)
 ```
 
-Step state represents durable evidence of what a successful step established.
+Step State represents durable evidence of what a successful step established.
 
 ---
 
-# 17. Explicit step-state ownership
+# 19. Explicit state ownership
 
-Step state belongs to its producing `StepID`.
+State belongs to the step that established it.
 
 For:
 
@@ -642,7 +647,7 @@ For:
 A -> B -> C
 ```
 
-the durable model is:
+the model is:
 
 ```text
 A -> A state
@@ -650,86 +655,79 @@ B -> B state
 C -> C state
 ```
 
-It is not:
+not:
 
 ```text
 global mutable PipelineState
 ```
 
-This isolates schema evolution and step retirement.
+---
+
+# 20. Forward state visibility
+
+During `Run`, an invocation may read:
+
+```text
+pipeline input
++
+committed state of successful predecessor steps
+```
+
+A step MUST NOT read state from:
+
+- a later step,
+- itself before successful completion,
+- a predecessor that never established state.
 
 ---
 
-# 18. Downstream state access
+# 21. Unwind state visibility
 
-Later steps MAY read durable state produced by previous successful steps.
+During `Unwind`, an invocation may read:
 
-Access MUST be explicit and typed.
-
-Conceptually:
-
-```go
-reservation, ok := inv.State(
-    machines.ReserveCapacityStep,
-)
+```text
+pipeline input
++
+committed state of all successfully completed steps
++
+current failure context
 ```
 
-with compile-time result type:
+If the current step itself established state, that state is also passed explicitly as the named `state` argument.
+
+---
+
+# 22. Generated state access
+
+Where state existence is statically guaranteed, generated accessors SHOULD return the state directly.
+
+Example:
+
+```go
+reservation := inv.ReserveCapacityState()
+```
+
+with type:
 
 ```go
 *machines.ReserveCapacity
 ```
 
-Application code MUST NOT need to:
+No `ok` result is required where existence is guaranteed by topology and execution semantics.
 
-- address state by string IDs,
-- manually decode protobuf values,
-- type assert `any`,
-- use reflection.
+An advanced dynamic lookup API MAY exist:
 
-The generator SHOULD reject statically invalid state dependencies where practical.
+```go
+state, ok := inv.State(machines.ReserveCapacityStep)
+```
+
+where `ok=false` may represent historical or dynamically absent state, including a skipped tombstoned step.
 
 ---
 
-# 19. Invocation
+# 23. Operation result semantics
 
-Handlers receive generated invocation types.
-
-Example:
-
-```go
-func (h *reserveCapacity) Run(
-    ctx context.Context,
-    inv machines.ReserveCapacityInvocation,
-) (*machines.ReserveCapacity, error)
-```
-
-Common invocation metadata includes:
-
-```go
-inv.PipelineID()
-inv.ResourceID()
-inv.RunID()
-inv.StepID()
-inv.Attempt()
-inv.Phase()
-```
-
-If the pipeline declares input:
-
-```go
-input := inv.Input()
-```
-
-returns the generated typed pipeline input.
-
-Typed access to previous step state MAY also be generated.
-
----
-
-# 20. Operation result semantics
-
-Handler return values have consistent meaning.
+Handler returns have consistent meaning.
 
 ## Success
 
@@ -755,7 +753,7 @@ return err
 
 means:
 
-> The current operation remains unresolved and should be retried.
+> The operation remains unresolved and should be retried.
 
 ## Permanent failure
 
@@ -765,34 +763,69 @@ return durable.Fail(err)
 
 means:
 
-> The current operation should no longer be retried after this result has been durably committed.
+> The current operation must not be retried once that permanent result is durably committed.
 
-The current phase determines the next transition.
+The current phase determines the next state transition.
 
 ---
 
-# 21. Forward execution
+# 24. Forward permanent failure
 
 For `Run`:
 
 ```text
-success
-    -> persist state if any
-    -> mark step successful
-    -> advance
-
-ordinary error
-    -> retry same step
-
 durable.Fail(err)
-    -> permanently fail forward operation
-    -> establish root failure
+    -> permanently resolve current forward operation as failed
+    -> establish RootFailure
     -> enter unwind
 ```
 
+The failing step itself is NOT considered successfully completed.
+
+Therefore it is NOT included in unwind.
+
 ---
 
-# 22. Unwind execution
+# 25. Failing-step cleanup responsibility
+
+This is a fundamental semantic rule.
+
+Suppose:
+
+```text
+A ✓ -> B ✓ -> C.Run
+                  |
+                  +-- creates partial side effect X
+                  |
+                  +-- returns durable.Fail(err)
+```
+
+Unwind is:
+
+```text
+B.Unwind
+A.Unwind
+```
+
+NOT:
+
+```text
+C.Unwind
+B.Unwind
+A.Unwind
+```
+
+`C` never durably completed and therefore has no committed successful state to compensate.
+
+Consequently:
+
+> A `Run` handler MUST reconcile or clean up any partial effects created by its unsuccessful invocation before returning `durable.Fail`.
+
+`Unwind` compensates previously committed successful steps. It is not cleanup for the currently failing partial step.
+
+---
+
+# 26. Unwind execution
 
 For `Unwind`:
 
@@ -805,17 +838,24 @@ ordinary error
     -> retry same unwind operation
 
 durable.Fail(err)
-    -> record permanent unwind failure
+    -> mark unwind permanently failed
+    -> record UnwindFailure
     -> continue backward
 ```
 
-A permanent unwind failure MUST NOT terminate unwind.
+A permanent unwind failure MUST NOT stop unwind.
 
 ---
 
-# 23. Steps without unwind
+# 27. Steps without unwind
 
-A successful step with `unwind=false` requires no backward action.
+A successful step with:
+
+```proto
+unwind: false
+```
+
+requires no backward handler.
 
 Example:
 
@@ -832,17 +872,17 @@ Unwind:
 C.Unwind()
     |
     v
-B automatically resolved
+B requires no action
     |
     v
 A.Unwind()
 ```
 
-No synthetic handler is called for `B`.
+No synthetic handler is invoked for `B`.
 
 ---
 
-# 24. Unwind liveness
+# 28. Unwind liveness
 
 Every successfully completed step MUST eventually be resolved during unwind as exactly one of:
 
@@ -854,40 +894,131 @@ successfully unwound
 permanently failed to unwind
 ```
 
-Retryable errors do not resolve an unwind operation.
+A retryable unwind failure does not resolve the step.
 
 ---
 
-# 25. Failure context
+# 29. Phase
 
-Every unwind handler receives a read-only `durable.Failure`.
+Pipeline phase is represented separately from scheduler state.
 
 Conceptually:
 
 ```go
-type Failure struct {
-    Root RootFailure
+type Phase uint8
 
+const (
+    PhaseForward Phase = iota + 1
+    PhaseUnwind
+    PhaseDone
+)
+```
+
+`Invocation.Phase()` returns this type.
+
+---
+
+# 30. Scheduler state
+
+Scheduler state describes whether the run is currently eligible or executing.
+
+Conceptually:
+
+```go
+type RunState uint8
+
+const (
+    RunStateRunnable RunState = iota + 1
+    RunStateRunning
+    RunStateWaitingRetry
+    RunStateDone
+)
+```
+
+Examples:
+
+```text
+PhaseForward + RunStateWaitingRetry
+
+PhaseUnwind + RunStateRunning
+
+PhaseDone + RunStateDone
+```
+
+---
+
+# 31. Failure persistence model
+
+Arbitrary Go `error` values are not part of the durable contract.
+
+`durable.Fail(err)` is converted into a persistable failure representation.
+
+Conceptually:
+
+```go
+type FailureRecord struct {
+    StepID  StepID
+    Phase   Phase
+    Attempt uint64
+    Message string
+    At      time.Time
+}
+
+type RootFailure struct {
+    FailureRecord
+}
+
+type UnwindFailure struct {
+    FailureRecord
+}
+
+type Failure struct {
+    Root           RootFailure
     UnwindFailures []UnwindFailure
 }
 ```
 
-The root failure never changes during unwind.
+The exact representation may gain optional structured details later.
 
-Permanent unwind failures already encountered SHOULD be visible to earlier unwind handlers.
-
-Retryable attempt errors are operational history and MUST NOT become part of the semantic failure chain.
+Wrapped Go error identity is not guaranteed to survive restart.
 
 ---
 
-# 26. Pipeline output
+# 32. Failure consistency across restart
 
-A pipeline MAY declare a typed business output.
+An unwind handler SHOULD receive the same durable failure information regardless of whether unwind begins:
+
+- in the same process that observed the failure,
+- after process restart.
+
+Therefore `Failure` represents persisted failure information rather than retaining an arbitrary in-memory Go error object.
+
+---
+
+# 33. Pipeline output
+
+There is no separate output projector and no pipeline `output` option.
+
+Instead:
+
+> The committed Step State of the final step is the pipeline output.
+
+If the final step has protobuf fields, the pipeline has typed output.
+
+If the final step has no fields, the pipeline has no business output.
+
+---
+
+# 34. Pipeline with output
 
 Example:
 
 ```proto
-message ProvisionMachineOutput {
+message CreateMachine {
+  option (durable.v1.step) = {
+    id: "create-machine/v1"
+  };
+
   string machine_id = 1;
   string host_id = 2;
 }
@@ -895,216 +1026,161 @@ message ProvisionMachineOutput {
 message ProvisionMachine {
   option (durable.v1.pipeline) = {
     id: "provision-machine"
-
     input: ".machines.v1.ProvisionMachineInput"
-    output: ".machines.v1.ProvisionMachineOutput"
 
     steps: ".machines.v1.Validate"
-    steps: ".machines.v1.SelectHost"
     steps: ".machines.v1.ReserveCapacity"
     steps: ".machines.v1.CreateMachine"
   };
 }
 ```
 
-Pipeline output is distinct from:
+The pipeline output type is:
 
-- pipeline input,
-- step state,
-- execution `Result`.
-
----
-
-# 27. Pipeline output meaning
-
-Pipeline output represents:
-
-> The typed business value produced by successful completion of the entire pipeline.
-
-It MUST NOT implicitly mean:
-
-```text
-state of final step
+```go
+*machines.CreateMachine
 ```
 
-and MUST NOT use a rolling response accumulator.
+No additional output declaration is required.
 
 ---
 
-# 28. Pipeline output projection
+# 35. Explicit result step
 
-Pipeline output SHOULD be derived from already-durable run data:
-
-```text
-Pipeline Input
-+
-committed Step States
-```
-
-The projector MUST be:
-
-- deterministic with respect to supplied durable state,
-- side-effect free,
-- non-blocking on external systems,
-- non-failing.
-
-If producing the output requires:
-
-- retries,
-- external I/O,
-- side effects,
-- failure semantics,
-
-then that work belongs in a pipeline step instead.
-
----
-
-# 29. Generated completion view
-
-For a pipeline with output, code generation SHOULD produce a typed completion view.
+If the desired business output differs from the natural final operation, the developer SHOULD add an explicit final state-producing step.
 
 Example:
 
-```go
-type ProvisionMachineCompletion struct {
-    // generated
+```text
+Validate
+    ↓
+SelectHost
+    ↓
+ReserveCapacity
+    ↓
+CreateMachine
+    ↓
+ProvisionResult
+```
+
+Proto:
+
+```proto
+message ProvisionResult {
+  option (durable.v1.step) = {
+    id: "provision-result/v1"
+  };
+
+  string machine_id = 1;
+  string host_id = 2;
 }
 ```
 
-It may expose:
+Its handler may derive state entirely from immutable input and predecessor states.
 
-```go
-func (c ProvisionMachineCompletion) Input() *ProvisionMachineInput
+Because it is an ordinary step, it automatically inherits:
 
-func (c ProvisionMachineCompletion) SelectHost() *SelectHost
-
-func (c ProvisionMachineCompletion) ReserveCapacity() *ReserveCapacity
-
-func (c ProvisionMachineCompletion) CreateMachine() *CreateMachine
-```
-
-Because completion projection only runs after successful forward execution, all declared state-producing predecessor states are guaranteed to exist.
+- retry semantics,
+- StepID versioning,
+- crash recovery,
+- historical compatibility rules,
+- state persistence semantics.
 
 ---
 
-# 30. Output projector API
+# 36. Final-step completion boundary
 
-A generated function type SHOULD be used.
+If the final step produces state:
 
-Conceptually:
-
-```go
-type ProvisionMachineOutputFunc func(
-    ProvisionMachineCompletion,
-) *ProvisionMachineOutput
+```text
+Final.Run -> (state, nil)
 ```
 
-Usage:
+the logical durable transition establishes:
 
-```go
-machines.NewProvisionMachine(
-    &validate{},
-    &selectHost{},
-    &reserveCapacity{},
-    &createMachine{},
-
-    func(c machines.ProvisionMachineCompletion) *machines.ProvisionMachineOutput {
-        return &machines.ProvisionMachineOutput{
-            MachineId: c.CreateMachine().MachineId,
-            HostId:    c.SelectHost().HostId,
-        }
-    },
-)
+```text
+final Step State
++
+pipeline terminal success
 ```
 
-The projector is pipeline configuration, not a runtime step.
-
----
-
-# 31. Pipeline output durability
-
-Pipeline output is generated only after every forward step has completed successfully.
-
-Once committed, it is immutable.
+A successful output-producing pipeline MUST therefore have final-step state.
 
 A failed run has no pipeline output.
 
-A successful run declaring output MUST have exactly one committed pipeline output.
+---
 
-If the process crashes after all steps succeed but before output is committed, recovery MAY safely execute the pure output projector again.
+# 37. Final step and unwind
+
+The final step MUST NOT declare:
+
+```proto
+unwind: true
+```
+
+because no later step can fail after the final step has successfully completed.
+
+`protoc-gen-durable` SHOULD reject a pipeline whose final step declares unwind capability.
+
+If the final step itself fails, it is not successfully completed and therefore is not unwound.
 
 ---
 
-# 32. Pipeline output versus execution Result
+# 38. Pipeline output compatibility
 
-These are distinct concepts.
+For a stable `PipelineID`, the final step state type forms part of the pipeline's public output contract.
 
-`Result` answers:
+Compatible protobuf evolution is allowed.
 
-> What happened to execution?
+An incompatible output-contract change SHOULD require a new `PipelineID`.
 
-Pipeline output answers:
-
-> What business value did successful execution produce?
-
-Example execution result:
+For example:
 
 ```text
-OutcomeSuccess
+A -> B -> ResultV1
 ```
 
-Pipeline output:
+changing incompatibly to:
 
 ```text
-machine_id = machine-123
-host_id = host-42
+A -> B -> ResultV2
 ```
 
-Failure example:
+requires a new pipeline identity.
 
-```text
-OutcomeFailure
-
-RootFailure:
-    CreateMachine
-
-UnwindFailures:
-    ReserveCapacity
-```
-
-with no pipeline output.
+This ensures historical typed runs remain compatible with the generated pipeline API.
 
 ---
 
-# 33. Typed Run for output pipelines
+# 39. Typed output runs
 
-A generic `durable.Run` cannot preserve pipeline-output type information.
+If the final step has state, generated pipeline APIs SHOULD return a typed Run wrapper.
 
-Therefore a pipeline declaring output SHOULD receive a generated typed Run handle.
-
-Example:
+For example:
 
 ```go
 run, created, err := provision.Schedule(...)
 ```
 
-where the static type is:
+has static type:
 
 ```go
 machines.ProvisionMachineRun
 ```
 
-rather than plain:
-
-```go
-durable.Run
-```
+The typed wrapper embeds or internally references `durable.Run`.
 
 ---
 
-# 34. Typed Result for output pipelines
+# 40. Typed results
 
-A generated typed run returns a generated typed result.
+For an output-producing pipeline:
+
+```go
+result, err := run.Wait(ctx)
+```
+
+returns a generated typed result.
 
 Conceptually:
 
@@ -1113,85 +1189,154 @@ type ProvisionMachineResult struct {
     durable.Result
 }
 
-func (r ProvisionMachineResult) Output() *ProvisionMachineOutput
+func (r ProvisionMachineResult) Output() *CreateMachine
 ```
 
-Usage:
+On success:
 
 ```go
-result, err := run.Wait(ctx)
-if err != nil {
-    return err
-}
-
-if result.Failed() {
-    return fmt.Errorf(
-        "provision failed: %v",
-        result.RootFailure(),
-    )
-}
-
-machine := result.Output()
-
-fmt.Println(machine.MachineId)
+output := result.Output()
 ```
 
-No cast or protobuf reflection is required.
+is statically typed.
+
+On failure:
+
+```text
+Output() == nil
+```
 
 ---
 
-# 35. Pipelines without output
+# 41. Typed lookup consistency
 
-A pipeline without declared output does not need generated typed Run or Result wrappers merely for consistency.
+Output pipelines MUST preserve their typed Run wrapper across all run lookup paths.
 
-It MAY continue to use:
+Therefore generated methods SHOULD return:
+
+```go
+ProvisionMachineRun
+```
+
+from:
+
+```go
+Schedule(...)
+Active(...)
+```
+
+and:
+
+```go
+[]ProvisionMachineRun
+```
+
+from:
+
+```go
+Runs(...)
+```
+
+A run obtained after restart must retain the same typed `Output()` access as one returned directly by `Schedule`.
+
+---
+
+# 42. Pipelines without output
+
+If the final step has no state, the pipeline has no business output.
+
+Generated methods MAY return plain:
 
 ```go
 durable.Run
 durable.Result
 ```
 
-The generated API SHOULD remain minimal unless a concrete pipeline feature requires additional typing.
+without unnecessary typed wrappers.
+
+This follows the general rule:
+
+> Generated APIs expose only capabilities that are actually present.
 
 ---
 
-# 36. Pipeline definition
+# 43. Generated type naming
 
-Generated code provides an unbound typed definition.
+Proto messages already occupy generated Go names.
+
+For:
+
+```proto
+message ProvisionMachine { ... }
+```
+
+`protoc-gen-go` produces:
+
+```go
+machines.ProvisionMachine
+```
+
+Therefore `protoc-gen-durable` MUST use collision-free generated names.
+
+Recommended names:
+
+```text
+ProvisionMachineDefinition
+ProvisionMachinePipeline
+ProvisionMachineRun
+ProvisionMachineResult
+```
+
+The bound pipeline handle MUST NOT also be named `ProvisionMachine`.
+
+---
+
+# 44. Generated pipeline construction
 
 Example:
 
 ```go
 definition := machines.NewProvisionMachine(
     &validate{},
-    &selectHost{},
     &reserveCapacity{},
     &createMachine{},
-    outputFunc,
 )
 ```
 
-The definition knows:
+The static return type is conceptually:
+
+```go
+*machines.ProvisionMachineDefinition
+```
+
+The definition contains:
 
 - `PipelineID`,
 - input type,
-- output type if any,
-- immutable topology,
-- handlers,
-- step state capabilities,
+- ordered topology,
+- active handlers,
+- state capabilities,
 - unwind capabilities,
-- output projector if any.
+- output type implied by the final step.
 
 ---
 
-# 37. Bind
+# 45. Bind
 
-A generated pipeline definition is associated with an Engine via:
+A generated definition binds to an Engine:
 
 ```go
 provision, err := machines.NewProvisionMachine(
-    ...
+    &validate{},
+    &reserveCapacity{},
+    &createMachine{},
 ).Bind(engine)
+```
+
+The return type is:
+
+```go
+*machines.ProvisionMachinePipeline
 ```
 
 `Bind` means:
@@ -1201,19 +1346,19 @@ provision, err := machines.NewProvisionMachine(
 It:
 
 1. registers the pipeline definition,
-2. registers its active handlers,
-3. registers generated adapters,
+2. registers its handlers,
+3. registers generated runtime adapters,
 4. returns an Engine-bound pipeline handle.
 
-`Bind` is valid only before `Engine.Start`.
+`Bind` is allowed only before `Engine.Start`.
 
 ---
 
-# 38. Pipeline handle
+# 46. Pipeline handle
 
-A bound pipeline is resource-oriented.
+A bound pipeline handle is resource-oriented.
 
-Operations include:
+It exposes operations such as:
 
 ```go
 Schedule
@@ -1221,19 +1366,21 @@ Active
 Runs
 ```
 
-A subsystem SHOULD be able to depend only on the pipeline handles it needs, without receiving the whole Engine.
+A subsystem SHOULD be able to depend on only the pipeline handles it needs.
 
 Example:
 
 ```go
 type MachineService struct {
-    provision *machines.ProvisionMachine
+    provision *machines.ProvisionMachinePipeline
 }
 ```
 
+The subsystem need not receive `*durable.Engine`.
+
 ---
 
-# 39. Schedule
+# 47. Schedule
 
 Pipeline without input:
 
@@ -1258,109 +1405,79 @@ run, created, err := provision.Schedule(
 
 ```text
 true
-    this call created a new run
+    this call created a new Run
 
 false
-    an equivalent active run already existed
+    an equivalent nonterminal Run already existed
 ```
 
-`Schedule` is only valid after `Engine.Start`.
+`Schedule` is valid only after `Engine.Start`.
 
 ---
 
-# 40. Schedule acceptance
+# 48. Active
 
-`Schedule` returns after the run has been durably accepted.
-
-It does not wait for:
-
-- worker availability,
-- first handler invocation,
-- first step completion,
-- pipeline completion.
-
-Conceptually:
-
-```text
-Schedule
-    |
-    v
-create or resolve active run
-    |
-    v
-durably accept
-    |
-    +---- return
-    |
-    v
-Engine executes asynchronously
-```
-
----
-
-# 41. Schedule context lifetime
-
-The context passed to `Schedule` controls only the scheduling request.
-
-Once the run has been accepted:
-
-```text
-caller context cancellation
-    !=
-run cancellation
-```
-
-The run belongs to the Engine.
-
----
-
-# 42. Active lookup
-
-Pipeline handle:
+For an output-producing pipeline:
 
 ```go
 run, ok, err := provision.Active(
     ctx,
-    machineID,
+    resourceID,
 )
 ```
 
-`ok` means an active nonterminal run currently occupies the slot.
+returns:
 
-This is a lookup, so `ok` is appropriate.
+```go
+machines.ProvisionMachineRun
+```
+
+For a pipeline without output it MAY return plain:
+
+```go
+durable.Run
+```
+
+`ok` indicates whether a nonterminal run occupies the resource slot.
 
 ---
 
-# 43. Historical runs
+# 49. Runs
 
-Pipeline handle:
+For an output-producing pipeline:
 
 ```go
 runs, err := provision.Runs(
     ctx,
-    machineID,
+    resourceID,
 )
 ```
 
-returns Run handles, not just IDs.
+returns:
 
-Therefore the method is called `Runs`, not `RunIDs`.
+```go
+[]machines.ProvisionMachineRun
+```
 
-Callers may obtain:
+For a pipeline without output it MAY return:
+
+```go
+[]durable.Run
+```
+
+The method is called `Runs`, not `RunIDs`, because it returns Run handles.
+
+Identifiers remain available through:
 
 ```go
 run.ID()
 ```
 
-when only the portable identifier is needed.
-
 ---
 
-# 44. Run handle
+# 50. Run handle
 
-A `durable.Run` is an Engine-bound convenience handle.
-
-Conceptually:
+A plain `durable.Run` is conceptually:
 
 ```go
 type Run struct {
@@ -1369,29 +1486,29 @@ type Run struct {
 }
 ```
 
-It is not the persisted run representation.
+It is an in-process convenience handle, not persisted run state.
 
-Core methods:
+Core operations:
 
 ```go
 func (r Run) ID() RunID
 
 func (r Run) Wait(
-    context.Context,
+    ctx context.Context,
 ) (Result, error)
 
 func (r Run) Status(
-    context.Context,
+    ctx context.Context,
 ) (Status, error)
 ```
 
-Typed generated Run variants MAY override `Wait` with typed result access where pipeline output requires it.
+Generated typed runs wrap this behavior where necessary.
 
 ---
 
-# 45. Engine-level Run operations
+# 51. Engine-level run access
 
-The Engine MAY expose ID-oriented equivalents:
+The Engine MAY expose:
 
 ```go
 result, err := engine.Wait(ctx, runID)
@@ -1401,29 +1518,29 @@ status, err := engine.Status(ctx, runID)
 run := engine.Run(runID)
 ```
 
-This supports callers that possess only a persisted `RunID`.
+These are useful when only the portable `RunID` is available.
 
 ---
 
-# 46. Wait semantics
+# 52. Wait semantics
 
-`Wait` separates execution failure from operational waiting failure.
+`Wait` separates operational waiting errors from pipeline execution outcome.
 
 ```go
 result, err := run.Wait(ctx)
 ```
 
-`err != nil` represents things such as:
+`err != nil` means an operational condition such as:
 
-- caller wait context canceled,
-- lookup error,
+- wait context cancellation,
+- lookup failure,
 - Engine/query failure.
 
-Pipeline failure itself is represented by `Result`.
+Pipeline failure is represented by `Result`, not by `Wait`'s error.
 
 ---
 
-# 47. Result
+# 53. Result
 
 Conceptually:
 
@@ -1445,27 +1562,62 @@ RootFailure = nil
 UnwindFailures = []
 ```
 
-Failed run with successful cleanup:
+Failed run:
 
 ```text
 OutcomeFailure
 RootFailure != nil
+```
+
+Cleanup may be complete:
+
+```text
 UnwindFailures = []
 ```
 
-Failed run with incomplete cleanup:
+or incomplete:
 
 ```text
-OutcomeFailure
-RootFailure != nil
 UnwindFailures != []
 ```
 
+Pipeline business output remains separate from these execution semantics.
+
 ---
 
-# 48. Engine lifecycle
+# 54. Status
 
-The Engine has two main lifecycle states:
+`Status` SHOULD expose both pipeline and scheduler state.
+
+Conceptually:
+
+```go
+type Status struct {
+    PipelineID PipelineID
+    ResourceID ResourceID
+    RunID      RunID
+
+    Phase Phase
+    State RunState
+
+    StepID  StepID
+    Attempt uint64
+
+    NextAttemptAt time.Time
+
+    Outcome *Outcome
+}
+```
+
+For states where no current step or next retry exists, their corresponding values may be zero.
+
+The exact representation may use accessors rather than exported fields.
+
+---
+
+# 55. Engine lifecycle
+
+An Engine has two main states:
 
 ```text
 configuring
@@ -1475,13 +1627,13 @@ configuring
 running
 ```
 
-During `configuring`:
+During configuration:
 
 - pipelines may bind,
-- historical handlers may register,
+- historical step handlers may register,
 - scheduling is rejected.
 
-During `running`:
+During running:
 
 - registration is frozen,
 - recovery is active,
@@ -1490,50 +1642,100 @@ During `running`:
 
 ---
 
-# 49. Engine.Start
+# 56. Single Engine ownership
+
+Exactly one Engine instance may own and execute against a given store at a time.
+
+This is an explicit v1 assumption.
+
+The library does not provide multi-process coordination.
+
+A storage backend SHOULD enforce or detect exclusive ownership where possible.
+
+---
+
+# 57. Engine.Start
 
 `Engine.Start(ctx)` owns recovery.
 
-Application code MUST NOT manually resume individual pipelines.
+Application code does not manually resume individual pipelines.
 
 Startup SHOULD:
 
 1. freeze registration,
-2. discover all nonterminal runs,
-3. validate required active and historical handlers,
-4. validate historical step-state schemas where necessary,
-5. reconstruct retry wakeups,
-6. enqueue immediately runnable runs,
-7. register future retry wakeups,
-8. begin normal scheduling operation.
-
-Startup SHOULD fail loudly if a recoverable run cannot be interpreted by the registered implementation set.
+2. discover every nonterminal run,
+3. verify its pipeline definition is interpretable,
+4. verify required active and historical handlers exist,
+5. verify required historical protobuf state schemas exist,
+6. reconstruct retry eligibility,
+7. enqueue runnable runs,
+8. schedule future retry wakeups,
+9. begin normal scheduling.
 
 ---
 
-# 50. Engine-owned execution lifetime
+# 58. Startup failure policy
 
-Handler contexts derive from Engine lifetime, not from the original scheduling context.
+Draft 0.7 uses fail-fast startup.
+
+If any nonterminal run cannot be safely interpreted or resumed, `Engine.Start` fails.
+
+This establishes the invariant:
+
+> If the Engine is running, every nonterminal durable run is interpretable by the registered binary.
+
+This favors correctness and operational visibility over partial availability.
+
+Per-run recovery quarantine is future work.
+
+---
+
+# 59. Historical handlers
+
+A step removed from current topology may still require a historical implementation.
+
+Generated durable step descriptors SHOULD support explicit historical binding.
 
 Conceptually:
 
-```text
-Engine lifetime
-    |
-    +-> Run attempt 1
-    |
-    +-> Run attempt 2
-    |
-    +-> Unwind attempt 1
+```go
+err := machines.ReserveCapacityStep.BindHistorical(
+    engine,
+    &reserveCapacityV1{},
+)
 ```
 
-Each attempt receives a fresh `context.Context`.
+Historical binding:
+
+- does not add the step to current pipeline topology,
+- makes its handler available to old runs,
+- is valid only before `Engine.Start`.
+
+The exact generated API may evolve, but historical-handler registration MUST be possible without restoring the step to current pipelines.
 
 ---
 
-# 51. Execution concurrency
+# 60. Engine execution lifetime
 
-Exactly one logical operation belonging to a run may execute at a time.
+The context passed to `Schedule` governs only scheduling acceptance.
+
+Once durably accepted:
+
+```text
+caller context cancellation
+    !=
+run cancellation
+```
+
+The run belongs to the Engine.
+
+Each actual handler invocation receives a fresh context derived from Engine execution lifetime.
+
+---
+
+# 61. Execution concurrency
+
+Exactly one logical operation belonging to a particular run may execute at once.
 
 Different runs MAY execute concurrently.
 
@@ -1547,7 +1749,7 @@ run-2 -> ConfigureNetwork.Unwind
 run-3 -> Validate.Run
 ```
 
-The Engine MUST enforce a global concurrency limit.
+The Engine MUST enforce a global concurrency bound.
 
 Conceptually:
 
@@ -1558,13 +1760,11 @@ engine := durable.New(
 )
 ```
 
-The default remains implementation-defined.
-
 ---
 
-# 52. Successful execution scheduling
+# 62. Immediate continuation
 
-Once a worker owns a run, immediately successful operations MAY continue synchronously through subsequent steps.
+Once a worker owns a run, successful operations MAY continue immediately through subsequent steps.
 
 Example:
 
@@ -1578,41 +1778,35 @@ B.Run succeeds
 
 Worker ownership is released when:
 
-```text
-run becomes terminal
-
-operation requires retry
-
-Engine begins shutdown
-```
-
-This avoids needless scheduler overhead for short linear pipelines.
+- the run reaches terminal state,
+- the current operation requires retry,
+- Engine shutdown begins.
 
 ---
 
-# 53. Retryable failures
+# 63. Retryable failure scheduling
 
 Workers MUST NOT sleep while holding execution capacity.
 
-If an operation returns a retryable error:
+After a retryable error:
 
 ```text
-record failed attempt
+record attempt failure
 
-compute next retry time
+compute next retry eligibility
 
-mark operation waiting-for-retry
+mark run waiting for retry
 
-release concurrency slot
+release execution capacity
 
 schedule wakeup
 ```
 
 ---
 
-# 54. Retry policy
+# 64. Retry policy
 
-The Engine SHOULD support an Engine-wide retry policy.
+The Engine SHOULD provide an Engine-wide retry policy.
 
 Conceptually:
 
@@ -1626,27 +1820,23 @@ durable.WithRetryPolicy(
 )
 ```
 
-Retries SHOULD use jitter.
+Retries SHOULD include jitter.
 
 Retries are unlimited by default.
 
 The Engine MUST NOT infer permanent failure from retry count.
 
-Only:
+Permanent failure is always explicit:
 
 ```go
 durable.Fail(err)
 ```
 
-permanently resolves a failing operation.
-
-Per-step retry policy overrides are future work.
-
 ---
 
-# 55. Attempt counters
+# 65. Attempt counters
 
-Attempt counters belong to one logical operation.
+Attempt counters belong to a logical operation.
 
 Example:
 
@@ -1659,21 +1849,21 @@ B.Run
     attempt 1
 ```
 
-Forward and unwind operations use independent attempt sequences.
+Forward and unwind attempts are distinct.
 
-The first actual handler invocation has:
+The first handler invocation has:
 
 ```go
 inv.Attempt() == 1
 ```
 
-An attempt interrupted by Engine shutdown still counts as an invocation.
+An invocation interrupted by Engine shutdown still counts as an invocation.
 
 ---
 
-# 56. Retry wakeup durability
+# 66. Retry wakeup durability
 
-The next eligible retry time MUST survive restart.
+Retry eligibility MUST survive process restart.
 
 Example:
 
@@ -1684,35 +1874,52 @@ next retry = 10:00:30
 process restarts at 10:00:05
 ```
 
-The Engine SHOULD retain:
+The next retry remains approximately:
 
 ```text
-next retry = 10:00:30
+10:00:30
 ```
 
-rather than immediately retrying.
+rather than restarting immediately.
 
 This prevents restart-induced retry storms.
 
 ---
 
-# 57. Recovery of retrying runs
+# 67. Crash recovery backoff
 
-On startup:
+A process may crash while a handler invocation is in progress, leaving an unresolved attempted operation.
 
-```text
-next_retry_at <= now
-    -> runnable immediately
+On startup, such an operation SHOULD NOT necessarily execute immediately in a tight crash loop.
 
-next_retry_at > now
-    -> schedule future wakeup
-```
+The Engine SHOULD apply recovery retry/backoff semantics to unresolved attempted operations so repeated process crashes cannot produce uncontrolled hot restart loops.
 
-Retry state is part of durable execution state.
+The exact recovery-backoff policy is part of scheduler implementation design.
 
 ---
 
-# 58. Engine shutdown
+# 68. Clock
+
+The Engine SHOULD support an injectable clock for deterministic testing.
+
+Conceptually:
+
+```go
+durable.WithClock(clock)
+```
+
+The clock abstraction is used for:
+
+- retry eligibility,
+- retry wakeups,
+- timestamps,
+- startup recovery timing.
+
+The production default uses the system clock.
+
+---
+
+# 69. Engine shutdown
 
 Normal shutdown is not pipeline failure.
 
@@ -1728,46 +1935,38 @@ cancel currently executing handler contexts
 leave unresolved runs nonterminal
 ```
 
-A later process resumes those runs.
+A future process resumes unresolved runs.
 
 ---
 
-# 59. Shutdown interruption semantics
+# 70. Shutdown interruption
 
-If an Engine-owned context cancellation interrupts a handler:
-
-```text
-handler invocation happened
-
-attempt counter remains incremented
-
-operation remains unresolved
-
-no normal retry backoff is applied merely because of shutdown
-```
-
-The interruption is not:
+If Engine shutdown interrupts an active invocation:
 
 ```text
-application retryable failure
+the invocation occurred
+
+attempt count remains incremented
+
+the logical operation remains unresolved
+
+shutdown itself does not create normal retry backoff
+
+shutdown is not RootFailure
 ```
 
-and not:
-
-```text
-permanent failure
-```
+An Engine-owned `context.Canceled` MUST be distinguishable from an application-produced retryable error.
 
 ---
 
-# 60. Panics
+# 71. Panics
 
 The Engine SHOULD recover panics from application handlers.
 
 A recovered panic SHOULD:
 
 - capture diagnostic information,
-- capture stack trace,
+- capture the stack trace,
 - mark the invocation unsuccessful,
 - be treated as retryable by default.
 
@@ -1777,55 +1976,55 @@ A panic is not equivalent to:
 durable.Fail(err)
 ```
 
-This allows a bug to be fixed in a later binary and the run to resume.
+This allows a code bug to be fixed and the persisted run resumed by a later binary.
 
 ---
 
-# 61. Immutable pipeline topology
+# 72. Immutable topology
 
-Each new run receives the fully materialized pipeline topology active when it was scheduled.
+Every run captures its exact materialized pipeline topology at scheduling time.
 
-Old definition:
+Old topology:
 
 ```text
 A -> B -> D
 ```
 
-New definition:
+new source topology:
 
 ```text
 A -> B -> C -> D
 ```
 
-Existing runs continue:
+Existing runs retain:
 
 ```text
 A -> B -> D
 ```
 
-New runs execute:
+New runs receive:
 
 ```text
 A -> B -> C -> D
 ```
 
-No implicit migration occurs.
+No implicit in-flight migration occurs.
 
 ---
 
-# 62. Adding steps
+# 73. Adding intermediary steps
 
-Adding an intermediary step requires no migration.
+Adding a step requires no migration.
 
-Existing runs retain their immutable definitions.
+Old runs keep their previous topology.
 
-New runs use the new topology.
+New runs receive the new topology.
 
 ---
 
-# 63. Removing steps
+# 74. Removing intermediary steps
 
-Removing a step from new topology does not erase its historical identity.
+Removing a step from current topology does not erase its historical durable identity.
 
 Old:
 
@@ -1846,25 +2045,25 @@ Historical runs may still need to:
 - read `B` state,
 - unwind `B`.
 
-Topology removal and implementation retirement are separate operations.
+Topology removal and implementation retirement are separate lifecycle operations.
 
 ---
 
-# 64. Tombstones
+# 75. Tombstones
 
-A historical step may remain declared as a tombstone.
+A removed historical step MAY remain declared as a tombstone.
 
-A tombstone indicates:
+A tombstone means:
 
-> This `StepID` is historically valid but is no longer used by current pipeline topology.
+> This `StepID` is historically valid but is no longer used in current topology.
 
-The persisted run definition remains authoritative for historical ordering.
+Historical run topology remains the source of truth for step ordering.
 
 ---
 
-# 65. Forward tombstone safety
+# 76. Tombstone forward skipping
 
-A tombstoned step may be skipped only if its forward operation has never been invoked.
+A tombstoned step may be skipped only when its forward operation has never been invoked.
 
 If:
 
@@ -1882,11 +2081,11 @@ attempts > 0
 
 the Engine MUST NOT silently skip it.
 
-A previous invocation may have produced an external side effect whose outcome remains uncertain.
+An earlier invocation may have produced an external side effect whose completion remains uncertain.
 
 ---
 
-# 66. Tombstone unwind semantics
+# 77. Tombstone unwind
 
 A historical step originally declared with:
 
@@ -1902,13 +2101,25 @@ A historical step declared with:
 unwind: true
 ```
 
-continues to require its legacy handler unless an explicit tombstone policy declares historical unwind unnecessary.
+continues to require its historical handler unless an explicit tombstone policy declares historical unwind unnecessary.
 
-If its unwind handler needs step state, the historical protobuf state schema MUST remain available.
+If historical unwind requires Step State, the corresponding protobuf schema must remain decodable.
 
 ---
 
-# 67. Protobuf evolution
+# 78. At-least-once invariant
+
+The at-least-once guarantee applies to operations resolved through handler execution.
+
+Specifically:
+
+> Any operation resolved by a handler success or permanent handler failure was invoked at least once and may have been invoked multiple times.
+
+Operations explicitly resolved without handler execution, such as safe tombstone skipping or steps requiring no unwind action, are exempt.
+
+---
+
+# 79. Protobuf evolution
 
 Compatible protobuf field evolution is allowed.
 
@@ -1918,65 +2129,67 @@ Example:
 message ReserveCapacity {
   string reservation_id = 1;
 
-  // added later
+  // Added compatibly later.
   string host_id = 2;
 }
 ```
 
-Compatible wire evolution does not by itself require a new `StepID`.
+Compatible wire evolution does not alone require a new `StepID`.
 
 Incompatible semantic evolution does.
 
+The pipeline input and final-step output contracts additionally form part of `PipelineID` compatibility.
+
 ---
 
-# 68. Code generation
+# 80. Code generation
 
 `protoc-gen-durable` is responsible for generating:
 
 - typed step handler interfaces,
 - typed invocation types,
-- typed state references/accessors,
+- typed state descriptors and accessors,
 - pipeline definition constructors,
-- Engine binding adapters,
 - bound pipeline handles,
-- typed completion views,
-- typed pipeline output projectors,
-- typed Run/Result wrappers when output requires them.
+- typed Run wrappers where final-step state requires them,
+- typed Result wrappers where final-step state requires them,
+- historical handler binding support,
+- runtime adapters.
 
 ---
 
-# 69. Generation-time validation
+# 81. Generation-time validation
 
 `protoc-gen-durable` MUST reject:
 
 - missing `PipelineID`,
 - missing `StepID`,
-- duplicate `StepID`,
+- duplicate stable `StepID`,
 - nonexistent referenced protobuf messages,
 - pipeline members without `durable.step`,
 - empty pipelines,
 - invalid input types,
-- invalid output types,
 - malformed tombstones,
-- tombstoned steps referenced by current topology.
+- tombstoned steps referenced by current topology,
+- final pipeline step declaring `unwind=true`.
 
-Generated Go APIs SHOULD move these errors to compile time where possible:
+Generated APIs SHOULD make these compile-time failures:
 
-- missing handler,
-- wrong handler type,
+- missing handlers,
+- wrong handler types,
 - handler in wrong position,
 - invalid `Run` signature,
 - missing required `Unwind`,
-- invalid typed state access,
-- invalid output projector signature.
+- invalid typed state dependencies,
+- invalid historical handler type.
 
 ---
 
-# 70. Internal type erasure
+# 82. Internal type erasure
 
-Generated strongly typed APIs exist at the application boundary.
+Generated strongly typed APIs live at the application boundary.
 
-Internally, generated adapters erase them into runtime concepts such as:
+Internally, adapters erase them into runtime concepts such as:
 
 ```text
 PipelineID
@@ -1984,9 +2197,11 @@ ResourceID
 RunID
 StepID
 
-serialized Input
-serialized Step State
-serialized Pipeline Output
+serialized Pipeline Input
+serialized Step States
+
+Failure records
+retry metadata
 
 internal handler
 raw invocation metadata
@@ -1996,11 +2211,9 @@ The core Engine SHOULD remain non-generic.
 
 ---
 
-# 71. Buf
+# 83. Buf
 
-`durable` SHOULD use Buf for protobuf development and CI.
-
-Expected operations:
+`durable` SHOULD use Buf for:
 
 ```text
 buf lint
@@ -2008,37 +2221,47 @@ buf breaking
 buf generate
 ```
 
-Buf is a build-time tool.
+Buf is build-time and CI tooling.
 
-The runtime library MUST NOT depend on Buf.
+The runtime MUST NOT depend on Buf.
 
 Use of the Buf Schema Registry is optional.
 
 ---
 
-# 72. Durable compatibility
+# 84. Durable compatibility
 
-Protobuf wire compatibility alone is insufficient.
+Ordinary protobuf wire compatibility is insufficient.
 
 Durable breaking changes include:
 
-```text
-changing StepID semantics in place
+- changing `StepID` semantics in place,
+- removing a historical `StepID` still referenced by runs,
+- removing a required historical state schema,
+- changing unwind semantics without a retirement path,
+- incompatibly changing pipeline input while retaining `PipelineID`,
+- incompatibly changing final-step output contract while retaining `PipelineID`.
 
-removing a StepID still referenced by runs
-
-removing a state schema still required by historical execution
-
-changing unwind requirements without an explicit retirement path
-
-changing pipeline input or output semantics incompatibly
-```
-
-A future durable-specific compatibility checker SHOULD compare current declarations against previous descriptors.
+A future compatibility checker SHOULD compare current declarations against previous descriptors.
 
 ---
 
-# 73. Preferred public API
+# 85. Minimal observability requirements
+
+Full observability design remains future work, but unlimited retries MUST NOT be completely opaque.
+
+At minimum:
+
+- `Status` exposes current `Attempt`,
+- `Status` exposes `NextAttemptAt`,
+- failure records expose durable failure metadata,
+- the Engine SHOULD provide some diagnostic hook or logging integration for repeated retry and panic conditions.
+
+The library SHOULD NOT require a particular logging framework.
+
+---
+
+# 86. Preferred public API
 
 Core package:
 
@@ -2056,6 +2279,9 @@ type ResourceID string
 type RunID string
 type StepID string
 
+type Phase uint8
+type RunState uint8
+
 func New(...Option) *Engine
 
 func Fail(error) error
@@ -2064,7 +2290,9 @@ func Fail(error) error
 Engine:
 
 ```go
-func (e *Engine) Start(context.Context) error
+func (e *Engine) Start(
+    context.Context,
+) error
 
 func (e *Engine) Wait(
     context.Context,
@@ -2076,69 +2304,24 @@ func (e *Engine) Status(
     RunID,
 ) (Status, error)
 
-func (e *Engine) Run(RunID) Run
+func (e *Engine) Run(
+    RunID,
+) Run
 ```
 
-Engine options MAY include:
+Options MAY include:
 
 ```go
 durable.WithConcurrency(n)
 
 durable.WithRetryPolicy(policy)
-```
 
-Pipeline without input:
-
-```go
-func (p *SomePipeline) Schedule(
-    context.Context,
-    ResourceID,
-) (Run, bool, error)
-```
-
-Pipeline with input:
-
-```go
-func (p *ProvisionMachine) Schedule(
-    context.Context,
-    ResourceID,
-    *ProvisionMachineInput,
-) (ProvisionMachineRun, bool, error)
-```
-
-Pipeline resource queries:
-
-```go
-func (p *Pipeline) Active(
-    context.Context,
-    ResourceID,
-) (Run, bool, error)
-
-func (p *Pipeline) Runs(
-    context.Context,
-    ResourceID,
-) ([]Run, error)
-```
-
-Generated definition:
-
-```go
-func NewProvisionMachine(
-    ValidateHandler,
-    SelectHostHandler,
-    ReserveCapacityHandler,
-    CreateMachineHandler,
-    ProvisionMachineOutputFunc,
-) *ProvisionMachineDefinition
-
-func (d *ProvisionMachineDefinition) Bind(
-    *durable.Engine,
-) (*ProvisionMachine, error)
+durable.WithClock(clock)
 ```
 
 ---
 
-# 74. Example
+# 87. Generated API example
 
 Proto:
 
@@ -2154,14 +2337,6 @@ message Validate {
   };
 }
 
-message SelectHost {
-  option (durable.v1.step) = {
-    id: "select-host/v1"
-  };
-
-  string host_id = 1;
-}
-
 message ReserveCapacity {
   option (durable.v1.step) = {
     id: "reserve-capacity/v1"
@@ -2174,13 +2349,8 @@ message ReserveCapacity {
 message CreateMachine {
   option (durable.v1.step) = {
     id: "create-machine/v1"
-    unwind: true
   };
 
-  string machine_id = 1;
-}
-
-message ProvisionMachineOutput {
   string machine_id = 1;
   string host_id = 2;
 }
@@ -2188,19 +2358,80 @@ message ProvisionMachineOutput {
 message ProvisionMachine {
   option (durable.v1.pipeline) = {
     id: "provision-machine"
-
     input: ".machines.v1.ProvisionMachineInput"
-    output: ".machines.v1.ProvisionMachineOutput"
 
     steps: ".machines.v1.Validate"
-    steps: ".machines.v1.SelectHost"
     steps: ".machines.v1.ReserveCapacity"
     steps: ".machines.v1.CreateMachine"
   };
 }
 ```
 
-Application:
+Generated definition:
+
+```go
+func NewProvisionMachine(
+    validate ValidateHandler,
+    reserveCapacity ReserveCapacityHandler,
+    createMachine CreateMachineHandler,
+) *ProvisionMachineDefinition
+```
+
+Binding:
+
+```go
+func (d *ProvisionMachineDefinition) Bind(
+    engine *durable.Engine,
+) (*ProvisionMachinePipeline, error)
+```
+
+Bound output-producing pipeline:
+
+```go
+func (p *ProvisionMachinePipeline) Schedule(
+    ctx context.Context,
+    resourceID durable.ResourceID,
+    input *ProvisionMachineInput,
+) (ProvisionMachineRun, bool, error)
+
+func (p *ProvisionMachinePipeline) Active(
+    ctx context.Context,
+    resourceID durable.ResourceID,
+) (ProvisionMachineRun, bool, error)
+
+func (p *ProvisionMachinePipeline) Runs(
+    ctx context.Context,
+    resourceID durable.ResourceID,
+) ([]ProvisionMachineRun, error)
+```
+
+Typed Run:
+
+```go
+func (r ProvisionMachineRun) ID() durable.RunID
+
+func (r ProvisionMachineRun) Status(
+    context.Context,
+) (durable.Status, error)
+
+func (r ProvisionMachineRun) Wait(
+    context.Context,
+) (ProvisionMachineResult, error)
+```
+
+Typed result:
+
+```go
+type ProvisionMachineResult struct {
+    durable.Result
+}
+
+func (r ProvisionMachineResult) Output() *CreateMachine
+```
+
+---
+
+# 88. Typical application flow
 
 ```go
 engine := durable.New(
@@ -2209,16 +2440,8 @@ engine := durable.New(
 
 provision, err := machines.NewProvisionMachine(
     &validate{},
-    &selectHost{},
     &reserveCapacity{},
     &createMachine{},
-
-    func(c machines.ProvisionMachineCompletion) *machines.ProvisionMachineOutput {
-        return &machines.ProvisionMachineOutput{
-            MachineId: c.CreateMachine().MachineId,
-            HostId:    c.SelectHost().HostId,
-        }
-    },
 ).Bind(engine)
 if err != nil {
     return err
@@ -2256,255 +2479,232 @@ if result.Failed() {
     )
 }
 
-output := result.Output()
+machine := result.Output()
 
 log.Printf(
-    "machine %s provisioned on %s",
-    output.MachineId,
-    output.HostId,
+    "machine %s provisioned on host %s",
+    machine.MachineId,
+    machine.HostId,
 )
 ```
 
 ---
 
-# 75. Core invariants
+# 89. Core invariants
 
-The implementation MUST maintain these invariants.
+The implementation MUST maintain the following invariants.
 
-1. A run's pipeline topology never changes after creation.
+1. A run's materialized pipeline topology never changes after creation.
 
 2. A run's pipeline input never changes after creation.
 
-3. A committed step state never changes.
+3. A committed Step State never changes.
 
-4. A committed pipeline output never changes.
+4. A stable `StepID` identifies durable step semantics.
 
-5. A stable `StepID` identifies durable step semantics.
+5. A `RunID` uniquely identifies one exact execution.
 
-6. A `RunID` uniquely identifies one exact execution.
+6. At most one nonterminal run exists for `(PipelineID, ResourceID)`.
 
-7. At most one nonterminal run exists for `(PipelineID, ResourceID)`.
+7. Operations resolved through handler execution use at-least-once semantics.
 
-8. Forward and unwind operations execute at least once.
+8. All handlers must therefore be idempotent.
 
-9. All handlers must therefore be idempotent.
+9. Step capabilities are declared statically in protobuf.
 
-10. Step capabilities are statically declared in protobuf.
+10. Generated Go APIs expose exactly those capabilities.
 
-11. Generated Go interfaces expose exactly those capabilities.
+11. A step without protobuf fields establishes no Step State.
 
-12. A step without fields establishes no durable step state.
+12. A step with fields establishes Step State only after successful forward completion.
 
-13. A step with fields establishes state only after successful forward completion.
+13. Step State and forward success are one logical durable transition.
 
-14. Step state and forward success are one logical commit.
+14. Failed attempts never establish Step State.
 
-15. Failed attempts never establish durable step state.
+15. A committed Step State is never overwritten.
 
-16. Steps with `unwind=false` require no backward handler.
+16. A step with `unwind=false` requires no backward handler.
 
-17. Steps with `unwind=true` eventually resolve by successful unwind or permanent unwind failure.
+17. A step with `unwind=true` must eventually resolve by successful unwind or permanent unwind failure after a later step fails.
 
-18. `nil` means operation success.
+18. The final pipeline step may not declare unwind.
 
-19. Ordinary error means retry.
+19. `nil` means operation success.
 
-20. `durable.Fail(err)` means permanent operation failure.
+20. Ordinary error means retry.
 
-21. Permanent forward failure establishes the root failure and begins unwind.
+21. `durable.Fail(err)` means permanent operation failure.
 
-22. Permanent unwind failure is recorded and unwind continues.
+22. Permanent forward failure establishes the RootFailure and begins unwind.
 
-23. Unwind follows actual successful execution history.
+23. A forward step that returns `durable.Fail` is never unwound itself.
 
-24. Attempted incomplete historical steps may never be silently skipped.
+24. A failing `Run` handler is responsible for cleaning up its own partial uncommitted effects before returning `durable.Fail`.
 
-25. Scheduling an equivalent active intent returns the existing run.
+25. Permanent unwind failure is recorded and unwind continues.
 
-26. Scheduling different input into an occupied resource slot returns a conflict.
+26. Unwind follows committed successful execution history.
 
-27. Engine startup owns recovery.
+27. A step resolved through handler execution was invoked at least once.
 
-28. `Bind` is valid only before startup.
+28. Safe tombstone skipping is explicitly exempt from handler at-least-once execution.
 
-29. `Schedule` is valid only after startup.
+29. Attempted incomplete historical steps may never be silently skipped.
 
-30. Exactly one operation for a run executes at once.
+30. Scheduling equivalent active intent returns the existing Run.
 
-31. Different runs may execute concurrently.
+31. Scheduling conflicting input into an occupied resource slot returns a typed conflict.
 
-32. Engine concurrency is globally bounded.
+32. Engine startup owns recovery.
 
-33. Immediately successful steps may continue without scheduler round trips.
+33. `Bind` is valid only before Engine startup.
 
-34. Retryable failure releases execution capacity.
+34. Historical handlers register only before Engine startup.
 
-35. Retry wakeup time survives process restart.
+35. `Schedule` is valid only after Engine startup.
 
-36. Retry counters are scoped per logical operation.
+36. Exactly one operation belonging to a Run executes at once.
 
-37. Engine shutdown interruption is not semantic pipeline failure.
+37. Different Runs may execute concurrently.
 
-38. Panics are retryable by default.
+38. Engine concurrency is globally bounded.
 
-39. Pipeline handles expose resource-oriented operations.
+39. Immediately successful steps may continue without a scheduler round trip.
 
-40. Run handles expose exact-execution-oriented operations.
+40. Retryable failure releases execution capacity.
 
-41. `RunID` remains the portable identity behind a Run handle.
+41. Retry eligibility survives process restart.
 
-42. Pipeline output exists only for successful runs.
+42. Retry counters are scoped to individual logical operations.
 
-43. Pipeline output is derived only from committed immutable run data.
+43. Engine shutdown interruption is not semantic pipeline failure.
 
-44. Pipeline output projection is not a durable step and performs no side effects.
+44. Panics are retryable by default.
 
-45. Pipeline output is distinct from execution `Result`.
+45. Exactly one Engine may own a store at a time.
+
+46. Pipeline handles expose resource-oriented operations.
+
+47. Run handles expose exact-execution-oriented operations.
+
+48. `RunID` remains the portable identity behind a Run handle.
+
+49. The final step's committed Step State is the pipeline output.
+
+50. A pipeline whose final step has no state has no business output.
+
+51. Failed runs have no pipeline output.
+
+52. The pipeline input and final-step output contracts must remain compatible for a stable `PipelineID`.
+
+53. Output-producing pipelines preserve typed Run access through `Schedule`, `Active`, and `Runs`.
+
+54. If the Engine is running, every nonterminal Run is interpretable by the registered binary.
 
 ---
 
-# 76. Future work
+# 90. Future work
 
-The following areas are intentionally left outside Draft 0.6 and should be specified separately before implementation is considered complete.
+The following areas are intentionally left for later design.
 
-## 76.1 Store contract
+## 90.1 Store contract
 
-Define the exact persistence abstraction required by the Engine.
+Define:
 
-Topics include:
-
-- semantic store operations,
+- semantic persistence operations,
 - transactional boundaries,
 - SQLite implementation,
 - bbolt implementation,
 - run discovery,
 - active-slot uniqueness,
 - wait notification,
-- historical retention.
+- retention.
 
-The Store API should be designed from the state-transition requirements rather than exposing raw SQL or key/value primitives.
+The Store API should be driven by durable state transitions rather than raw SQL or key/value primitives.
 
----
+## 90.2 Persistent representation
 
-## 76.2 Persistent state and event representation
-
-Define the exact durable representation of:
-
-- run creation,
-- immutable topology,
-- pipeline input,
-- step attempts,
-- step states,
-- retry wakeups,
-- root failures,
-- unwind failures,
-- tombstones,
-- pipeline output,
-- terminal outcome.
-
-An explicit decision remains between:
+Choose between:
 
 ```text
 current-state persistence
 
 event journal
 
-hybrid current-state + history
+hybrid state + history
 ```
 
-The execution semantics in this spec do not depend on that decision.
+and define the exact representation of:
 
----
+- run creation,
+- materialized topology,
+- pipeline input,
+- attempts,
+- Step States,
+- retry wakeups,
+- RootFailure,
+- UnwindFailures,
+- tombstones,
+- terminal outcome.
 
-## 76.3 Cancellation semantics
+## 90.3 Cancellation semantics
 
-Define whether application code can intentionally cancel an accepted Run.
-
-Questions include:
+Specify explicit application cancellation of accepted Runs:
 
 - whether cancellation triggers unwind,
-- whether cancellation is represented as a root failure,
-- whether cancellation is permanent,
-- how cancellation interacts with retry waits,
-- how caller-requested cancellation differs from Engine shutdown,
-- whether cancellation is addressed by `Run` or `RunID`.
+- whether it creates RootFailure,
+- cancellation during retry wait,
+- cancellation versus Engine shutdown,
+- Run-level API.
 
-Engine shutdown cancellation is already specified as non-semantic interruption and MUST remain distinct.
+## 90.4 Recovery quarantine
 
----
+Consider allowing an Engine to start while quarantining uninterpretable historical Runs.
 
-## 76.4 Observability
+This would trade the current strong fail-fast startup invariant for partial availability and requires explicit administrative semantics.
 
-Define first-class observability support for:
+## 90.5 Observability
 
-- structured logging,
-- OpenTelemetry tracing,
+Design first-class support for:
+
+- structured diagnostics,
+- OpenTelemetry,
 - metrics,
 - run correlation,
 - step attempt correlation,
 - retry timing,
 - unwind failures,
 - scheduler saturation,
-- pipeline duration,
-- step duration,
-- historical inspection.
+- pipeline and step duration.
 
-The library should avoid requiring a specific logging framework.
+## 90.6 Historical inspection
 
----
-
-## 76.5 Historical inspection
-
-Potential APIs include:
+Potential APIs:
 
 ```go
 run.History(ctx)
 
 run.Attempts(ctx)
-
-run.State(ctx)
 ```
 
-The terminology should distinguish:
+Execution history terminology must remain distinct from immutable Step State.
 
-```text
-Step State
-```
+## 90.7 Per-step retry policy
 
-from:
+Potential protobuf declarations for step-specific retry behavior.
 
-```text
-execution/event history
-```
-
----
-
-## 76.6 Per-step retry policy
-
-The initial model uses Engine-wide retry defaults.
-
-Future declarations may support step-specific policies such as:
-
-```proto
-retry: {
-  initial: "1s"
-  max: "1m"
-}
-```
-
-This should not alter the fundamental rule that permanent failure remains explicit through:
+Permanent failure MUST remain explicit through:
 
 ```go
 durable.Fail(err)
 ```
 
----
+regardless of retry policy.
 
-## 76.7 Scheduler fairness and admission control
+## 90.8 Scheduler fairness and admission control
 
-The initial scheduler has one Engine-wide concurrency bound.
-
-Possible future work includes:
+Potential additions:
 
 - per-pipeline concurrency limits,
 - priorities,
@@ -2512,129 +2712,91 @@ Possible future work includes:
 - admission queues,
 - fairness policies.
 
-These should not change per-run serialization semantics.
+These must preserve one-operation-per-run serialization.
 
----
+## 90.9 Delayed and dependent scheduling
 
-## 76.8 Delayed and dependent scheduling
-
-Potential future scheduling primitives include:
+Potential scheduling primitives:
 
 ```text
 not before time T
 
-run after RunID X completes
+run after RunID X reaches terminal state
 ```
 
-Dependencies should reference exact `RunID` values rather than ambiguous resource identities.
+Dependencies should reference exact `RunID` values.
+
+## 90.10 Durable compatibility tooling
+
+A future tool should compare prior and current protobuf descriptors and identify durable semantic incompatibilities beyond normal protobuf wire compatibility.
 
 ---
 
-## 76.9 Durable compatibility tooling
+# 91. Summary
 
-A future tool should compare old and new protobuf descriptors and detect durable semantic incompatibilities beyond ordinary protobuf breaking-change rules.
-
-Potential checks include:
-
-- StepID removed without tombstone,
-- StepID changed in place,
-- required historical state schema removed,
-- unwind capability changed unsafely,
-- pipeline input/output changed incompatibly.
-
----
-
-## 76.10 Pipeline-level business output extensions
-
-The initial output projector is pure, synchronous, deterministic, and non-failing.
-
-Any future extension that introduces:
-
-- I/O,
-- retries,
-- failure,
-- side effects
-
-should almost certainly be modeled as another step instead of expanding output projection semantics.
-
----
-
-# 77. Summary
-
-`durable` deliberately models a narrow but useful execution abstraction:
+The data model is:
 
 ```text
-immutable typed input
-
-        |
-        v
-
-Step A
-        |
-        | immutable state
-        v
-
-Step B
-        |
-        | immutable state
-        v
-
-Step C
-        |
-        v
-
-pure output projection
-        |
-        v
-
-immutable typed output
+immutable Pipeline Input
+          |
+          v
+       Step A
+          |
+          +---- immutable State A
+          |
+          v
+       Step B
+          |
+          +---- immutable State B
+          |
+          v
+     Final Step
+          |
+          +---- immutable Final State
+                         |
+                         v
+                 Pipeline Output
 ```
 
-with failure behavior:
+Failure semantics are:
 
 ```text
 ordinary error
     -> retry
 
-durable.Fail(err)
-    -> permanently resolve operation
+durable.Fail(err) during Run
+    -> permanent forward failure
+    -> unwind committed predecessors
+
+durable.Fail(err) during Unwind
+    -> permanent unwind failure
+    -> record
+    -> continue backward
 ```
 
-and:
-
-```text
-forward permanent failure
-    -> reverse unwind
-
-unwind permanent failure
-    -> record and continue backward
-```
-
-The runtime model is:
+Runtime ownership is:
 
 ```text
 Engine
-    owns lifecycle, concurrency, retry, and recovery
+    lifecycle, scheduling, retry, recovery
 
 Pipeline
-    owns resource-scoped scheduling
+    resource-scoped scheduling and lookup
 
 Run
-    owns exact-execution interaction
+    exact-execution interaction
 
 Pipeline Input
     immutable execution intent
 
 Step State
-    immutable state established by successful steps
+    immutable state established by a successful step
 
 Pipeline Output
-    immutable typed business result of successful completion
+    final step's immutable state
 
 Result
-    immutable execution outcome and failure information
+    execution success/failure semantics
 ```
 
-The intent of `durable` is not to become a general workflow engine.
-
-Its value comes from keeping the model constrained enough that crash recovery, evolution, retry behavior, and unwind semantics remain explicit, understandable, testable, and idiomatic in Go.
+The value proposition of `durable` comes from remaining deliberately constrained: a small execution model with explicit durable semantics, strong generated typing, straightforward crash recovery, and ordinary Go application handlers.

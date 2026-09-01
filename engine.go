@@ -93,6 +93,7 @@ type Engine struct {
 	retry           RetryPolicy
 	concurrency     int
 	recoveryBackoff time.Duration
+	middleware      []Middleware
 
 	mu        sync.Mutex
 	pipelines map[PipelineID]*Definition
@@ -579,7 +580,7 @@ func (e *Engine) invokeForward(sc *StepConfig, inv *Invocation) (state proto.Mes
 				"panic", p, "stack", string(debug.Stack()))
 		}
 	}()
-	return sc.Run(e.baseCtx, inv)
+	return e.wrap(Handler(sc.Run))(e.baseCtx, inv)
 }
 
 func (e *Engine) invokeUnwind(sc *StepConfig, inv *Invocation, failure Failure) (err error) {
@@ -591,7 +592,11 @@ func (e *Engine) invokeUnwind(sc *StepConfig, inv *Invocation, failure Failure) 
 				"panic", p, "stack", string(debug.Stack()))
 		}
 	}()
-	return sc.UnwindFunc(e.baseCtx, inv, failure)
+	h := e.wrap(func(ctx context.Context, in *Invocation) (proto.Message, error) {
+		return nil, sc.UnwindFunc(ctx, in, failure)
+	})
+	_, err = h(e.baseCtx, inv)
+	return err
 }
 
 func (e *Engine) invokeReduce(def *Definition, view *ReduceView) (out proto.Message, err error) {

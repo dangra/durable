@@ -292,6 +292,34 @@ No separate State parameter is passed.
 
 ---
 
+## Handler func adapters
+
+Each handler interface receives a generated adapter in the style of
+`http.HandlerFunc`.
+
+A single-method interface gets a func type:
+
+```go
+type ValidateFunc func(context.Context, ValidateInvocation) error
+
+func (f ValidateFunc) Run(ctx context.Context, inv ValidateInvocation) error
+```
+
+An unwind-bearing interface has two methods, which a func type cannot
+implement, so it gets a struct of funcs:
+
+```go
+type ReserveCapacityFuncs struct {
+    RunFunc    func(context.Context, ReserveCapacityInvocation) (*ReserveCapacity, error)
+    UnwindFunc func(context.Context, ReserveCapacityInvocation, durable.Failure) error
+}
+```
+
+Adapters are conveniences for tests and small handlers; the interfaces
+remain the authoritative contract.
+
+---
+
 ## Successful State boundary
 
 For a state-producing handler:

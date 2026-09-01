@@ -466,6 +466,50 @@ This differs from Reducer panic because a handler operation explicitly supports 
 
 ---
 
+## Middleware
+
+The uniform type-erased operation is exposed as:
+
+```go
+type Handler func(ctx context.Context, inv *Invocation) (proto.Message, error)
+
+type Middleware func(next Handler) Handler
+```
+
+A forward operation returns the State to commit (nil for a stateless
+Step); an unwind operation always returns `(nil, err)`.
+
+Engine-level middleware wraps every operation, forward and unwind alike:
+
+```go
+durable.WithMiddleware(logging, metrics)
+```
+
+The first middleware is outermost. `Invocation.Phase()` distinguishes
+forward from unwind operations.
+
+Middleware contract:
+
+- Middleware runs once per attempt, inside the durable attempt
+  reservation. It inherits at-least-once semantics and MUST NOT assume
+  exactly-once execution.
+- Middleware participates in handler result semantics: returning the
+  error unchanged preserves the retry/`Fail` classification; transforming
+  an ordinary error into `durable.Fail` deliberately resolves the
+  operation as permanent failure.
+- Middleware MAY derive the context passed to inner handlers (timeouts,
+  tracing, baggage).
+- Middleware panics are recovered like handler panics and leave the
+  operation unresolved.
+- The Reducer is pure, not an operation, and is never wrapped.
+
+Per-Step middleware composition is outside v1.1.
+
+See the non-normative [net/http analogy note](http-analogy.md) for the
+design rationale.
+
+---
+
 ## Internal type erasure
 
 The Engine core SHOULD remain non-generic.

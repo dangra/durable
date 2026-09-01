@@ -41,6 +41,7 @@ Published protobuf extensions MUST use globally allocated extension numbers.
 `protoc-gen-durable` generates:
 
 - typed Step handler interfaces,
+- handler func adapters (`http.HandlerFunc` style),
 - typed concrete Invocation types,
 - typed Step references,
 - generic concrete `State` methods,

@@ -16,6 +16,7 @@
 | [05-codegen.md](05-codegen.md) | Protobuf options, `protoc-gen-durable` outputs, generation-time validation, Buf |
 | [invariants.md](invariants.md) | The core invariants checklist |
 | [future-work.md](future-work.md) | Deferred design areas |
+| [http-analogy.md](http-analogy.md) | Non-normative design note: the net/http analogy behind middleware and func adapters |
 
 ---
 

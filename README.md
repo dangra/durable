@@ -80,6 +80,14 @@ if result.Succeeded() {
 }
 ```
 
+Cross-cutting concerns use net/http-style middleware over the uniform
+type-erased operation layer (see
+[the design note](spec/http-analogy.md)):
+
+```go
+engine := durable.NewEngine(store, durable.WithMiddleware(logging, metrics))
+```
+
 ## Layout
 
 | Path | Contents |

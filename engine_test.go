@@ -922,3 +922,51 @@ func TestLastErrorSurfacedDuringRetries(t *testing.T) {
 		t.Fatalf("last-error fields not cleared on resolution: %+v", st)
 	}
 }
+
+func TestDelayedStart(t *testing.T) {
+	const delay = 80 * time.Millisecond
+	var ranAt atomic.Int64
+	def := durable.NewDefinition(durable.DefinitionConfig{
+		ID: "delayed",
+		Steps: []durable.StepConfig{
+			stateless("s/v1", func(ctx context.Context, inv *durable.Invocation) error {
+				ranAt.Store(time.Now().UnixNano())
+				return nil
+			}),
+		},
+	})
+	_, pipes := startEngine(t, durabletest.NewMemStore(), def)
+	p := pipes[0]
+
+	scheduledAt := time.Now()
+	run, created, err := p.Schedule(context.Background(), "r", nil, durable.StartAfter(delay))
+	if err != nil || !created {
+		t.Fatalf("Schedule = created=%v err=%v", created, err)
+	}
+
+	st, err := run.Status(context.Background())
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if st.State != durable.RunStateScheduled {
+		t.Fatalf("State = %v, want scheduled", st.State)
+	}
+	if st.NextAttemptAt.IsZero() {
+		t.Fatal("NextAttemptAt not set for delayed run")
+	}
+
+	// The start time is not part of duplicate-scheduling identity:
+	// an equivalent Schedule with a different start returns the same run.
+	run2, created, err := p.Schedule(context.Background(), "r", nil, durable.StartAt(time.Now().Add(time.Hour)))
+	if err != nil || created || run2.ID() != run.ID() {
+		t.Fatalf("dedup Schedule = %s created=%v err=%v, want existing %s", run2.ID(), created, err, run.ID())
+	}
+
+	res, err := run.Wait(context.Background())
+	if err != nil || !res.Succeeded() {
+		t.Fatalf("Wait = %+v, %v", res, err)
+	}
+	if elapsed := time.Unix(0, ranAt.Load()).Sub(scheduledAt); elapsed < delay-10*time.Millisecond {
+		t.Fatalf("step ran after %v, want >= ~%v", elapsed, delay)
+	}
+}

@@ -162,10 +162,15 @@ const (
     RunStateRunnable RunState = iota + 1
     RunStateRunning
     RunStateWaitingRetry
+    RunStateScheduled
     RunStateInvalid
     RunStateDone
 )
 ```
+
+`RunStateScheduled` means the Run was accepted with a delayed start and no
+operation attempt has been reserved yet; `RunStateWaitingRetry` means an
+attempted operation is waiting for its next attempt.
 
 `RunStateInvalid` means the current application deployment cannot safely continue the nonterminal Run.
 

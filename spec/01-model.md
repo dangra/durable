@@ -171,6 +171,34 @@ run, created, err := cleanup.Schedule(
 
 ---
 
+## Delayed starts
+
+`Schedule` accepts start options:
+
+```go
+provision.Schedule(ctx, resourceID, input, durable.StartAt(t))
+provision.Schedule(ctx, resourceID, input, durable.StartAfter(d))
+```
+
+`StartAfter(d)` is sugar for `StartAt(now.Add(d))`, measured by the engine
+clock at acceptance. If multiple start options are given, the last wins.
+
+A delayed Run is created durably at acceptance and occupies its resource
+slot immediately. Its first operation becomes eligible at the start time,
+using the same durable eligibility mechanism as retries — the delay
+therefore survives restart. Until an attempt is reserved, the Run reports
+`RunStateScheduled`.
+
+Start options are execution hints, not intent: they are not part of
+duplicate-scheduling identity. An equivalent Input against an occupied
+slot returns the active Run unchanged regardless of start options — the
+original start time stands, and there is no expedite mechanism in v1.
+
+Because v1 has no cancellation, a far-future delayed Run occupies its slot
+until it executes; schedule distant starts only when that is acceptable.
+
+---
+
 ## Duplicate scheduling
 
 If no nonterminal Run occupies the slot:

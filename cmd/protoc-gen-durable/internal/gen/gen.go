@@ -511,13 +511,14 @@ func emitBoundPipeline(g *protogen.GeneratedFile, pl *pipelineDecl) {
 	g.P("}")
 	g.P()
 
+	scheduleOpt := g.QualifiedGoIdent(durablePkg.Ident("ScheduleOption"))
 	g.P("// Schedule creates a run for the resource slot or returns the active one.")
 	if pl.input != nil {
-		g.P("func (p *", name, "Pipeline) Schedule(ctx ", ctx, ", resource ", resourceID, ", input *", g.QualifiedGoIdent(pl.input.GoIdent), ") (", runType, ", bool, error) {")
-		g.P("run, created, err := p.pipeline.Schedule(ctx, resource, input)")
+		g.P("func (p *", name, "Pipeline) Schedule(ctx ", ctx, ", resource ", resourceID, ", input *", g.QualifiedGoIdent(pl.input.GoIdent), ", opts ...", scheduleOpt, ") (", runType, ", bool, error) {")
+		g.P("run, created, err := p.pipeline.Schedule(ctx, resource, input, opts...)")
 	} else {
-		g.P("func (p *", name, "Pipeline) Schedule(ctx ", ctx, ", resource ", resourceID, ") (", runType, ", bool, error) {")
-		g.P("run, created, err := p.pipeline.Schedule(ctx, resource, nil)")
+		g.P("func (p *", name, "Pipeline) Schedule(ctx ", ctx, ", resource ", resourceID, ", opts ...", scheduleOpt, ") (", runType, ", bool, error) {")
+		g.P("run, created, err := p.pipeline.Schedule(ctx, resource, nil, opts...)")
 	}
 	if pl.output != nil {
 		g.P("if err != nil {")

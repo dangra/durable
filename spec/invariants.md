@@ -151,3 +151,7 @@ Part of the [`durable` specification](README.md). This list is append-only; inva
 74. Attribution carried by the error chain is overridden by explicit `Fail` options.
 
 75. Last-error fields describe the current unresolved operation and are cleared when it resolves.
+
+76. A delayed start survives restart.
+
+77. Start options are not part of duplicate-scheduling input identity.

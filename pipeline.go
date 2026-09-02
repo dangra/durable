@@ -3,9 +3,38 @@ package durable
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 )
+
+// ScheduleOption configures acceptance of a Run. Options never contribute
+// to duplicate-scheduling identity: Input equivalence alone decides whether
+// an active Run matches.
+type ScheduleOption func(*scheduleOptions)
+
+type scheduleOptions struct {
+	// start computes first execution eligibility from the acceptance time;
+	// nil means immediately eligible.
+	start func(now time.Time) time.Time
+}
+
+// StartAt delays the Run's first operation until t. The Run is created and
+// occupies its resource slot immediately; the delay survives restart. If
+// multiple start options are given, the last wins.
+func StartAt(t time.Time) ScheduleOption {
+	return func(o *scheduleOptions) {
+		o.start = func(time.Time) time.Time { return t }
+	}
+}
+
+// StartAfter delays the Run's first operation until d after acceptance,
+// measured by the engine clock. Sugar for StartAt(now.Add(d)).
+func StartAfter(d time.Duration) ScheduleOption {
+	return func(o *scheduleOptions) {
+		o.start = func(now time.Time) time.Time { return now.Add(d) }
+	}
+}
 
 // Pipeline is a definition bound to an Engine. Generated typed pipeline
 // handles wrap it.
@@ -29,7 +58,7 @@ func (p *Pipeline) ID() PipelineID { return p.def.ID() }
 // pipeline it must be nil (generated Schedule omits the argument). ctx
 // governs only acceptance of the scheduling request: once accepted, Run
 // execution belongs to the Engine.
-func (p *Pipeline) Schedule(ctx context.Context, resource ResourceID, input proto.Message) (Run, bool, error) {
+func (p *Pipeline) Schedule(ctx context.Context, resource ResourceID, input proto.Message, opts ...ScheduleOption) (Run, bool, error) {
 	e := p.engine
 	if !e.isStarted() {
 		return Run{}, false, ErrEngineNotStarted
@@ -49,6 +78,11 @@ func (p *Pipeline) Schedule(ctx context.Context, resource ResourceID, input prot
 		return Run{}, false, fmt.Errorf("durable: pipeline %q declares no input", p.def.ID())
 	}
 
+	var so scheduleOptions
+	for _, o := range opts {
+		o(&so)
+	}
+
 	now := e.clock.Now()
 	rec := &RunRecord{
 		RunID:      newRunID(now),
@@ -58,6 +92,9 @@ func (p *Pipeline) Schedule(ctx context.Context, resource ResourceID, input prot
 		Phase:      PhaseForward,
 		CreatedAt:  now,
 		UpdatedAt:  now,
+	}
+	if so.start != nil {
+		rec.NextAttemptAt = so.start(now)
 	}
 	existing, created, err := e.store.CreateRun(ctx, rec)
 	if err != nil {

@@ -91,7 +91,11 @@ func (r Run) Status(ctx context.Context) (Status, error) {
 			st.State = RunStateInvalid
 			st.InvalidReason = ie.Reason
 		} else if !rec.NextAttemptAt.IsZero() && e.clock.Now().Before(rec.NextAttemptAt) {
-			st.State = RunStateWaitingRetry
+			if started(rec) {
+				st.State = RunStateWaitingRetry
+			} else {
+				st.State = RunStateScheduled
+			}
 			st.NextAttemptAt = rec.NextAttemptAt
 		} else if e.isActive(r.id) {
 			st.State = RunStateRunning
@@ -111,6 +115,17 @@ func (r Run) OutputBytes(ctx context.Context) ([]byte, error) {
 		return nil, err
 	}
 	return rec.Output, nil
+}
+
+// started reports whether any operation attempt was ever reserved for the
+// Run, distinguishing a delayed start from a retry wait.
+func started(rec *RunRecord) bool {
+	for _, sr := range rec.Steps {
+		if sr.ForwardAttempts > 0 || sr.UnwindAttempts > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func resultOf(rec *RunRecord) Result {

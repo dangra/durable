@@ -31,6 +31,9 @@ const (
 	RunStateRunnable RunState = iota + 1
 	RunStateRunning
 	RunStateWaitingRetry
+	// RunStateScheduled means the Run was accepted with a delayed start
+	// and its first operation is not yet eligible.
+	RunStateScheduled
 	// RunStateInvalid means the current application deployment cannot
 	// safely continue the nonterminal Run. It is an operational runtime
 	// condition, not a terminal business outcome; a corrected deployment
@@ -47,6 +50,8 @@ func (s RunState) String() string {
 		return "running"
 	case RunStateWaitingRetry:
 		return "waiting-retry"
+	case RunStateScheduled:
+		return "scheduled"
 	case RunStateInvalid:
 		return "invalid"
 	case RunStateDone:

@@ -48,10 +48,14 @@ func TestSlotSemantics(t *testing.T) {
 	}
 
 	// Facts round-trip.
-	rec.Step("a").ForwardStatus = durable.OpSucceeded
-	rec.Step("a").State = []byte{1, 2, 3}
-	if err := s.UpdateRun(ctx, rec); err != nil {
-		t.Fatalf("UpdateRun: %v", err)
+	err = s.ApplyTransition(ctx, "run-1", durable.Transition{
+		Cursor: durable.Cursor{Phase: durable.PhaseForward},
+		Steps: []durable.StepWrite{{StepID: "a", Record: durable.StepRecord{
+			ForwardStatus: durable.OpSucceeded, ForwardAttempts: 1, State: []byte{1, 2, 3},
+		}}},
+	})
+	if err != nil {
+		t.Fatalf("ApplyTransition: %v", err)
 	}
 	got, err := s.GetRun(ctx, "run-1")
 	if err != nil {
@@ -67,10 +71,12 @@ func TestSlotSemantics(t *testing.T) {
 
 	// Terminal completion frees the slot.
 	oc := durable.OutcomeSuccess
-	rec.Outcome = &oc
-	rec.Phase = durable.PhaseDone
-	if err := s.UpdateRun(ctx, rec); err != nil {
-		t.Fatalf("UpdateRun terminal: %v", err)
+	err = s.ApplyTransition(ctx, "run-1", durable.Transition{
+		Cursor:  durable.Cursor{Phase: durable.PhaseDone},
+		Outcome: &oc,
+	})
+	if err != nil {
+		t.Fatalf("terminal ApplyTransition: %v", err)
 	}
 	if runs, err := s.ListNonterminal(ctx); err != nil || len(runs) != 0 {
 		t.Fatalf("ListNonterminal after terminal = %v, %v", runs, err)
@@ -189,9 +195,12 @@ func TestRequestCancel(t *testing.T) {
 		t.Fatalf("second RequestCancel = accepted=%v err=%v", accepted, err)
 	}
 
-	// UpdateRun without the request preserves the stored one.
-	if err := s.UpdateRun(ctx, rec.Clone()); err != nil {
-		t.Fatalf("UpdateRun: %v", err)
+	// The request survives later transitions untouched.
+	err = s.ApplyTransition(ctx, "run-c", durable.Transition{
+		Cursor: durable.Cursor{Phase: durable.PhaseForward, StepID: "s/v1", Attempts: 1},
+	})
+	if err != nil {
+		t.Fatalf("ApplyTransition: %v", err)
 	}
 	got, err := s.GetRun(ctx, "run-c")
 	if err != nil {
@@ -203,10 +212,12 @@ func TestRequestCancel(t *testing.T) {
 
 	// Terminal runs reject cancellation.
 	oc := durable.OutcomeFailure
-	got.Outcome = &oc
-	got.Phase = durable.PhaseDone
-	if err := s.UpdateRun(ctx, got); err != nil {
-		t.Fatalf("UpdateRun terminal: %v", err)
+	err = s.ApplyTransition(ctx, "run-c", durable.Transition{
+		Cursor:  durable.Cursor{Phase: durable.PhaseDone},
+		Outcome: &oc,
+	})
+	if err != nil {
+		t.Fatalf("terminal ApplyTransition: %v", err)
 	}
 	if _, err := s.RequestCancel(ctx, "run-c", durable.CancelRequest{}); !errors.Is(err, durable.ErrRunTerminal) {
 		t.Fatalf("RequestCancel(terminal) = %v, want ErrRunTerminal", err)
@@ -234,10 +245,11 @@ func TestExclusionGroupSlot(t *testing.T) {
 	}
 	// Terminal completion frees the group slot.
 	oc := durable.OutcomeSuccess
-	recA.Outcome = &oc
-	recA.Phase = durable.PhaseDone
-	if err := s.UpdateRun(ctx, recA); err != nil {
-		t.Fatalf("UpdateRun: %v", err)
+	if err := s.ApplyTransition(ctx, "ga-1", durable.Transition{
+		Cursor:  durable.Cursor{Phase: durable.PhaseDone},
+		Outcome: &oc,
+	}); err != nil {
+		t.Fatalf("terminal ApplyTransition: %v", err)
 	}
 	if _, created, err := s.CreateRun(ctx, recB); err != nil || !created {
 		t.Fatalf("post-terminal group CreateRun = created=%v err=%v", created, err)

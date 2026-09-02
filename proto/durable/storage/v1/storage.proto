@@ -3,6 +3,12 @@
 // This schema is internal to this module's store implementations; it is
 // not part of the durable public API. Wire enum values are decoupled from
 // the Go constants by an explicit conversion layer in internal/storagepb.
+//
+// A run is persisted as components with distinct write cadences: RunMeta
+// once at creation, StepRecord rows once per operation resolution,
+// Failures/Terminal/CancelRequest rarely — and Cursor, the only component
+// rewritten on every attempt, kept deliberately small so per-attempt write
+// volume is independent of input and state sizes.
 syntax = "proto3";
 
 package durable.storage.v1;
@@ -40,6 +46,31 @@ enum FailureKind {
   FAILURE_KIND_CANCELED = 3;
 }
 
+// RunMeta holds the write-once identity of a run.
+message RunMeta {
+  string run_id = 1;
+  string pipeline_id = 2;
+  string resource_id = 3;
+  // Namespaced slot group ("pipeline/<id>" or "group/<name>").
+  string slot_group = 4;
+  bytes input = 5;
+  google.protobuf.Timestamp created_at = 6;
+}
+
+// Cursor is the per-run scheduling state rewritten on every attempt.
+message Cursor {
+  Phase phase = 1;
+  // The single in-flight operation; empty when none. Forward vs unwind
+  // follows from phase.
+  string step_id = 2;
+  uint64 attempts = 3;
+  google.protobuf.Timestamp next_attempt_at = 4;
+  string last_error = 5;
+  string last_reason = 6;
+  google.protobuf.Timestamp last_error_at = 7;
+  google.protobuf.Timestamp updated_at = 8;
+}
+
 message StepRecord {
   OpStatus forward_status = 1;
   uint64 forward_attempts = 2;
@@ -58,31 +89,18 @@ message FailureRecord {
   string reason = 7;
 }
 
+message Failures {
+  FailureRecord root = 1;
+  repeated FailureRecord unwind = 2;
+}
+
+// Terminal marks a run's committed terminal outcome and output.
+message Terminal {
+  Outcome outcome = 1;
+  bytes output = 2;
+}
+
 message CancelRequest {
   string cause = 1;
   google.protobuf.Timestamp at = 2;
-}
-
-// RunRecord mirrors durable.RunRecord. Absent timestamps decode as the Go
-// zero time; outcome presence marks a terminal run.
-message RunRecord {
-  string run_id = 1;
-  string pipeline_id = 2;
-  string resource_id = 3;
-  bytes input = 4;
-  Phase phase = 5;
-  map<string, StepRecord> steps = 6;
-  FailureRecord root_failure = 7;
-  repeated FailureRecord unwind_failures = 8;
-  bytes output = 9;
-  optional Outcome outcome = 10;
-  google.protobuf.Timestamp next_attempt_at = 11;
-  string last_error = 12;
-  string last_reason = 13;
-  google.protobuf.Timestamp last_error_at = 14;
-  CancelRequest cancel = 15;
-  google.protobuf.Timestamp created_at = 16;
-  google.protobuf.Timestamp updated_at = 17;
-  // Namespaced slot group ("pipeline/<id>" or "group/<name>").
-  string slot_group = 18;
 }

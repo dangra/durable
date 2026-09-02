@@ -437,7 +437,7 @@ func (e *Engine) processRun(id RunID) (time.Duration, bool) {
 			oc := OutcomeFailure
 			rec.Outcome = &oc
 			rec.Phase = PhaseDone
-			if !e.update(rec) {
+			if !e.apply(rec, Transition{Cursor: idleCursor(rec), Outcome: rec.Outcome}) {
 				return time.Second, true
 			}
 			e.notify(id)
@@ -468,7 +468,7 @@ func (e *Engine) applyCancel(rec *RunRecord) bool {
 	}}
 	rec.Phase = PhaseUnwind
 	rec.NextAttemptAt = time.Time{}
-	return e.update(rec)
+	return e.apply(rec, Transition{Cursor: idleCursor(rec), RootFailure: rec.RootFailure})
 }
 
 // recordLastError captures an ordinary-error attempt on the record; it
@@ -508,7 +508,7 @@ func (e *Engine) runForward(rec *RunRecord, def *Definition, stepID StepID) (don
 	sr.ForwardStatus = OpUnresolved
 	sr.ForwardAttempts++
 	rec.NextAttemptAt = time.Time{}
-	if !e.update(rec) {
+	if !e.apply(rec, Transition{Cursor: activeCursor(rec, stepID, sr.ForwardAttempts)}) {
 		return false, time.Second, true
 	}
 
@@ -540,7 +540,7 @@ func (e *Engine) runForward(rec *RunRecord, def *Definition, stepID StepID) (don
 		sr.ForwardStatus = OpSucceeded
 		sr.State = stateBytes
 		clearLastError(rec)
-		if !e.update(rec) {
+		if !e.apply(rec, Transition{Cursor: idleCursor(rec), Steps: []StepWrite{{StepID: stepID, Record: *sr}}}) {
 			return false, time.Second, true
 		}
 		return true, 0, false
@@ -558,7 +558,7 @@ func (e *Engine) runForward(rec *RunRecord, def *Definition, stepID StepID) (don
 		}}
 		rec.Phase = PhaseUnwind
 		clearLastError(rec)
-		if !e.update(rec) {
+		if !e.apply(rec, Transition{Cursor: idleCursor(rec), Steps: []StepWrite{{StepID: stepID, Record: *sr}}, RootFailure: rec.RootFailure}) {
 			return false, time.Second, true
 		}
 		return true, 0, false
@@ -567,7 +567,7 @@ func (e *Engine) runForward(rec *RunRecord, def *Definition, stepID StepID) (don
 		d := e.backoff(sr.ForwardAttempts)
 		rec.NextAttemptAt = now.Add(d)
 		recordLastError(rec, err, now)
-		if !e.update(rec) {
+		if !e.apply(rec, Transition{Cursor: activeCursor(rec, stepID, sr.ForwardAttempts)}) {
 			return false, time.Second, true
 		}
 		return false, d, true
@@ -582,7 +582,7 @@ func (e *Engine) runUnwind(rec *RunRecord, def *Definition, stepID StepID) (done
 	sr.UnwindStatus = OpUnresolved
 	sr.UnwindAttempts++
 	rec.NextAttemptAt = time.Time{}
-	if !e.update(rec) {
+	if !e.apply(rec, Transition{Cursor: activeCursor(rec, stepID, sr.UnwindAttempts)}) {
 		return false, time.Second, true
 	}
 
@@ -605,7 +605,7 @@ func (e *Engine) runUnwind(rec *RunRecord, def *Definition, stepID StepID) (done
 	case err == nil:
 		sr.UnwindStatus = OpSucceeded
 		clearLastError(rec)
-		if !e.update(rec) {
+		if !e.apply(rec, Transition{Cursor: idleCursor(rec), Steps: []StepWrite{{StepID: stepID, Record: *sr}}}) {
 			return false, time.Second, true
 		}
 		return true, 0, false
@@ -622,7 +622,8 @@ func (e *Engine) runUnwind(rec *RunRecord, def *Definition, stepID StepID) (done
 			Reason:  pe.failureReason(),
 		}})
 		clearLastError(rec)
-		if !e.update(rec) {
+		uf := rec.UnwindFailures[len(rec.UnwindFailures)-1]
+		if !e.apply(rec, Transition{Cursor: idleCursor(rec), Steps: []StepWrite{{StepID: stepID, Record: *sr}}, UnwindFailure: &uf}) {
 			return false, time.Second, true
 		}
 		return true, 0, false
@@ -631,7 +632,7 @@ func (e *Engine) runUnwind(rec *RunRecord, def *Definition, stepID StepID) (done
 		d := e.backoff(sr.UnwindAttempts)
 		rec.NextAttemptAt = now.Add(d)
 		recordLastError(rec, err, now)
-		if !e.update(rec) {
+		if !e.apply(rec, Transition{Cursor: activeCursor(rec, stepID, sr.UnwindAttempts)}) {
 			return false, time.Second, true
 		}
 		return false, d, true
@@ -670,7 +671,7 @@ func (e *Engine) reduceAndComplete(rec *RunRecord, def *Definition) bool {
 	oc := OutcomeSuccess
 	rec.Outcome = &oc
 	rec.Phase = PhaseDone
-	if !e.update(rec) {
+	if !e.apply(rec, Transition{Cursor: idleCursor(rec), Output: rec.Output, Outcome: rec.Outcome}) {
 		return false
 	}
 	e.notify(rec.RunID)
@@ -745,11 +746,50 @@ func (e *Engine) invokeReduce(def *Definition, view *ReduceView) (out proto.Mess
 	return def.cfg.Reduce(view), nil
 }
 
-func (e *Engine) update(rec *RunRecord) bool {
+// activeCursor builds the Cursor for a Run whose operation on stepID is
+// in flight; idleCursor for a Run with none.
+func activeCursor(rec *RunRecord, stepID StepID, attempts uint64) Cursor {
+	return Cursor{
+		Phase:         rec.Phase,
+		StepID:        stepID,
+		Attempts:      attempts,
+		NextAttemptAt: rec.NextAttemptAt,
+		LastError:     rec.LastError,
+		LastReason:    rec.LastReason,
+		LastErrorAt:   rec.LastErrorAt,
+	}
+}
+
+func idleCursor(rec *RunRecord) Cursor { return activeCursor(rec, "", 0) }
+
+// apply performs one atomic durable transition. Any unresolved operation
+// in rec covered by neither the cursor nor an explicit step write (an
+// unwind operation displaced by topology change) is flushed as a step row
+// so its attempt count survives.
+func (e *Engine) apply(rec *RunRecord, t Transition) bool {
 	rec.UpdatedAt = e.clock.Now()
-	if err := e.store.UpdateRun(e.baseCtx, rec); err != nil {
+	t.Cursor.UpdatedAt = rec.UpdatedAt
+	for id, sr := range rec.Steps {
+		if id == t.Cursor.StepID {
+			continue
+		}
+		if sr.ForwardStatus != OpUnresolved && sr.UnwindStatus != OpUnresolved {
+			continue
+		}
+		covered := false
+		for _, sw := range t.Steps {
+			if sw.StepID == id {
+				covered = true
+				break
+			}
+		}
+		if !covered {
+			t.Steps = append(t.Steps, StepWrite{StepID: id, Record: *sr})
+		}
+	}
+	if err := e.store.ApplyTransition(e.baseCtx, rec.RunID, t); err != nil {
 		if e.baseCtx.Err() == nil {
-			e.logger.Error("durable: store update failed", "run", rec.RunID, "error", err)
+			e.logger.Error("durable: store transition failed", "run", rec.RunID, "error", err)
 		}
 		return false
 	}

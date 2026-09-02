@@ -8,94 +8,144 @@ import (
 	"github.com/dangra/durable"
 )
 
-func TestRunRecordRoundTrip(t *testing.T) {
-	// Times constructed via time.Unix in UTC survive the Timestamp
-	// conversion bit-for-bit, so reflect.DeepEqual is exact.
-	at := func(sec int64) time.Time { return time.Unix(sec, 123456789).UTC() }
+// Times constructed via time.Unix in UTC survive the Timestamp conversion
+// bit-for-bit, so reflect.DeepEqual is exact.
+func at(sec int64) time.Time { return time.Unix(sec, 123456789).UTC() }
 
-	oc := durable.OutcomeFailure
+func TestRunMetaRoundTrip(t *testing.T) {
 	rec := &durable.RunRecord{
 		RunID:      "run-1",
 		PipelineID: "provision-machine",
 		ResourceID: "machine-1",
 		Group:      "group/machine-lifecycle",
 		Input:      []byte{0x0a, 0x03, 'o', 'r', 'd'},
-		Phase:      durable.PhaseUnwind,
-		Steps: map[durable.StepID]*durable.StepRecord{
-			"validate/v1": {ForwardStatus: durable.OpSucceeded, ForwardAttempts: 1},
-			"reserve/v1": {
-				ForwardStatus:   durable.OpSucceeded,
-				ForwardAttempts: 3,
-				State:           []byte{1, 2, 3},
-				UnwindStatus:    durable.OpUnresolved,
-				UnwindAttempts:  2,
-			},
-			"create/v1": {ForwardStatus: durable.OpFailed, ForwardAttempts: 5},
-		},
-		RootFailure: &durable.RootFailure{FailureRecord: durable.FailureRecord{
-			StepID:  "create/v1",
-			Phase:   durable.PhaseForward,
-			Attempt: 5,
-			Message: "no capacity",
-			At:      at(100),
-			Kind:    durable.FailureKindUser,
-			Reason:  "insufficient-capacity",
-		}},
-		UnwindFailures: []durable.UnwindFailure{{FailureRecord: durable.FailureRecord{
-			StepID:  "reserve/v1",
-			Phase:   durable.PhaseUnwind,
-			Attempt: 1,
-			Message: "release rejected",
-			At:      at(200),
-			Kind:    durable.FailureKindSystem,
-			Reason:  "release-rejected",
-		}}},
-		Output:        []byte{9, 9},
-		Outcome:       &oc,
-		NextAttemptAt: at(300),
-		LastError:     "still busy",
-		LastReason:    "device-busy",
-		LastErrorAt:   at(400),
-		Cancel:        &durable.CancelRequest{Cause: "operator", At: at(500)},
-		CreatedAt:     at(1),
-		UpdatedAt:     at(600),
+		CreatedAt:  at(1),
 	}
-
-	b, err := MarshalRunRecord(rec)
+	b, err := MarshalRunMeta(rec)
 	if err != nil {
-		t.Fatalf("MarshalRunRecord: %v", err)
+		t.Fatalf("MarshalRunMeta: %v", err)
 	}
-	got, err := UnmarshalRunRecord(b)
-	if err != nil {
-		t.Fatalf("UnmarshalRunRecord: %v", err)
+	got := &durable.RunRecord{}
+	if err := UnmarshalRunMetaInto(b, got); err != nil {
+		t.Fatalf("UnmarshalRunMetaInto: %v", err)
 	}
 	if !reflect.DeepEqual(rec, got) {
 		t.Fatalf("round trip mismatch:\n got: %+v\nwant: %+v", got, rec)
 	}
 }
 
-func TestRunRecordRoundTripZeroValues(t *testing.T) {
-	rec := &durable.RunRecord{
-		RunID:      "run-min",
-		PipelineID: "p",
-		ResourceID: "r",
-		Phase:      durable.PhaseForward,
+func TestCursorRoundTrip(t *testing.T) {
+	cases := []durable.Cursor{
+		{
+			Phase:         durable.PhaseForward,
+			StepID:        "reserve/v1",
+			Attempts:      7,
+			NextAttemptAt: at(100),
+			LastError:     "device busy",
+			LastReason:    "device-busy",
+			LastErrorAt:   at(90),
+			UpdatedAt:     at(101),
+		},
+		{Phase: durable.PhaseDone, UpdatedAt: at(200)}, // idle, zero times preserved
 	}
-	b, err := MarshalRunRecord(rec)
+	for _, c := range cases {
+		b, err := MarshalCursor(c)
+		if err != nil {
+			t.Fatalf("MarshalCursor: %v", err)
+		}
+		got, err := UnmarshalCursor(b)
+		if err != nil {
+			t.Fatalf("UnmarshalCursor: %v", err)
+		}
+		if !reflect.DeepEqual(c, got) {
+			t.Fatalf("round trip mismatch:\n got: %+v\nwant: %+v", got, c)
+		}
+	}
+}
+
+func TestStepRecordRoundTrip(t *testing.T) {
+	sr := &durable.StepRecord{
+		ForwardStatus:   durable.OpSucceeded,
+		ForwardAttempts: 3,
+		State:           []byte{1, 2, 3},
+		UnwindStatus:    durable.OpUnresolved,
+		UnwindAttempts:  2,
+	}
+	b, err := MarshalStepRecord(sr)
 	if err != nil {
-		t.Fatalf("MarshalRunRecord: %v", err)
+		t.Fatalf("MarshalStepRecord: %v", err)
 	}
-	got, err := UnmarshalRunRecord(b)
+	got, err := UnmarshalStepRecord(b)
 	if err != nil {
-		t.Fatalf("UnmarshalRunRecord: %v", err)
+		t.Fatalf("UnmarshalStepRecord: %v", err)
 	}
-	if !reflect.DeepEqual(rec, got) {
-		t.Fatalf("round trip mismatch:\n got: %+v\nwant: %+v", got, rec)
+	if !reflect.DeepEqual(sr, got) {
+		t.Fatalf("round trip mismatch:\n got: %+v\nwant: %+v", got, sr)
 	}
-	if got.Terminal() {
-		t.Fatal("absent outcome decoded as terminal")
+}
+
+func TestFailuresRoundTrip(t *testing.T) {
+	root := &durable.RootFailure{FailureRecord: durable.FailureRecord{
+		StepID:  "create/v1",
+		Phase:   durable.PhaseForward,
+		Attempt: 5,
+		Message: "no capacity",
+		At:      at(100),
+		Kind:    durable.FailureKindUser,
+		Reason:  "insufficient-capacity",
+	}}
+	unwind := []durable.UnwindFailure{{FailureRecord: durable.FailureRecord{
+		StepID:  "reserve/v1",
+		Phase:   durable.PhaseUnwind,
+		Attempt: 1,
+		Message: "release rejected",
+		At:      at(200),
+		Kind:    durable.FailureKindSystem,
+		Reason:  "release-rejected",
+	}}}
+	b, err := MarshalFailures(root, unwind)
+	if err != nil {
+		t.Fatalf("MarshalFailures: %v", err)
 	}
-	if !got.NextAttemptAt.IsZero() || !got.LastErrorAt.IsZero() || got.Cancel != nil {
-		t.Fatalf("zero values not preserved: %+v", got)
+	gotRoot, gotUnwind, err := UnmarshalFailures(b)
+	if err != nil {
+		t.Fatalf("UnmarshalFailures: %v", err)
+	}
+	if !reflect.DeepEqual(root, gotRoot) || !reflect.DeepEqual(unwind, gotUnwind) {
+		t.Fatalf("round trip mismatch:\n got: %+v %+v\nwant: %+v %+v", gotRoot, gotUnwind, root, unwind)
+	}
+	// Cancellation roots have no StepID and no unwind failures yet.
+	b, err = MarshalFailures(&durable.RootFailure{FailureRecord: durable.FailureRecord{
+		Message: "canceled", At: at(1), Kind: durable.FailureKindCanceled,
+	}}, nil)
+	if err != nil {
+		t.Fatalf("MarshalFailures: %v", err)
+	}
+	gotRoot, gotUnwind, err = UnmarshalFailures(b)
+	if err != nil || gotRoot == nil || gotRoot.Kind != durable.FailureKindCanceled || gotUnwind != nil {
+		t.Fatalf("cancel root round trip = %+v %+v %v", gotRoot, gotUnwind, err)
+	}
+}
+
+func TestTerminalRoundTrip(t *testing.T) {
+	b, err := MarshalTerminal(durable.OutcomeSuccess, []byte{9, 9})
+	if err != nil {
+		t.Fatalf("MarshalTerminal: %v", err)
+	}
+	oc, out, err := UnmarshalTerminal(b)
+	if err != nil || oc != durable.OutcomeSuccess || len(out) != 2 {
+		t.Fatalf("round trip = %v %v %v", oc, out, err)
+	}
+}
+
+func TestCancelRoundTrip(t *testing.T) {
+	c := &durable.CancelRequest{Cause: "operator", At: at(500)}
+	b, err := MarshalCancel(c)
+	if err != nil {
+		t.Fatalf("MarshalCancel: %v", err)
+	}
+	got, err := UnmarshalCancel(b)
+	if err != nil || !reflect.DeepEqual(c, got) {
+		t.Fatalf("round trip = %+v %v, want %+v", got, err, c)
 	}
 }

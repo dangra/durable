@@ -534,6 +534,47 @@ design rationale.
 
 ---
 
+## Store contract
+
+The Store persists Runs as components with distinct write cadences:
+
+```text
+meta (identity, input)        written once, at creation
+step fact rows                written once per operation resolution
+failures / terminal / cancel  written rarely
+cursor                        rewritten on every attempt — small
+```
+
+The Cursor is the per-Run scheduling state: phase, retry/start
+eligibility, last-error fields, and the **single in-flight operation**
+(step, attempt count) — leaning on the one-operation-per-Run invariant.
+Because only the Cursor is rewritten per attempt, per-attempt write
+volume is bounded by the Cursor, independent of Input and State sizes.
+
+The engine mutates durable state exclusively through atomic transitions:
+
+```go
+Store.ApplyTransition(ctx, runID, Transition{
+    Cursor:        ...,  // always applied
+    Steps:         ...,  // fact rows upserted at resolution
+    RootFailure:   ...,  // set once
+    UnwindFailure: ...,  // appended
+    Output:        ..., Outcome: ..., // terminality; releases the slot
+})
+```
+
+Reads assemble the full RunRecord from the components, overlaying the
+cursor's in-flight operation as an unresolved step entry. An unwind
+operation displaced by topology change before resolving is flushed to its
+step row so its attempt count survives (attempt numbers are never
+reused).
+
+Cancellation requests live in their own component, written only by
+RequestCancel — the engine worker remains the sole writer of everything
+else, with no read-modify-write races by construction.
+
+---
+
 ## Internal type erasure
 
 The Engine core SHOULD remain non-generic.

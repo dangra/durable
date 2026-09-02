@@ -38,6 +38,50 @@ type CancelRequest struct {
 	At    time.Time
 }
 
+// Cursor is the per-Run scheduling state rewritten on every durable
+// transition. It is deliberately small: per-attempt write volume is
+// bounded by the Cursor, independent of Input and State sizes.
+type Cursor struct {
+	Phase Phase
+
+	// The single in-flight operation; StepID is empty when none. Whether
+	// it is a forward or unwind operation follows from Phase.
+	StepID   StepID
+	Attempts uint64
+
+	NextAttemptAt time.Time
+	LastError     string
+	LastReason    string
+	LastErrorAt   time.Time
+	UpdatedAt     time.Time
+}
+
+// StepWrite upserts the durable facts of one Step.
+type StepWrite struct {
+	StepID StepID
+	Record StepRecord
+}
+
+// Transition is one atomic durable state change of a Run: the Cursor is
+// always applied; the remaining fields carry the write-once or append-only
+// facts the transition produced, if any.
+type Transition struct {
+	Cursor Cursor
+
+	Steps []StepWrite
+
+	// RootFailure is set at most once per Run.
+	RootFailure *RootFailure
+	// UnwindFailure is appended.
+	UnwindFailure *UnwindFailure
+
+	// Outcome commits terminality; Output accompanies a successful
+	// outcome for Output-producing pipelines. Committing an Outcome
+	// releases the Run's resource slot.
+	Output  []byte
+	Outcome *Outcome
+}
+
 // RunRecord is the durable representation of a Run: execution facts, not a
 // materialized topology. Stores persist it opaquely.
 type RunRecord struct {
@@ -77,9 +121,7 @@ type RunRecord struct {
 	LastErrorAt time.Time
 
 	// Cancel is the pending cancellation request, if any. It is written
-	// only through Store.RequestCancel; once set it is never cleared, and
-	// UpdateRun preserves a stored request even when the incoming record
-	// lacks one.
+	// only through Store.RequestCancel and never cleared.
 	Cancel *CancelRequest
 
 	CreatedAt time.Time
@@ -156,12 +198,12 @@ type Store interface {
 	// GetRun returns the record for id, or ErrRunNotFound.
 	GetRun(ctx context.Context, id RunID) (*RunRecord, error)
 
-	// UpdateRun atomically replaces the record for rec.RunID. A stored
-	// cancellation request is monotonic: if the stored record carries one
-	// and rec does not, the stored request is preserved (the engine worker
-	// is the sole record writer, and a concurrent RequestCancel must not
-	// be clobbered by its read-modify-write).
-	UpdateRun(ctx context.Context, rec *RunRecord) error
+	// ApplyTransition atomically applies one durable state change to the
+	// Run: the Cursor is written, step facts are upserted, failures
+	// recorded, and a Transition carrying an Outcome commits terminality
+	// and releases the resource slot. A missing Run returns
+	// ErrRunNotFound.
+	ApplyTransition(ctx context.Context, id RunID, t Transition) error
 
 	// RequestCancel durably records a cancellation request for the Run.
 	// The first request wins: a later request returns accepted=false with

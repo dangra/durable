@@ -173,3 +173,5 @@ Part of the [`durable` specification](README.md). This list is append-only; inva
 85. Duplicate-scheduling equivalence applies only within one Pipeline; a cross-pipeline slot occupant is always a conflict.
 
 86. Exclusion is enforced atomically at Run creation; conflicts are rejected, never queued.
+
+87. Immutable facts are written once; per-attempt durable writes are bounded by the scheduling cursor, independent of Input and State sizes.

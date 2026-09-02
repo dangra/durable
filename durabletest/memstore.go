@@ -43,19 +43,53 @@ func (s *MemStore) GetRun(_ context.Context, id durable.RunID) (*durable.RunReco
 	return r.Clone(), nil
 }
 
-func (s *MemStore) UpdateRun(_ context.Context, rec *durable.RunRecord) error {
+func (s *MemStore) ApplyTransition(_ context.Context, id durable.RunID, t durable.Transition) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	existing, ok := s.runs[rec.RunID]
+	rec, ok := s.runs[id]
 	if !ok {
 		return durable.ErrRunNotFound
 	}
-	stored := rec.Clone()
-	if stored.Cancel == nil && existing.Cancel != nil {
-		cr := *existing.Cancel
-		stored.Cancel = &cr
+
+	// Step fact rows.
+	for _, sw := range t.Steps {
+		sr := sw.Record
+		sr.State = append([]byte(nil), sw.Record.State...)
+		*rec.Step(sw.StepID) = sr
 	}
-	s.runs[rec.RunID] = stored
+
+	// Cursor: scheduling state plus the single in-flight operation. The
+	// engine's delta contract covers every previously unresolved
+	// operation with either the cursor or an explicit step write, so the
+	// overlay below is a pure upsert.
+	c := t.Cursor
+	rec.Phase = c.Phase
+	rec.NextAttemptAt = c.NextAttemptAt
+	rec.LastError, rec.LastReason, rec.LastErrorAt = c.LastError, c.LastReason, c.LastErrorAt
+	rec.UpdatedAt = c.UpdatedAt
+	if c.StepID != "" {
+		sr := rec.Step(c.StepID)
+		if c.Phase == durable.PhaseUnwind && sr.ForwardStatus == durable.OpSucceeded {
+			sr.UnwindStatus = durable.OpUnresolved
+			sr.UnwindAttempts = c.Attempts
+		} else {
+			sr.ForwardStatus = durable.OpUnresolved
+			sr.ForwardAttempts = c.Attempts
+		}
+	}
+
+	if t.RootFailure != nil {
+		rf := *t.RootFailure
+		rec.RootFailure = &rf
+	}
+	if t.UnwindFailure != nil {
+		rec.UnwindFailures = append(rec.UnwindFailures, *t.UnwindFailure)
+	}
+	if t.Outcome != nil {
+		oc := *t.Outcome
+		rec.Outcome = &oc
+		rec.Output = append([]byte(nil), t.Output...)
+	}
 	return nil
 }
 

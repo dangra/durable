@@ -5,13 +5,17 @@
 // blocks (or times out) rather than executing concurrently.
 //
 // The storage representation is implementation-defined by the spec; this
-// implementation encodes RunRecords with the internal durable.storage.v1
-// protobuf schema in a "runs" bucket and keeps an active-slot index in a
-// "slots" bucket to enforce at most one nonterminal Run per
-// (PipelineID, ResourceID).
+// implementation stores each run as components with distinct write
+// cadences (the internal durable.storage.v1 protobuf schema): write-once
+// meta (identity + input), step-fact rows written at operation resolution,
+// rarely-written failures/terminal/cancel records, and the small cursor
+// rewritten per attempt. Per-attempt write volume is therefore independent
+// of input and state sizes. An active-slot index enforces at most one
+// nonterminal run per (exclusion scope, ResourceID).
 package bboltstore
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"sort"
@@ -24,8 +28,13 @@ import (
 )
 
 var (
-	runsBucket  = []byte("runs")
-	slotsBucket = []byte("slots")
+	metaBucket     = []byte("meta")
+	cursorBucket   = []byte("cursor")
+	stepsBucket    = []byte("steps")
+	failuresBucket = []byte("failures")
+	terminalBucket = []byte("terminal")
+	cancelBucket   = []byte("cancel")
+	slotsBucket    = []byte("slots")
 )
 
 // Store is a durable.Store backed by a bbolt database file.
@@ -41,7 +50,7 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("bboltstore: opening %s: %w", path, err)
 	}
 	err = db.Update(func(tx *bolt.Tx) error {
-		for _, name := range [][]byte{runsBucket, slotsBucket} {
+		for _, name := range [][]byte{metaBucket, cursorBucket, stepsBucket, failuresBucket, terminalBucket, cancelBucket, slotsBucket} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return err
 			}
@@ -59,34 +68,24 @@ func slotKey(rec *durable.RunRecord) []byte {
 	return []byte(rec.SlotGroup() + "\x00" + string(rec.ResourceID))
 }
 
-func decode(b []byte) (*durable.RunRecord, error) {
-	return storagepb.UnmarshalRunRecord(b)
+func stepKey(id durable.RunID, step durable.StepID) []byte {
+	return []byte(string(id) + "\x00" + string(step))
 }
 
 func (s *Store) CreateRun(_ context.Context, rec *durable.RunRecord) (*durable.RunRecord, bool, error) {
 	var existing *durable.RunRecord
 	created := false
 	err := s.db.Update(func(tx *bolt.Tx) error {
-		slots := tx.Bucket(slotsBucket)
-		runs := tx.Bucket(runsBucket)
 		key := slotKey(rec)
-		if activeID := slots.Get(key); activeID != nil {
-			b := runs.Get(activeID)
-			if b == nil {
-				return fmt.Errorf("bboltstore: slot index references missing run %s", activeID)
-			}
+		if activeID := tx.Bucket(slotsBucket).Get(key); activeID != nil {
 			var err error
-			existing, err = decode(b)
+			existing, err = getRun(tx, durable.RunID(activeID))
 			return err
 		}
-		b, err := storagepb.MarshalRunRecord(rec)
-		if err != nil {
+		if err := putRun(tx, rec); err != nil {
 			return err
 		}
-		if err := runs.Put([]byte(rec.RunID), b); err != nil {
-			return err
-		}
-		if err := slots.Put(key, []byte(rec.RunID)); err != nil {
+		if err := tx.Bucket(slotsBucket).Put(key, []byte(rec.RunID)); err != nil {
 			return err
 		}
 		created = true
@@ -98,78 +97,230 @@ func (s *Store) CreateRun(_ context.Context, rec *durable.RunRecord) (*durable.R
 	return existing, created, nil
 }
 
-func (s *Store) GetRun(_ context.Context, id durable.RunID) (*durable.RunRecord, error) {
-	var rec *durable.RunRecord
-	err := s.db.View(func(tx *bolt.Tx) error {
-		b := tx.Bucket(runsBucket).Get([]byte(id))
-		if b == nil {
-			return durable.ErrRunNotFound
-		}
-		var err error
-		rec, err = decode(b)
+// putRun persists every present component of rec; used at creation (and
+// for seeded records carrying pre-existing facts).
+func putRun(tx *bolt.Tx, rec *durable.RunRecord) error {
+	meta, err := storagepb.MarshalRunMeta(rec)
+	if err != nil {
 		return err
+	}
+	if err := tx.Bucket(metaBucket).Put([]byte(rec.RunID), meta); err != nil {
+		return err
+	}
+	cursor, err := storagepb.MarshalCursor(durable.Cursor{
+		Phase:         rec.Phase,
+		NextAttemptAt: rec.NextAttemptAt,
+		LastError:     rec.LastError,
+		LastReason:    rec.LastReason,
+		LastErrorAt:   rec.LastErrorAt,
+		UpdatedAt:     rec.UpdatedAt,
 	})
-	return rec, err
-}
-
-func (s *Store) UpdateRun(_ context.Context, rec *durable.RunRecord) error {
-	return s.db.Update(func(tx *bolt.Tx) error {
-		runs := tx.Bucket(runsBucket)
-		prev := runs.Get([]byte(rec.RunID))
-		if prev == nil {
-			return durable.ErrRunNotFound
-		}
-		if rec.Cancel == nil {
-			existing, err := decode(prev)
-			if err != nil {
-				return err
-			}
-			if existing.Cancel != nil {
-				rec = rec.Clone()
-				rec.Cancel = existing.Cancel
-			}
-		}
-		b, err := storagepb.MarshalRunRecord(rec)
+	if err != nil {
+		return err
+	}
+	if err := tx.Bucket(cursorBucket).Put([]byte(rec.RunID), cursor); err != nil {
+		return err
+	}
+	for sid, sr := range rec.Steps {
+		b, err := storagepb.MarshalStepRecord(sr)
 		if err != nil {
 			return err
 		}
-		if err := runs.Put([]byte(rec.RunID), b); err != nil {
+		if err := tx.Bucket(stepsBucket).Put(stepKey(rec.RunID, sid), b); err != nil {
 			return err
 		}
-		if rec.Terminal() {
-			slots := tx.Bucket(slotsBucket)
+	}
+	if rec.RootFailure != nil || len(rec.UnwindFailures) > 0 {
+		b, err := storagepb.MarshalFailures(rec.RootFailure, rec.UnwindFailures)
+		if err != nil {
+			return err
+		}
+		if err := tx.Bucket(failuresBucket).Put([]byte(rec.RunID), b); err != nil {
+			return err
+		}
+	}
+	if rec.Outcome != nil {
+		b, err := storagepb.MarshalTerminal(*rec.Outcome, rec.Output)
+		if err != nil {
+			return err
+		}
+		if err := tx.Bucket(terminalBucket).Put([]byte(rec.RunID), b); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) ApplyTransition(_ context.Context, id durable.RunID, t durable.Transition) error {
+	return s.db.Update(func(tx *bolt.Tx) error {
+		metaBytes := tx.Bucket(metaBucket).Get([]byte(id))
+		if metaBytes == nil {
+			return durable.ErrRunNotFound
+		}
+		cursor, err := storagepb.MarshalCursor(t.Cursor)
+		if err != nil {
+			return err
+		}
+		if err := tx.Bucket(cursorBucket).Put([]byte(id), cursor); err != nil {
+			return err
+		}
+		for _, sw := range t.Steps {
+			sr := sw.Record
+			b, err := storagepb.MarshalStepRecord(&sr)
+			if err != nil {
+				return err
+			}
+			if err := tx.Bucket(stepsBucket).Put(stepKey(id, sw.StepID), b); err != nil {
+				return err
+			}
+		}
+		if t.RootFailure != nil || t.UnwindFailure != nil {
+			root, unwind, err := readFailures(tx, id)
+			if err != nil {
+				return err
+			}
+			if t.RootFailure != nil {
+				rf := *t.RootFailure
+				root = &rf
+			}
+			if t.UnwindFailure != nil {
+				unwind = append(unwind, *t.UnwindFailure)
+			}
+			b, err := storagepb.MarshalFailures(root, unwind)
+			if err != nil {
+				return err
+			}
+			if err := tx.Bucket(failuresBucket).Put([]byte(id), b); err != nil {
+				return err
+			}
+		}
+		if t.Outcome != nil {
+			b, err := storagepb.MarshalTerminal(*t.Outcome, t.Output)
+			if err != nil {
+				return err
+			}
+			if err := tx.Bucket(terminalBucket).Put([]byte(id), b); err != nil {
+				return err
+			}
+			// Terminality releases the resource slot.
+			rec := &durable.RunRecord{}
+			if err := storagepb.UnmarshalRunMetaInto(metaBytes, rec); err != nil {
+				return err
+			}
 			key := slotKey(rec)
-			if active := slots.Get(key); active != nil && string(active) == string(rec.RunID) {
-				return slots.Delete(key)
+			if active := tx.Bucket(slotsBucket).Get(key); active != nil && string(active) == string(id) {
+				return tx.Bucket(slotsBucket).Delete(key)
 			}
 		}
 		return nil
 	})
 }
 
+func readFailures(tx *bolt.Tx, id durable.RunID) (*durable.RootFailure, []durable.UnwindFailure, error) {
+	b := tx.Bucket(failuresBucket).Get([]byte(id))
+	if b == nil {
+		return nil, nil, nil
+	}
+	return storagepb.UnmarshalFailures(b)
+}
+
+// getRun assembles the read model from the run's components: meta, step
+// rows, failures, terminal — with the cursor's in-flight operation
+// overlaid as an unresolved step entry.
+func getRun(tx *bolt.Tx, id durable.RunID) (*durable.RunRecord, error) {
+	metaBytes := tx.Bucket(metaBucket).Get([]byte(id))
+	if metaBytes == nil {
+		return nil, durable.ErrRunNotFound
+	}
+	rec := &durable.RunRecord{}
+	if err := storagepb.UnmarshalRunMetaInto(metaBytes, rec); err != nil {
+		return nil, err
+	}
+
+	prefix := stepKey(id, "")
+	c := tx.Bucket(stepsBucket).Cursor()
+	for k, v := c.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, v = c.Next() {
+		sr, err := storagepb.UnmarshalStepRecord(v)
+		if err != nil {
+			return nil, err
+		}
+		*rec.Step(durable.StepID(k[len(prefix):])) = *sr
+	}
+
+	cb := tx.Bucket(cursorBucket).Get([]byte(id))
+	if cb == nil {
+		return nil, fmt.Errorf("bboltstore: run %s has no cursor", id)
+	}
+	cur, err := storagepb.UnmarshalCursor(cb)
+	if err != nil {
+		return nil, err
+	}
+	rec.Phase = cur.Phase
+	rec.NextAttemptAt = cur.NextAttemptAt
+	rec.LastError, rec.LastReason, rec.LastErrorAt = cur.LastError, cur.LastReason, cur.LastErrorAt
+	rec.UpdatedAt = cur.UpdatedAt
+	if cur.StepID != "" {
+		sr := rec.Step(cur.StepID)
+		if cur.Phase == durable.PhaseUnwind && sr.ForwardStatus == durable.OpSucceeded {
+			sr.UnwindStatus = durable.OpUnresolved
+			sr.UnwindAttempts = cur.Attempts
+		} else {
+			sr.ForwardStatus = durable.OpUnresolved
+			sr.ForwardAttempts = cur.Attempts
+		}
+	}
+
+	root, unwind, err := readFailures(tx, id)
+	if err != nil {
+		return nil, err
+	}
+	rec.RootFailure = root
+	rec.UnwindFailures = unwind
+
+	if tb := tx.Bucket(terminalBucket).Get([]byte(id)); tb != nil {
+		oc, out, err := storagepb.UnmarshalTerminal(tb)
+		if err != nil {
+			return nil, err
+		}
+		rec.Outcome = &oc
+		rec.Output = out
+	}
+	if xb := tx.Bucket(cancelBucket).Get([]byte(id)); xb != nil {
+		cr, err := storagepb.UnmarshalCancel(xb)
+		if err != nil {
+			return nil, err
+		}
+		rec.Cancel = cr
+	}
+	return rec, nil
+}
+
+func (s *Store) GetRun(_ context.Context, id durable.RunID) (*durable.RunRecord, error) {
+	var rec *durable.RunRecord
+	err := s.db.View(func(tx *bolt.Tx) error {
+		var err error
+		rec, err = getRun(tx, id)
+		return err
+	})
+	return rec, err
+}
+
 func (s *Store) RequestCancel(_ context.Context, id durable.RunID, req durable.CancelRequest) (bool, error) {
 	accepted := false
 	err := s.db.Update(func(tx *bolt.Tx) error {
-		runs := tx.Bucket(runsBucket)
-		b := runs.Get([]byte(id))
-		if b == nil {
-			return durable.ErrRunNotFound
-		}
-		rec, err := decode(b)
 		switch {
-		case err != nil:
-			return err
-		case rec.Terminal():
+		case tx.Bucket(metaBucket).Get([]byte(id)) == nil:
+			return durable.ErrRunNotFound
+		case tx.Bucket(terminalBucket).Get([]byte(id)) != nil:
 			return durable.ErrRunTerminal
-		case rec.Cancel != nil:
-			return nil
+		case tx.Bucket(cancelBucket).Get([]byte(id)) != nil:
+			return nil // first cancel wins
 		}
-		rec.Cancel = &req
-		enc, err := storagepb.MarshalRunRecord(rec)
+		b, err := storagepb.MarshalCancel(&req)
 		if err != nil {
 			return err
 		}
-		if err := runs.Put([]byte(id), enc); err != nil {
+		if err := tx.Bucket(cancelBucket).Put([]byte(id), b); err != nil {
 			return err
 		}
 		accepted = true
@@ -181,14 +332,15 @@ func (s *Store) RequestCancel(_ context.Context, id durable.RunID, req durable.C
 func (s *Store) ListNonterminal(_ context.Context) ([]*durable.RunRecord, error) {
 	var out []*durable.RunRecord
 	err := s.db.View(func(tx *bolt.Tx) error {
-		return tx.Bucket(runsBucket).ForEach(func(_, v []byte) error {
-			rec, err := decode(v)
+		return tx.Bucket(metaBucket).ForEach(func(k, _ []byte) error {
+			if tx.Bucket(terminalBucket).Get(k) != nil {
+				return nil
+			}
+			rec, err := getRun(tx, durable.RunID(k))
 			if err != nil {
 				return err
 			}
-			if !rec.Terminal() {
-				out = append(out, rec)
-			}
+			out = append(out, rec)
 			return nil
 		})
 	})
@@ -198,14 +350,19 @@ func (s *Store) ListNonterminal(_ context.Context) ([]*durable.RunRecord, error)
 func (s *Store) ListRuns(_ context.Context, pipeline durable.PipelineID, resource durable.ResourceID) ([]*durable.RunRecord, error) {
 	var out []*durable.RunRecord
 	err := s.db.View(func(tx *bolt.Tx) error {
-		return tx.Bucket(runsBucket).ForEach(func(_, v []byte) error {
-			rec, err := decode(v)
+		return tx.Bucket(metaBucket).ForEach(func(k, v []byte) error {
+			probe := &durable.RunRecord{}
+			if err := storagepb.UnmarshalRunMetaInto(v, probe); err != nil {
+				return err
+			}
+			if probe.PipelineID != pipeline || probe.ResourceID != resource {
+				return nil
+			}
+			rec, err := getRun(tx, durable.RunID(k))
 			if err != nil {
 				return err
 			}
-			if rec.PipelineID == pipeline && rec.ResourceID == resource {
-				out = append(out, rec)
-			}
+			out = append(out, rec)
 			return nil
 		})
 	})

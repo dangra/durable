@@ -2,26 +2,15 @@
 
 Part of the [`durable` specification](README.md).
 
-## Store contract
+## Store contract remainder
 
-Specify transactional persistence operations for:
+The transactional store contract is now specified (see 04-engine, Store
+contract): component persistence, atomic transitions, the cursor, and
+slot uniqueness. Remaining:
 
-- Runs,
-- resource-slot uniqueness,
-- Input,
-- forward execution ledger,
-- unwind execution ledger,
-- State,
-- retry scheduling,
-- Failure,
-- Output,
-- terminal outcome,
-- waiters.
-
-Implementations:
-
-- SQLite,
-- bbolt.
+- waiters (currently in-process only),
+- retention/archival of terminal runs,
+- a SQLite implementation.
 
 ## Historical inspection
 

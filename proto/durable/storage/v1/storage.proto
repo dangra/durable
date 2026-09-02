@@ -1,0 +1,86 @@
+// Storage encoding of durable run records.
+//
+// This schema is internal to this module's store implementations; it is
+// not part of the durable public API. Wire enum values are decoupled from
+// the Go constants by an explicit conversion layer in internal/storagepb.
+syntax = "proto3";
+
+package durable.storage.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/dangra/durable/internal/storagepb;storagepb";
+
+enum Phase {
+  PHASE_UNSPECIFIED = 0;
+  PHASE_FORWARD = 1;
+  PHASE_UNWIND = 2;
+  PHASE_DONE = 3;
+}
+
+enum Outcome {
+  OUTCOME_UNSPECIFIED = 0;
+  OUTCOME_SUCCESS = 1;
+  OUTCOME_FAILURE = 2;
+}
+
+enum OpStatus {
+  // UNSPECIFIED doubles as "operation never started".
+  OP_STATUS_UNSPECIFIED = 0;
+  OP_STATUS_UNRESOLVED = 1;
+  OP_STATUS_SUCCEEDED = 2;
+  OP_STATUS_FAILED = 3;
+}
+
+enum FailureKind {
+  // UNSPECIFIED decodes as the Go default, system.
+  FAILURE_KIND_UNSPECIFIED = 0;
+  FAILURE_KIND_SYSTEM = 1;
+  FAILURE_KIND_USER = 2;
+  FAILURE_KIND_CANCELED = 3;
+}
+
+message StepRecord {
+  OpStatus forward_status = 1;
+  uint64 forward_attempts = 2;
+  bytes state = 3;
+  OpStatus unwind_status = 4;
+  uint64 unwind_attempts = 5;
+}
+
+message FailureRecord {
+  string step_id = 1;
+  Phase phase = 2;
+  uint64 attempt = 3;
+  string message = 4;
+  google.protobuf.Timestamp at = 5;
+  FailureKind kind = 6;
+  string reason = 7;
+}
+
+message CancelRequest {
+  string cause = 1;
+  google.protobuf.Timestamp at = 2;
+}
+
+// RunRecord mirrors durable.RunRecord. Absent timestamps decode as the Go
+// zero time; outcome presence marks a terminal run.
+message RunRecord {
+  string run_id = 1;
+  string pipeline_id = 2;
+  string resource_id = 3;
+  bytes input = 4;
+  Phase phase = 5;
+  map<string, StepRecord> steps = 6;
+  FailureRecord root_failure = 7;
+  repeated FailureRecord unwind_failures = 8;
+  bytes output = 9;
+  optional Outcome outcome = 10;
+  google.protobuf.Timestamp next_attempt_at = 11;
+  string last_error = 12;
+  string last_reason = 13;
+  google.protobuf.Timestamp last_error_at = 14;
+  CancelRequest cancel = 15;
+  google.protobuf.Timestamp created_at = 16;
+  google.protobuf.Timestamp updated_at = 17;
+}

@@ -5,14 +5,14 @@
 // blocks (or times out) rather than executing concurrently.
 //
 // The storage representation is implementation-defined by the spec; this
-// implementation encodes RunRecords as JSON in a "runs" bucket and keeps an
-// active-slot index in a "slots" bucket to enforce at most one nonterminal
-// Run per (PipelineID, ResourceID).
+// implementation encodes RunRecords with the internal durable.storage.v1
+// protobuf schema in a "runs" bucket and keeps an active-slot index in a
+// "slots" bucket to enforce at most one nonterminal Run per
+// (PipelineID, ResourceID).
 package bboltstore
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"sort"
 	"time"
@@ -20,6 +20,7 @@ import (
 	bolt "go.etcd.io/bbolt"
 
 	"github.com/dangra/durable"
+	"github.com/dangra/durable/internal/storagepb"
 )
 
 var (
@@ -59,11 +60,7 @@ func slotKey(pipeline durable.PipelineID, resource durable.ResourceID) []byte {
 }
 
 func decode(b []byte) (*durable.RunRecord, error) {
-	rec := &durable.RunRecord{}
-	if err := json.Unmarshal(b, rec); err != nil {
-		return nil, fmt.Errorf("bboltstore: decoding run record: %w", err)
-	}
-	return rec, nil
+	return storagepb.UnmarshalRunRecord(b)
 }
 
 func (s *Store) CreateRun(_ context.Context, rec *durable.RunRecord) (*durable.RunRecord, bool, error) {
@@ -82,9 +79,9 @@ func (s *Store) CreateRun(_ context.Context, rec *durable.RunRecord) (*durable.R
 			existing, err = decode(b)
 			return err
 		}
-		b, err := json.Marshal(rec)
+		b, err := storagepb.MarshalRunRecord(rec)
 		if err != nil {
-			return fmt.Errorf("bboltstore: encoding run record: %w", err)
+			return err
 		}
 		if err := runs.Put([]byte(rec.RunID), b); err != nil {
 			return err
@@ -132,9 +129,9 @@ func (s *Store) UpdateRun(_ context.Context, rec *durable.RunRecord) error {
 				rec.Cancel = existing.Cancel
 			}
 		}
-		b, err := json.Marshal(rec)
+		b, err := storagepb.MarshalRunRecord(rec)
 		if err != nil {
-			return fmt.Errorf("bboltstore: encoding run record: %w", err)
+			return err
 		}
 		if err := runs.Put([]byte(rec.RunID), b); err != nil {
 			return err
@@ -168,9 +165,9 @@ func (s *Store) RequestCancel(_ context.Context, id durable.RunID, req durable.C
 			return nil
 		}
 		rec.Cancel = &req
-		enc, err := json.Marshal(rec)
+		enc, err := storagepb.MarshalRunRecord(rec)
 		if err != nil {
-			return fmt.Errorf("bboltstore: encoding run record: %w", err)
+			return err
 		}
 		if err := runs.Put([]byte(id), enc); err != nil {
 			return err

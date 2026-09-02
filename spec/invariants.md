@@ -4,7 +4,7 @@ Part of the [`durable` specification](README.md). This list is append-only; inva
 
 1. `RunID` identifies one exact execution.
 
-2. At most one nonterminal Run exists for `(PipelineID, ResourceID)`.
+2. At most one nonterminal Run exists per resource slot: `(PipelineID, ResourceID)` by default, or `(exclusion group, ResourceID)` for group members.
 
 3. Pipeline Input is immutable.
 
@@ -169,3 +169,7 @@ Part of the [`durable` specification](README.md). This list is append-only; inva
 83. An organic permanent failure under a pending cancellation becomes the RootFailure.
 
 84. Cancellation does not bypass Run invalidity.
+
+85. Duplicate-scheduling equivalence applies only within one Pipeline; a cross-pipeline slot occupant is always a conflict.
+
+86. Exclusion is enforced atomically at Run creation; conflicts are rejected, never queued.

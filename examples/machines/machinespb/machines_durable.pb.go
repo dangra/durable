@@ -2,6 +2,7 @@
 //
 // source: machines/v1/machines.proto
 // pipeline: provision-machine
+// pipeline: decommission-machine
 
 package machinespb
 
@@ -221,8 +222,9 @@ func NewProvisionMachine(
 	reduce ProvisionMachineReducer,
 ) *ProvisionMachineDefinition {
 	return &ProvisionMachineDefinition{def: durable.NewDefinition(durable.DefinitionConfig{
-		ID:       "provision-machine",
-		NewInput: func() proto.Message { return &ProvisionMachineInput{} },
+		ID:             "provision-machine",
+		ExclusionGroup: "machine-lifecycle",
+		NewInput:       func() proto.Message { return &ProvisionMachineInput{} },
 		Reduce: func(view *durable.ReduceView) proto.Message {
 			x := &ProvisionMachine{}
 			provisionMachineViews.Store(x, view)
@@ -385,3 +387,118 @@ type ProvisionMachineResult struct {
 // Output returns the pipeline output. It is non-nil exactly when the run
 // succeeded.
 func (r ProvisionMachineResult) Output() *ProvisionMachineOutput { return r.output }
+
+// ReleaseMachineStep is the reference to the stateless step "release-machine/v1".
+// It is not accepted by State lookup.
+var ReleaseMachineStep = durable.NewStepRef("release-machine/v1")
+
+// ReleaseMachineInvocation is passed to ReleaseMachineHandler methods.
+type ReleaseMachineInvocation struct {
+	core *durable.Invocation
+}
+
+func (inv ReleaseMachineInvocation) PipelineID() durable.PipelineID { return inv.core.PipelineID() }
+func (inv ReleaseMachineInvocation) ResourceID() durable.ResourceID { return inv.core.ResourceID() }
+func (inv ReleaseMachineInvocation) RunID() durable.RunID           { return inv.core.RunID() }
+func (inv ReleaseMachineInvocation) StepID() durable.StepID         { return inv.core.StepID() }
+func (inv ReleaseMachineInvocation) Attempt() uint64                { return inv.core.Attempt() }
+func (inv ReleaseMachineInvocation) Phase() durable.Phase           { return inv.core.Phase() }
+
+// State returns the committed state of the referenced step for this run.
+// ok is false when no committed state exists.
+func (inv ReleaseMachineInvocation) State[T proto.Message](step durable.StateStepRef[T]) (T, bool) {
+	return durable.LookupState(inv.core, step)
+}
+
+// ReleaseMachineHandler implements step "release-machine/v1".
+type ReleaseMachineHandler interface {
+	Run(context.Context, ReleaseMachineInvocation) error
+}
+
+// ReleaseMachineFunc adapts a function to ReleaseMachineHandler, in the style of
+// http.HandlerFunc.
+type ReleaseMachineFunc func(ctx context.Context, inv ReleaseMachineInvocation) error
+
+func (f ReleaseMachineFunc) Run(ctx context.Context, inv ReleaseMachineInvocation) error {
+	return f(ctx, inv)
+}
+
+var decommissionMachineViews sync.Map
+
+func (x *DecommissionMachine) durableView() *durable.ReduceView {
+	v, ok := decommissionMachineViews.Load(x)
+	if !ok {
+		panic("machinespb: DecommissionMachine is only usable as a reducer view during reduction")
+	}
+	return v.(*durable.ReduceView)
+}
+
+// State returns the committed state of the referenced step for the run
+// being reduced. ok is false when no committed state exists.
+func (x *DecommissionMachine) State[T proto.Message](step durable.StateStepRef[T]) (T, bool) {
+	return durable.LookupState(x.durableView(), step)
+}
+
+// DecommissionMachineDefinition is the unbound pipeline definition.
+type DecommissionMachineDefinition struct {
+	def *durable.Definition
+}
+
+// NewDecommissionMachine assembles the "decommission-machine" pipeline definition
+// from its step handlers.
+func NewDecommissionMachine(
+	releaseMachine ReleaseMachineHandler,
+) *DecommissionMachineDefinition {
+	return &DecommissionMachineDefinition{def: durable.NewDefinition(durable.DefinitionConfig{
+		ID:             "decommission-machine",
+		ExclusionGroup: "machine-lifecycle",
+		Steps: []durable.StepConfig{
+			{
+				ID: "release-machine/v1",
+				Run: func(ctx context.Context, core *durable.Invocation) (proto.Message, error) {
+					return nil, releaseMachine.Run(ctx, ReleaseMachineInvocation{core: core})
+				},
+			},
+		},
+	})}
+}
+
+// Bind registers the definition with an engine. It is allowed only before
+// Engine.Start.
+func (d *DecommissionMachineDefinition) Bind(e *durable.Engine) (*DecommissionMachinePipeline, error) {
+	p, err := d.def.Bind(e)
+	if err != nil {
+		return nil, err
+	}
+	return &DecommissionMachinePipeline{pipeline: p}, nil
+}
+
+// DecommissionMachinePipeline is the definition bound to an engine.
+type DecommissionMachinePipeline struct {
+	pipeline *durable.Pipeline
+}
+
+// Schedule creates a run for the resource slot or returns the active one.
+func (p *DecommissionMachinePipeline) Schedule(ctx context.Context, resource durable.ResourceID, opts ...durable.ScheduleOption) (durable.Run, bool, error) {
+	run, created, err := p.pipeline.Schedule(ctx, resource, nil, opts...)
+	return run, created, err
+}
+
+// Run returns a handle to an existing run of this pipeline.
+func (p *DecommissionMachinePipeline) Run(ctx context.Context, id durable.RunID) (durable.Run, error) {
+	run, err := p.pipeline.Run(ctx, id)
+	return run, err
+}
+
+// Active returns handles for this pipeline's nonterminal runs.
+func (p *DecommissionMachinePipeline) Active(ctx context.Context) ([]durable.Run, error) {
+	runs, err := p.pipeline.Active(ctx)
+	return runs, err
+}
+
+// Runs returns handles for all runs of this pipeline against a resource,
+// oldest first.
+func (p *DecommissionMachinePipeline) Runs(ctx context.Context, resource durable.ResourceID) ([]durable.Run, error) {
+	runs, err := p.pipeline.Runs(ctx, resource)
+	return runs, err
+}

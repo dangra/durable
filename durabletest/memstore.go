@@ -25,7 +25,7 @@ func (s *MemStore) CreateRun(_ context.Context, rec *durable.RunRecord) (*durabl
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, r := range s.runs {
-		if r.PipelineID == rec.PipelineID && r.ResourceID == rec.ResourceID && !r.Terminal() {
+		if r.SlotGroup() == rec.SlotGroup() && r.ResourceID == rec.ResourceID && !r.Terminal() {
 			return r.Clone(), false, nil
 		}
 	}

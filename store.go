@@ -45,6 +45,12 @@ type RunRecord struct {
 	PipelineID PipelineID
 	ResourceID ResourceID
 
+	// Group is the namespaced exclusion scope this Run's slot belongs to
+	// ("pipeline/<id>" or "group/<name>"), set by the engine at
+	// acceptance. Stores use SlotGroup, which falls back to the
+	// per-pipeline scope for records without one.
+	Group string
+
 	Input []byte
 
 	Phase Phase
@@ -82,6 +88,15 @@ type RunRecord struct {
 
 // Terminal reports whether the Run has a committed terminal outcome.
 func (r *RunRecord) Terminal() bool { return r.Outcome != nil }
+
+// SlotGroup returns the exclusion scope of the Run's resource slot. At
+// most one nonterminal Run may occupy (SlotGroup, ResourceID).
+func (r *RunRecord) SlotGroup() string {
+	if r.Group != "" {
+		return r.Group
+	}
+	return "pipeline/" + string(r.PipelineID)
+}
 
 // Step returns the StepRecord for id, creating it if absent.
 func (r *RunRecord) Step(id StepID) *StepRecord {
@@ -132,9 +147,10 @@ func (r *RunRecord) Clone() *RunRecord {
 // the store.
 type Store interface {
 	// CreateRun persists rec if no nonterminal Run occupies its
-	// (PipelineID, ResourceID) slot, returning (nil, true, nil).
-	// If a nonterminal Run occupies the slot, it returns that record with
-	// created=false and does not persist rec.
+	// (SlotGroup, ResourceID) slot, returning (nil, true, nil).
+	// If a nonterminal Run occupies the slot — possibly belonging to a
+	// different pipeline in the same exclusion group — it returns that
+	// record with created=false and does not persist rec.
 	CreateRun(ctx context.Context, rec *RunRecord) (existing *RunRecord, created bool, err error)
 
 	// GetRun returns the record for id, or ErrRunNotFound.

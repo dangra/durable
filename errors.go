@@ -21,13 +21,17 @@ var ErrRunNotFound = errors.New("durable: run not found")
 var ErrRunTerminal = errors.New("durable: run already terminal")
 
 // ScheduleConflictError is returned by Schedule when a nonterminal Run
-// already occupies the (PipelineID, ResourceID) slot with different Input.
+// already occupies the resource slot: a Run of the same pipeline with
+// different Input, or a Run of another pipeline in the same exclusion
+// group. PipelineID identifies the blocking Run's pipeline so callers can
+// route to its handle.
 type ScheduleConflictError struct {
-	RunID RunID
+	RunID      RunID
+	PipelineID PipelineID
 }
 
 func (e *ScheduleConflictError) Error() string {
-	return fmt.Sprintf("durable: schedule conflict: active run %s has different input", e.RunID)
+	return fmt.Sprintf("durable: schedule conflict: active run %s of pipeline %q occupies the slot", e.RunID, e.PipelineID)
 }
 
 // PipelineMismatchError is returned when a Run is looked up through a

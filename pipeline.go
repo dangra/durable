@@ -88,6 +88,7 @@ func (p *Pipeline) Schedule(ctx context.Context, resource ResourceID, input prot
 		RunID:      newRunID(now),
 		PipelineID: p.def.ID(),
 		ResourceID: resource,
+		Group:      p.def.slotGroup(),
 		Input:      inputBytes,
 		Phase:      PhaseForward,
 		CreatedAt:  now,
@@ -105,6 +106,11 @@ func (p *Pipeline) Schedule(ctx context.Context, resource ResourceID, input prot
 		return Run{id: rec.RunID, engine: e}, true, nil
 	}
 
+	// A slot occupied by another pipeline in the exclusion group is always
+	// a conflict: input equivalence is only meaningful within one pipeline.
+	if existing.PipelineID != p.def.ID() {
+		return Run{}, false, &ScheduleConflictError{RunID: existing.RunID, PipelineID: existing.PipelineID}
+	}
 	if p.def.cfg.NewInput == nil {
 		return Run{id: existing.RunID, engine: e}, false, nil
 	}
@@ -115,7 +121,7 @@ func (p *Pipeline) Schedule(ctx context.Context, resource ResourceID, input prot
 	if proto.Equal(existingInput, input) {
 		return Run{id: existing.RunID, engine: e}, false, nil
 	}
-	return Run{}, false, &ScheduleConflictError{RunID: existing.RunID}
+	return Run{}, false, &ScheduleConflictError{RunID: existing.RunID, PipelineID: existing.PipelineID}
 }
 
 // Run returns a handle to an existing Run, verifying it belongs to this

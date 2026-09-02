@@ -340,6 +340,81 @@ func (*ProvisionMachine) Descriptor() ([]byte, []int) {
 	return file_machines_v1_machines_proto_rawDescGZIP(), []int{6}
 }
 
+type ReleaseMachine struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReleaseMachine) Reset() {
+	*x = ReleaseMachine{}
+	mi := &file_machines_v1_machines_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReleaseMachine) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReleaseMachine) ProtoMessage() {}
+
+func (x *ReleaseMachine) ProtoReflect() protoreflect.Message {
+	mi := &file_machines_v1_machines_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReleaseMachine.ProtoReflect.Descriptor instead.
+func (*ReleaseMachine) Descriptor() ([]byte, []int) {
+	return file_machines_v1_machines_proto_rawDescGZIP(), []int{7}
+}
+
+// DecommissionMachine shares the machine-lifecycle exclusion group with
+// ProvisionMachine: at most one of the two may have a nonterminal run per
+// machine.
+type DecommissionMachine struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DecommissionMachine) Reset() {
+	*x = DecommissionMachine{}
+	mi := &file_machines_v1_machines_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DecommissionMachine) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DecommissionMachine) ProtoMessage() {}
+
+func (x *DecommissionMachine) ProtoReflect() protoreflect.Message {
+	mi := &file_machines_v1_machines_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DecommissionMachine.ProtoReflect.Descriptor instead.
+func (*DecommissionMachine) Descriptor() ([]byte, []int) {
+	return file_machines_v1_machines_proto_rawDescGZIP(), []int{8}
+}
+
 var File_machines_v1_machines_proto protoreflect.FileDescriptor
 
 const file_machines_v1_machines_proto_rawDesc = "" +
@@ -365,9 +440,13 @@ const file_machines_v1_machines_proto_rawDesc = "" +
 	"\rCreateMachine\x12\x1d\n" +
 	"\n" +
 	"machine_id\x18\x01 \x01(\tR\tmachineId:\x17\x8a\xa8\x19\x13\n" +
-	"\x11create-machine/v1\"\xe0\x01\n" +
-	"\x10ProvisionMachine:\xcb\x01\x92\xa8\x19\xc6\x01\n" +
-	"\x11provision-machine\x12\".machines.v1.ProvisionMachineInput\x1a#.machines.v1.ProvisionMachineOutput\"\x15.machines.v1.Validate\"\x17.machines.v1.SelectHost\"\x1c.machines.v1.ReserveCapacity\"\x1a.machines.v1.CreateMachineBCZAgithub.com/dangra/durable/examples/machines/machinespb;machinespbb\x06proto3"
+	"\x11create-machine/v1\"\xf3\x01\n" +
+	"\x10ProvisionMachine:\xde\x01\x92\xa8\x19\xd9\x01\n" +
+	"\x11provision-machine\x12\".machines.v1.ProvisionMachineInput\x1a#.machines.v1.ProvisionMachineOutput\"\x15.machines.v1.Validate\"\x17.machines.v1.SelectHost\"\x1c.machines.v1.ReserveCapacity\"\x1a.machines.v1.CreateMachine*\x11machine-lifecycle\"*\n" +
+	"\x0eReleaseMachine:\x18\x8a\xa8\x19\x14\n" +
+	"\x12release-machine/v1\"a\n" +
+	"\x13DecommissionMachine:J\x92\xa8\x19F\n" +
+	"\x14decommission-machine\"\x1b.machines.v1.ReleaseMachine*\x11machine-lifecycleBCZAgithub.com/dangra/durable/examples/machines/machinespb;machinespbb\x06proto3"
 
 var (
 	file_machines_v1_machines_proto_rawDescOnce sync.Once
@@ -381,7 +460,7 @@ func file_machines_v1_machines_proto_rawDescGZIP() []byte {
 	return file_machines_v1_machines_proto_rawDescData
 }
 
-var file_machines_v1_machines_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_machines_v1_machines_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
 var file_machines_v1_machines_proto_goTypes = []any{
 	(*ProvisionMachineInput)(nil),  // 0: machines.v1.ProvisionMachineInput
 	(*ProvisionMachineOutput)(nil), // 1: machines.v1.ProvisionMachineOutput
@@ -390,6 +469,8 @@ var file_machines_v1_machines_proto_goTypes = []any{
 	(*ReserveCapacity)(nil),        // 4: machines.v1.ReserveCapacity
 	(*CreateMachine)(nil),          // 5: machines.v1.CreateMachine
 	(*ProvisionMachine)(nil),       // 6: machines.v1.ProvisionMachine
+	(*ReleaseMachine)(nil),         // 7: machines.v1.ReleaseMachine
+	(*DecommissionMachine)(nil),    // 8: machines.v1.DecommissionMachine
 }
 var file_machines_v1_machines_proto_depIdxs = []int32{
 	0, // [0:0] is the sub-list for method output_type
@@ -410,7 +491,7 @@ func file_machines_v1_machines_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_machines_v1_machines_proto_rawDesc), len(file_machines_v1_machines_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   7,
+			NumMessages:   9,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

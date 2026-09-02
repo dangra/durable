@@ -1177,3 +1177,64 @@ func TestRunIDsAreULIDs(t *testing.T) {
 		t.Fatalf("embedded timestamp %v not near now", at)
 	}
 }
+
+func TestExclusionGroupSemantics(t *testing.T) {
+	release := make(chan struct{})
+	blocking := func(id durable.PipelineID, group string) *durable.Definition {
+		return durable.NewDefinition(durable.DefinitionConfig{
+			ID:             id,
+			ExclusionGroup: group,
+			Steps: []durable.StepConfig{
+				stateless("s-"+durable.StepID(id)+"/v1", func(ctx context.Context, inv *durable.Invocation) error {
+					select {
+					case <-release:
+						return nil
+					case <-ctx.Done():
+						return ctx.Err()
+					}
+				}),
+			},
+			NewInput: func() proto.Message { return &wrapperspb.StringValue{} },
+		})
+	}
+	_, pipes := startEngine(t, durabletest.NewMemStore(),
+		blocking("grp-a", "lifecycle"),
+		blocking("grp-b", "lifecycle"),
+		blocking("solo", ""),
+	)
+	a, b, solo := pipes[0], pipes[1], pipes[2]
+
+	runA, created, err := a.Schedule(context.Background(), "res", str("in"))
+	if err != nil || !created {
+		t.Fatalf("a.Schedule = created=%v err=%v", created, err)
+	}
+
+	// Same pipeline, equivalent input: dedup still applies inside a group.
+	runA2, created, err := a.Schedule(context.Background(), "res", str("in"))
+	if err != nil || created || runA2.ID() != runA.ID() {
+		t.Fatalf("a dedup = %s created=%v err=%v", runA2.ID(), created, err)
+	}
+
+	// Group sibling: always a conflict, even with equivalent input.
+	_, created, err = b.Schedule(context.Background(), "res", str("in"))
+	var conflict *durable.ScheduleConflictError
+	if !errors.As(err, &conflict) || created {
+		t.Fatalf("b.Schedule = created=%v err=%v, want conflict", created, err)
+	}
+	if conflict.PipelineID != "grp-a" || conflict.RunID != runA.ID() {
+		t.Fatalf("conflict = %+v", conflict)
+	}
+
+	// A pipeline outside the group shares the resource freely.
+	if _, created, err := solo.Schedule(context.Background(), "res", str("in")); err != nil || !created {
+		t.Fatalf("solo.Schedule = created=%v err=%v", created, err)
+	}
+
+	close(release)
+	if res, err := runA.Wait(context.Background()); err != nil || !res.Succeeded() {
+		t.Fatalf("Wait = %+v, %v", res, err)
+	}
+	if _, created, err := b.Schedule(context.Background(), "res", str("in")); err != nil || !created {
+		t.Fatalf("post-terminal b.Schedule = created=%v err=%v", created, err)
+	}
+}

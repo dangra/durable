@@ -36,14 +36,57 @@ StepID
 The scheduling slot is:
 
 ```text
-(PipelineID, ResourceID)
+(exclusion scope, ResourceID)
 ```
 
 At most one nonterminal Run may occupy a slot.
 
-Different Pipelines MAY operate concurrently on the same `ResourceID`.
+By default a Pipeline's exclusion scope is private to it, so the slot is
+effectively `(PipelineID, ResourceID)` and different Pipelines operate
+concurrently on the same `ResourceID`.
 
-Cross-Pipeline exclusion is outside v1.
+A Pipeline MAY instead declare membership in a named **exclusion group**:
+
+```proto
+option (durable.v1.pipeline) = {
+  id: "provision-machine"
+  exclusion_group: "machine-lifecycle"
+  ...
+};
+```
+
+Pipelines sharing a group share one slot per resource: at most one
+nonterminal Run may exist across the whole group for a `ResourceID`. This
+models resources with multiple mutually exclusive lifecycle workflows
+(provision vs decommission vs migrate on one machine), while pipelines
+that deliberately coexist with them (a monitor) simply stay outside the
+group.
+
+Scopes are namespaced (`pipeline/<id>` vs `group/<name>`) so a group name
+can never collide with another pipeline's default scope.
+
+Enforcement is atomic in the Store at Run creation — there is no
+check-then-schedule race.
+
+---
+
+## Cross-pipeline conflicts
+
+Duplicate-scheduling equivalence (see Duplicate scheduling) applies only
+within one Pipeline. A slot occupied by a Run of *another* Pipeline in
+the group is always a conflict:
+
+```go
+type ScheduleConflictError struct {
+    RunID      RunID
+    PipelineID PipelineID
+}
+```
+
+`PipelineID` identifies the blocking Run's pipeline so a caller can route
+to its handle, inspect Status, or Wait. Conflicts are rejected, never
+queued: reconcile-loop callers retry, which is the proven pattern for
+this model.
 
 ---
 

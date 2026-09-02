@@ -35,6 +35,12 @@ message PipelineOptions {
 
   // Ordered Step topology as fully-qualified Step message types.
   repeated string steps = 4;
+
+  // Optional named exclusion group. Pipelines sharing a group mutually
+  // exclude per ResourceID: at most one nonterminal Run may exist across
+  // the whole group for a resource. Without a group, a pipeline excludes
+  // only with itself (the default per-pipeline slot).
+  string exclusion_group = 5;
 }
 
 extend google.protobuf.MessageOptions {

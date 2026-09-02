@@ -48,10 +48,27 @@ message ProvisionMachine {
     id: "provision-machine"
     input: ".machines.v1.ProvisionMachineInput"
     output: ".machines.v1.ProvisionMachineOutput"
+    exclusion_group: "machine-lifecycle"
 
     steps: ".machines.v1.Validate"
     steps: ".machines.v1.SelectHost"
     steps: ".machines.v1.ReserveCapacity"
     steps: ".machines.v1.CreateMachine"
+  };
+}
+
+message ReleaseMachine {
+  option (durable.v1.step) = {id: "release-machine/v1"};
+}
+
+// DecommissionMachine shares the machine-lifecycle exclusion group with
+// ProvisionMachine: at most one of the two may have a nonterminal run per
+// machine.
+message DecommissionMachine {
+  option (durable.v1.pipeline) = {
+    id: "decommission-machine"
+    exclusion_group: "machine-lifecycle"
+
+    steps: ".machines.v1.ReleaseMachine"
   };
 }

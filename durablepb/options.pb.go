@@ -101,9 +101,14 @@ type PipelineOptions struct {
 	// Fully-qualified Output message type.
 	Output string `protobuf:"bytes,3,opt,name=output,proto3" json:"output,omitempty"`
 	// Ordered Step topology as fully-qualified Step message types.
-	Steps         []string `protobuf:"bytes,4,rep,name=steps,proto3" json:"steps,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Steps []string `protobuf:"bytes,4,rep,name=steps,proto3" json:"steps,omitempty"`
+	// Optional named exclusion group. Pipelines sharing a group mutually
+	// exclude per ResourceID: at most one nonterminal Run may exist across
+	// the whole group for a resource. Without a group, a pipeline excludes
+	// only with itself (the default per-pipeline slot).
+	ExclusionGroup string `protobuf:"bytes,5,opt,name=exclusion_group,json=exclusionGroup,proto3" json:"exclusion_group,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *PipelineOptions) Reset() {
@@ -164,6 +169,13 @@ func (x *PipelineOptions) GetSteps() []string {
 	return nil
 }
 
+func (x *PipelineOptions) GetExclusionGroup() string {
+	if x != nil {
+		return x.ExclusionGroup
+	}
+	return ""
+}
+
 var file_durable_v1_options_proto_extTypes = []protoimpl.ExtensionInfo{
 	{
 		ExtendedType:  (*descriptorpb.MessageOptions)(nil),
@@ -205,12 +217,13 @@ const file_durable_v1_options_proto_rawDesc = "" +
 	"\vStepOptions\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x16\n" +
 	"\x06unwind\x18\x02 \x01(\bR\x06unwind\x12\x18\n" +
-	"\aretired\x18\x03 \x01(\bR\aretired\"e\n" +
+	"\aretired\x18\x03 \x01(\bR\aretired\"\x8e\x01\n" +
 	"\x0fPipelineOptions\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05input\x18\x02 \x01(\tR\x05input\x12\x16\n" +
 	"\x06output\x18\x03 \x01(\tR\x06output\x12\x14\n" +
-	"\x05steps\x18\x04 \x03(\tR\x05steps:N\n" +
+	"\x05steps\x18\x04 \x03(\tR\x05steps\x12'\n" +
+	"\x0fexclusion_group\x18\x05 \x01(\tR\x0eexclusionGroup:N\n" +
 	"\x04step\x12\x1f.google.protobuf.MessageOptions\x18\x81\x95\x03 \x01(\v2\x17.durable.v1.StepOptionsR\x04step:Z\n" +
 	"\bpipeline\x12\x1f.google.protobuf.MessageOptions\x18\x82\x95\x03 \x01(\v2\x1b.durable.v1.PipelineOptionsR\bpipelineB/Z-github.com/dangra/durable/durablepb;durablepbb\x06proto3"
 

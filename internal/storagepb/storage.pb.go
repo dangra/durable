@@ -476,8 +476,10 @@ type RunRecord struct {
 	Cancel         *CancelRequest         `protobuf:"bytes,15,opt,name=cancel,proto3" json:"cancel,omitempty"`
 	CreatedAt      *timestamppb.Timestamp `protobuf:"bytes,16,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	UpdatedAt      *timestamppb.Timestamp `protobuf:"bytes,17,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// Namespaced slot group ("pipeline/<id>" or "group/<name>").
+	SlotGroup     string `protobuf:"bytes,18,opt,name=slot_group,json=slotGroup,proto3" json:"slot_group,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RunRecord) Reset() {
@@ -629,6 +631,13 @@ func (x *RunRecord) GetUpdatedAt() *timestamppb.Timestamp {
 	return nil
 }
 
+func (x *RunRecord) GetSlotGroup() string {
+	if x != nil {
+		return x.SlotGroup
+	}
+	return ""
+}
+
 var File_durable_storage_v1_storage_proto protoreflect.FileDescriptor
 
 const file_durable_storage_v1_storage_proto_rawDesc = "" +
@@ -651,7 +660,7 @@ const file_durable_storage_v1_storage_proto_rawDesc = "" +
 	"\x06reason\x18\a \x01(\tR\x06reason\"Q\n" +
 	"\rCancelRequest\x12\x14\n" +
 	"\x05cause\x18\x01 \x01(\tR\x05cause\x12*\n" +
-	"\x02at\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\x02at\"\xac\a\n" +
+	"\x02at\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\x02at\"\xcb\a\n" +
 	"\tRunRecord\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12\x1f\n" +
 	"\vpipeline_id\x18\x02 \x01(\tR\n" +
@@ -676,7 +685,9 @@ const file_durable_storage_v1_storage_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\x10 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
 	"\n" +
-	"updated_at\x18\x11 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x1aX\n" +
+	"updated_at\x18\x11 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12\x1d\n" +
+	"\n" +
+	"slot_group\x18\x12 \x01(\tR\tslotGroup\x1aX\n" +
 	"\n" +
 	"StepsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x124\n" +

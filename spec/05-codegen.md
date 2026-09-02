@@ -24,6 +24,7 @@ message PipelineOptions {
   string input = 2;
   string output = 3;
   repeated string steps = 4;
+  string exclusion_group = 5;
 }
 
 extend google.protobuf.MessageOptions {

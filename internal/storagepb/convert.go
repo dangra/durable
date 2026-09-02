@@ -48,6 +48,7 @@ func toProto(rec *durable.RunRecord) *RunRecord {
 		LastErrorAt:   ts(rec.LastErrorAt),
 		CreatedAt:     ts(rec.CreatedAt),
 		UpdatedAt:     ts(rec.UpdatedAt),
+		SlotGroup:     rec.Group,
 	}
 	for id, sr := range rec.Steps {
 		pb.Steps[string(id)] = &StepRecord{
@@ -85,6 +86,7 @@ func fromProto(pb *RunRecord) *durable.RunRecord {
 		LastErrorAt:   fromTS(pb.GetLastErrorAt()),
 		CreatedAt:     fromTS(pb.GetCreatedAt()),
 		UpdatedAt:     fromTS(pb.GetUpdatedAt()),
+		Group:         pb.GetSlotGroup(),
 	}
 	if len(pb.GetSteps()) > 0 {
 		rec.Steps = make(map[durable.StepID]*durable.StepRecord, len(pb.GetSteps()))

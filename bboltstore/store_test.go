@@ -212,3 +212,34 @@ func TestRequestCancel(t *testing.T) {
 		t.Fatalf("RequestCancel(terminal) = %v, want ErrRunTerminal", err)
 	}
 }
+
+func TestExclusionGroupSlot(t *testing.T) {
+	s := open(t, filepath.Join(t.TempDir(), "durable.db"))
+	ctx := context.Background()
+
+	recA := &durable.RunRecord{RunID: "ga-1", PipelineID: "pa", ResourceID: "r", Group: "group/g", Phase: durable.PhaseForward}
+	if _, created, err := s.CreateRun(ctx, recA); err != nil || !created {
+		t.Fatalf("CreateRun = created=%v err=%v", created, err)
+	}
+	// A different pipeline in the same group hits the occupied slot.
+	recB := &durable.RunRecord{RunID: "gb-1", PipelineID: "pb", ResourceID: "r", Group: "group/g", Phase: durable.PhaseForward}
+	existing, created, err := s.CreateRun(ctx, recB)
+	if err != nil || created || existing.RunID != "ga-1" {
+		t.Fatalf("group CreateRun = %+v created=%v err=%v", existing, created, err)
+	}
+	// A pipeline outside the group is unaffected.
+	recC := &durable.RunRecord{RunID: "gc-1", PipelineID: "pc", ResourceID: "r", Phase: durable.PhaseForward}
+	if _, created, err := s.CreateRun(ctx, recC); err != nil || !created {
+		t.Fatalf("non-group CreateRun = created=%v err=%v", created, err)
+	}
+	// Terminal completion frees the group slot.
+	oc := durable.OutcomeSuccess
+	recA.Outcome = &oc
+	recA.Phase = durable.PhaseDone
+	if err := s.UpdateRun(ctx, recA); err != nil {
+		t.Fatalf("UpdateRun: %v", err)
+	}
+	if _, created, err := s.CreateRun(ctx, recB); err != nil || !created {
+		t.Fatalf("post-terminal group CreateRun = created=%v err=%v", created, err)
+	}
+}

@@ -55,8 +55,8 @@ func Open(path string) (*Store, error) {
 	return &Store{db: db}, nil
 }
 
-func slotKey(pipeline durable.PipelineID, resource durable.ResourceID) []byte {
-	return []byte(string(pipeline) + "\x00" + string(resource))
+func slotKey(rec *durable.RunRecord) []byte {
+	return []byte(rec.SlotGroup() + "\x00" + string(rec.ResourceID))
 }
 
 func decode(b []byte) (*durable.RunRecord, error) {
@@ -69,7 +69,7 @@ func (s *Store) CreateRun(_ context.Context, rec *durable.RunRecord) (*durable.R
 	err := s.db.Update(func(tx *bolt.Tx) error {
 		slots := tx.Bucket(slotsBucket)
 		runs := tx.Bucket(runsBucket)
-		key := slotKey(rec.PipelineID, rec.ResourceID)
+		key := slotKey(rec)
 		if activeID := slots.Get(key); activeID != nil {
 			b := runs.Get(activeID)
 			if b == nil {
@@ -138,7 +138,7 @@ func (s *Store) UpdateRun(_ context.Context, rec *durable.RunRecord) error {
 		}
 		if rec.Terminal() {
 			slots := tx.Bucket(slotsBucket)
-			key := slotKey(rec.PipelineID, rec.ResourceID)
+			key := slotKey(rec)
 			if active := slots.Get(key); active != nil && string(active) == string(rec.RunID) {
 				return slots.Delete(key)
 			}

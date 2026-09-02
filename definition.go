@@ -35,6 +35,12 @@ type DefinitionConfig struct {
 	ID    PipelineID
 	Steps []StepConfig
 
+	// ExclusionGroup optionally names a mutual-exclusion group: pipelines
+	// sharing a group allow at most one nonterminal Run per ResourceID
+	// across the whole group. Empty means the pipeline excludes only with
+	// itself.
+	ExclusionGroup string
+
 	// NewInput constructs an empty Input message; nil for an Input-less
 	// pipeline.
 	NewInput func() proto.Message
@@ -104,3 +110,13 @@ func (d *Definition) Bind(e *Engine) (*Pipeline, error) {
 }
 
 func (d *Definition) step(id StepID) *StepConfig { return d.steps[id] }
+
+// slotGroup returns the namespaced exclusion scope for this pipeline's
+// Runs. The namespaces keep an explicit group name from accidentally
+// colliding with another pipeline's default per-pipeline scope.
+func (d *Definition) slotGroup() string {
+	if d.cfg.ExclusionGroup != "" {
+		return "group/" + d.cfg.ExclusionGroup
+	}
+	return "pipeline/" + string(d.cfg.ID)
+}

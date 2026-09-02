@@ -18,6 +18,7 @@ func TestRunRecordRoundTrip(t *testing.T) {
 		RunID:      "run-1",
 		PipelineID: "provision-machine",
 		ResourceID: "machine-1",
+		Group:      "group/machine-lifecycle",
 		Input:      []byte{0x0a, 0x03, 'o', 'r', 'd'},
 		Phase:      durable.PhaseUnwind,
 		Steps: map[durable.StepID]*durable.StepRecord{

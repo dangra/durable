@@ -16,6 +16,11 @@ type cloud struct {
 	nextID       int
 	reservations map[string]bool // reservation id -> held
 	saturated    map[string]bool // regions where machine creation fails
+	released     []string        // machines released by decommission
+
+	// createGate, when non-nil, holds machine creation until closed
+	// (used by tests to keep a provision run in flight).
+	createGate chan struct{}
 }
 
 func newCloud() *cloud {
@@ -87,6 +92,16 @@ func (h *createMachine) Run(ctx context.Context, inv machinespb.CreateMachineInv
 		return nil, durable.Fail(errors.New("reservation state unavailable"))
 	}
 	h.cloud.mu.Lock()
+	gate := h.cloud.createGate
+	h.cloud.mu.Unlock()
+	if gate != nil {
+		select {
+		case <-gate:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	h.cloud.mu.Lock()
 	defer h.cloud.mu.Unlock()
 	if h.cloud.saturated[inv.Input().GetRegion()] {
 		return nil, durable.Fail(fmt.Errorf("region %s has no capacity", inv.Input().GetRegion()),
@@ -108,6 +123,19 @@ func reduceProvisionMachine(p *machinespb.ProvisionMachine) *machinespb.Provisio
 		MachineId: machine.GetMachineId(),
 		HostId:    host.GetHostId(),
 	}
+}
+
+type releaseMachine struct{ cloud *cloud }
+
+func (h *releaseMachine) Run(ctx context.Context, inv machinespb.ReleaseMachineInvocation) error {
+	h.cloud.mu.Lock()
+	defer h.cloud.mu.Unlock()
+	h.cloud.released = append(h.cloud.released, string(inv.ResourceID()))
+	return nil
+}
+
+func newDecommissionMachine(c *cloud) *machinespb.DecommissionMachineDefinition {
+	return machinespb.NewDecommissionMachine(&releaseMachine{cloud: c})
 }
 
 func newProvisionMachine(c *cloud) *machinespb.ProvisionMachineDefinition {

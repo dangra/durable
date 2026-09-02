@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -160,5 +161,67 @@ func TestFuncAdapters(t *testing.T) {
 	result, err := run.Wait(context.Background())
 	if err != nil || !result.Succeeded() {
 		t.Fatalf("Wait = %+v, %v; want success", result, err)
+	}
+}
+
+// TestExclusionGroup shows the machine-lifecycle group: while a provision
+// run is in flight for a machine, decommission is rejected with a conflict
+// naming the blocker — and vice versa once the slot frees.
+func TestExclusionGroup(t *testing.T) {
+	c := newCloud()
+	c.createGate = make(chan struct{})
+
+	engine := durable.NewEngine(durabletest.NewMemStore())
+	provision, err := newProvisionMachine(c).Bind(engine)
+	if err != nil {
+		t.Fatalf("Bind provision: %v", err)
+	}
+	decommission, err := newDecommissionMachine(c).Bind(engine)
+	if err != nil {
+		t.Fatalf("Bind decommission: %v", err)
+	}
+	if err := engine.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer engine.Stop(context.Background())
+
+	run, _, err := provision.Schedule(context.Background(), "machine-9", &machinespb.ProvisionMachineInput{
+		Region: "ord", MemoryMb: 1024,
+	})
+	if err != nil {
+		t.Fatalf("Schedule provision: %v", err)
+	}
+
+	// The group slot is held: decommission is rejected, naming the blocker.
+	_, created, err := decommission.Schedule(context.Background(), "machine-9")
+	var conflict *durable.ScheduleConflictError
+	if !errors.As(err, &conflict) || created {
+		t.Fatalf("decommission Schedule = created=%v err=%v, want ScheduleConflictError", created, err)
+	}
+	if conflict.PipelineID != "provision-machine" || conflict.RunID != run.ID() {
+		t.Fatalf("conflict = %+v, want blocker provision-machine/%s", conflict, run.ID())
+	}
+
+	// A different machine is unaffected.
+	if _, created, err := decommission.Schedule(context.Background(), "machine-10"); err != nil || !created {
+		t.Fatalf("other-machine decommission = created=%v err=%v", created, err)
+	}
+
+	// Once provisioning finishes, the group slot frees.
+	close(c.createGate)
+	if res, err := run.Wait(context.Background()); err != nil || !res.Succeeded() {
+		t.Fatalf("provision Wait = %+v, %v", res, err)
+	}
+	dRun, created, err := decommission.Schedule(context.Background(), "machine-9")
+	if err != nil || !created {
+		t.Fatalf("post-completion decommission = created=%v err=%v", created, err)
+	}
+	if res, err := dRun.Wait(context.Background()); err != nil || !res.Succeeded() {
+		t.Fatalf("decommission Wait = %+v, %v", res, err)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.released) == 0 || c.released[len(c.released)-1] != "machine-9" {
+		t.Fatalf("released = %v, want machine-9", c.released)
 	}
 }

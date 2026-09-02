@@ -366,6 +366,21 @@ func (e *Engine) processRun(id RunID) (time.Duration, bool) {
 	}
 }
 
+// recordLastError captures an ordinary-error attempt on the record; it
+// rides the same durable write as NextAttemptAt.
+func recordLastError(rec *RunRecord, err error, now time.Time) {
+	rec.LastError = err.Error()
+	rec.LastReason = reasonOf(err)
+	rec.LastErrorAt = now
+}
+
+// clearLastError resets the last-error fields when the current operation
+// resolves.
+func clearLastError(rec *RunRecord) {
+	rec.LastError, rec.LastReason = "", ""
+	rec.LastErrorAt = time.Time{}
+}
+
 // retryGate returns a wait when the Run's next attempt is not yet eligible.
 func (e *Engine) retryGate(rec *RunRecord) (time.Duration, bool) {
 	if rec.NextAttemptAt.IsZero() {
@@ -419,6 +434,7 @@ func (e *Engine) runForward(rec *RunRecord, def *Definition, stepID StepID) (don
 		// State commit and forward success are one durable transition.
 		sr.ForwardStatus = OpSucceeded
 		sr.State = stateBytes
+		clearLastError(rec)
 		if !e.update(rec) {
 			return false, time.Second, true
 		}
@@ -436,6 +452,7 @@ func (e *Engine) runForward(rec *RunRecord, def *Definition, stepID StepID) (don
 			Reason:  pe.failureReason(),
 		}}
 		rec.Phase = PhaseUnwind
+		clearLastError(rec)
 		if !e.update(rec) {
 			return false, time.Second, true
 		}
@@ -444,6 +461,7 @@ func (e *Engine) runForward(rec *RunRecord, def *Definition, stepID StepID) (don
 	default:
 		d := e.backoff(sr.ForwardAttempts)
 		rec.NextAttemptAt = now.Add(d)
+		recordLastError(rec, err, now)
 		if !e.update(rec) {
 			return false, time.Second, true
 		}
@@ -481,6 +499,7 @@ func (e *Engine) runUnwind(rec *RunRecord, def *Definition, stepID StepID) (done
 	switch pe, permanent := asPermanent(err); {
 	case err == nil:
 		sr.UnwindStatus = OpSucceeded
+		clearLastError(rec)
 		if !e.update(rec) {
 			return false, time.Second, true
 		}
@@ -497,6 +516,7 @@ func (e *Engine) runUnwind(rec *RunRecord, def *Definition, stepID StepID) (done
 			Kind:    pe.failureKind(),
 			Reason:  pe.failureReason(),
 		}})
+		clearLastError(rec)
 		if !e.update(rec) {
 			return false, time.Second, true
 		}
@@ -505,6 +525,7 @@ func (e *Engine) runUnwind(rec *RunRecord, def *Definition, stepID StepID) (done
 	default:
 		d := e.backoff(sr.UnwindAttempts)
 		rec.NextAttemptAt = now.Add(d)
+		recordLastError(rec, err, now)
 		if !e.update(rec) {
 			return false, time.Second, true
 		}

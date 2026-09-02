@@ -864,3 +864,61 @@ func TestUnwindFailureAttribution(t *testing.T) {
 		t.Fatalf("UnwindFailures = %+v, want system/release-rejected", res.UnwindFailures)
 	}
 }
+
+func TestLastErrorSurfacedDuringRetries(t *testing.T) {
+	release := make(chan struct{})
+	def := durable.NewDefinition(durable.DefinitionConfig{
+		ID: "lasterr",
+		Steps: []durable.StepConfig{
+			stateless("s/v1", func(ctx context.Context, inv *durable.Invocation) error {
+				select {
+				case <-release:
+					return nil
+				default:
+					return fmt.Errorf("mounting: %w", &classifiedError{msg: "device busy"})
+				}
+			}),
+		},
+	})
+	_, pipes := startEngine(t, durabletest.NewMemStore(), def)
+	run, _, err := pipes[0].Schedule(context.Background(), "r", nil)
+	if err != nil {
+		t.Fatalf("Schedule: %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		st, err := run.Status(context.Background())
+		if err != nil {
+			t.Fatalf("Status: %v", err)
+		}
+		if st.LastError != "" {
+			if !strings.Contains(st.LastError, "device busy") {
+				t.Fatalf("LastError = %q", st.LastError)
+			}
+			if st.LastReason != "invalid-image" {
+				t.Fatalf("LastReason = %q, want extracted from chain", st.LastReason)
+			}
+			if st.LastErrorAt.IsZero() {
+				t.Fatal("LastErrorAt not set")
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("LastError never surfaced")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	close(release)
+	if res, err := run.Wait(context.Background()); err != nil || !res.Succeeded() {
+		t.Fatalf("Wait = %+v, %v", res, err)
+	}
+	st, err := run.Status(context.Background())
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if st.LastError != "" || st.LastReason != "" || !st.LastErrorAt.IsZero() {
+		t.Fatalf("last-error fields not cleared on resolution: %+v", st)
+	}
+}

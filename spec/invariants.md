@@ -149,3 +149,5 @@ Part of the [`durable` specification](README.md). This list is append-only; inva
 73. Failure Kind defaults to system; user attribution is explicit.
 
 74. Attribution carried by the error chain is overridden by explicit `Fail` options.
+
+75. Last-error fields describe the current unresolved operation and are cleared when it resolves.

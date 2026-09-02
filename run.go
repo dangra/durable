@@ -66,10 +66,13 @@ func (r Run) Status(ctx context.Context) (Status, error) {
 		return Status{}, err
 	}
 	st := Status{
-		PipelineID: rec.PipelineID,
-		ResourceID: rec.ResourceID,
-		RunID:      rec.RunID,
-		Phase:      rec.Phase,
+		PipelineID:  rec.PipelineID,
+		ResourceID:  rec.ResourceID,
+		RunID:       rec.RunID,
+		Phase:       rec.Phase,
+		LastError:   rec.LastError,
+		LastReason:  rec.LastReason,
+		LastErrorAt: rec.LastErrorAt,
 	}
 	for id, sr := range rec.Steps {
 		if sr.ForwardStatus == OpUnresolved {

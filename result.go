@@ -103,6 +103,13 @@ type Status struct {
 
 	NextAttemptAt time.Time
 
+	// LastError, LastReason, and LastErrorAt describe the most recent
+	// ordinary-error attempt of the current unresolved operation; empty
+	// once it resolves.
+	LastError   string
+	LastReason  string
+	LastErrorAt time.Time
+
 	// Outcome is set only for terminal Runs.
 	Outcome *Outcome
 

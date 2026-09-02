@@ -50,9 +50,18 @@ type RunRecord struct {
 	// Outcome is set only once the Run is terminal.
 	Outcome *Outcome
 
-	// NextAttemptAt gates retry eligibility of the current unresolved
-	// operation. It survives restart.
+	// NextAttemptAt gates execution eligibility of the next operation
+	// attempt — a retry, or the first attempt of a delayed Run. It
+	// survives restart.
 	NextAttemptAt time.Time
+
+	// LastError, LastReason, and LastErrorAt describe the most recent
+	// ordinary-error attempt of the current unresolved operation. They are
+	// informational, ride the same write as NextAttemptAt, and are cleared
+	// when the operation resolves.
+	LastError   string
+	LastReason  string
+	LastErrorAt time.Time
 
 	CreatedAt time.Time
 	UpdatedAt time.Time

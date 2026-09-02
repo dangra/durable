@@ -100,9 +100,18 @@ After an ordinary error:
 ```text
 record unresolved attempt
 compute NextAttemptAt
+record LastError / LastReason / LastErrorAt
 release worker
 schedule wakeup
 ```
+
+The last-error fields describe the most recent ordinary-error attempt of
+the current unresolved operation (handler panics included, as their
+synthesized message). LastReason is extracted from the error chain via
+`FailureReasoner`. They ride the same durable write as `NextAttemptAt` —
+no extra persistence cost, and they survive restart — and are cleared when
+the operation resolves: success wipes them, and permanent failure carries
+its cause in the failure records instead. They are informational only.
 
 ---
 
@@ -272,6 +281,10 @@ type Status struct {
     Attempt uint64
 
     NextAttemptAt time.Time
+
+    LastError   string
+    LastReason  string
+    LastErrorAt time.Time
 
     Outcome *Outcome
 }

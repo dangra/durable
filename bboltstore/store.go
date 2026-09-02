@@ -118,8 +118,19 @@ func (s *Store) GetRun(_ context.Context, id durable.RunID) (*durable.RunRecord,
 func (s *Store) UpdateRun(_ context.Context, rec *durable.RunRecord) error {
 	return s.db.Update(func(tx *bolt.Tx) error {
 		runs := tx.Bucket(runsBucket)
-		if runs.Get([]byte(rec.RunID)) == nil {
+		prev := runs.Get([]byte(rec.RunID))
+		if prev == nil {
 			return durable.ErrRunNotFound
+		}
+		if rec.Cancel == nil {
+			existing, err := decode(prev)
+			if err != nil {
+				return err
+			}
+			if existing.Cancel != nil {
+				rec = rec.Clone()
+				rec.Cancel = existing.Cancel
+			}
 		}
 		b, err := json.Marshal(rec)
 		if err != nil {
@@ -137,6 +148,37 @@ func (s *Store) UpdateRun(_ context.Context, rec *durable.RunRecord) error {
 		}
 		return nil
 	})
+}
+
+func (s *Store) RequestCancel(_ context.Context, id durable.RunID, req durable.CancelRequest) (bool, error) {
+	accepted := false
+	err := s.db.Update(func(tx *bolt.Tx) error {
+		runs := tx.Bucket(runsBucket)
+		b := runs.Get([]byte(id))
+		if b == nil {
+			return durable.ErrRunNotFound
+		}
+		rec, err := decode(b)
+		switch {
+		case err != nil:
+			return err
+		case rec.Terminal():
+			return durable.ErrRunTerminal
+		case rec.Cancel != nil:
+			return nil
+		}
+		rec.Cancel = &req
+		enc, err := json.Marshal(rec)
+		if err != nil {
+			return fmt.Errorf("bboltstore: encoding run record: %w", err)
+		}
+		if err := runs.Put([]byte(id), enc); err != nil {
+			return err
+		}
+		accepted = true
+		return nil
+	})
+	return accepted, err
 }
 
 func (s *Store) ListNonterminal(_ context.Context) ([]*durable.RunRecord, error) {

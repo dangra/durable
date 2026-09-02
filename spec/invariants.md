@@ -155,3 +155,17 @@ Part of the [`durable` specification](README.md). This list is append-only; inva
 76. A delayed start survives restart.
 
 77. Start options are not part of duplicate-scheduling input identity.
+
+78. Cancellation terminates a Run through normal unwind, never by abandoning work.
+
+79. Cancellation never abandons a started operation; it resolves first.
+
+80. The first cancellation request wins and survives restart.
+
+81. A Run remains cancelable until terminal success is durably committed.
+
+82. A canceled Run is a failed Run whose RootFailure carries FailureKindCanceled.
+
+83. An organic permanent failure under a pending cancellation becomes the RootFailure.
+
+84. Cancellation does not bypass Run invalidity.

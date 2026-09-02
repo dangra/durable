@@ -58,6 +58,33 @@ func (r Run) Wait(ctx context.Context) (Result, error) {
 	}
 }
 
+// Cancel durably requests cancellation of the Run. The first request wins;
+// canceling an already-canceling Run is a no-op returning nil.
+//
+// Cancellation reuses unwind: the Run stops selecting new forward work, a
+// RootFailure with FailureKindCanceled is established, successfully
+// executed Steps unwind normally, and the Run terminates with
+// OutcomeFailure. A started operation is never abandoned: its in-flight
+// attempt context is preempted once, and it continues (observing
+// Invocation.CancelRequested) until it resolves.
+//
+// A terminal Run returns ErrRunTerminal; a missing Run ErrRunNotFound. The
+// request survives restart, and on an invalid Run it takes effect when a
+// corrected deployment makes the Run reconcilable again.
+func (r Run) Cancel(ctx context.Context, cause string) error {
+	e := r.engine
+	if !e.isStarted() {
+		return ErrEngineNotStarted
+	}
+	if _, err := e.store.RequestCancel(ctx, r.id, CancelRequest{Cause: cause, At: e.clock.Now()}); err != nil {
+		return err
+	}
+	e.preemptAttempt(r.id)
+	e.wakeRun(r.id)
+	e.dispatch(r.id, 0)
+	return nil
+}
+
 // Status returns a point-in-time observation of the Run.
 func (r Run) Status(ctx context.Context) (Status, error) {
 	e := r.engine
@@ -73,6 +100,10 @@ func (r Run) Status(ctx context.Context) (Status, error) {
 		LastError:   rec.LastError,
 		LastReason:  rec.LastReason,
 		LastErrorAt: rec.LastErrorAt,
+	}
+	if rec.Cancel != nil {
+		st.CancelRequested = true
+		st.CancelCause = rec.Cancel.Cause
 	}
 	for id, sr := range rec.Steps {
 		if sr.ForwardStatus == OpUnresolved {

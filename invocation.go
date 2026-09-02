@@ -21,9 +21,17 @@ type Invocation struct {
 	newInput func() proto.Message
 	states   map[StepID][]byte
 
+	cancelRequested bool
+
 	mu        sync.Mutex
 	violation error
 }
+
+// CancelRequested reports whether a cancellation request was pending when
+// this attempt was reserved. A handler retrying a doomed operation can
+// reconcile its partial effects and return Fail to resolve quickly instead
+// of retrying toward a success nobody wants.
+func (inv *Invocation) CancelRequested() bool { return inv.cancelRequested }
 
 func (inv *Invocation) PipelineID() PipelineID { return inv.pipelineID }
 func (inv *Invocation) ResourceID() ResourceID { return inv.resourceID }

@@ -292,6 +292,9 @@ type Status struct {
     LastErrorAt time.Time
 
     Outcome *Outcome
+
+    CancelRequested bool
+    CancelCause     string
 }
 ```
 
@@ -438,6 +441,9 @@ Shutdown:
 - does not create RootFailure.
 
 A future Engine resumes them.
+
+Shutdown is operational; Run cancellation (see 01-model) is semantic and
+terminal. They are unrelated mechanisms.
 
 ---
 

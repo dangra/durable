@@ -93,6 +93,14 @@ func (r Result) Succeeded() bool { return r.Outcome == OutcomeSuccess }
 
 func (r Result) Failed() bool { return r.Outcome == OutcomeFailure }
 
+// Canceled reports whether the Run terminated because of a cancellation
+// request. A canceled Run is a failed Run whose RootFailure carries
+// FailureKindCanceled; a Run whose operation permanently failed on its own
+// while a cancellation was pending reports Failed but not Canceled.
+func (r Result) Canceled() bool {
+	return r.RootFailure != nil && r.RootFailure.Kind == FailureKindCanceled
+}
+
 // Status is a point-in-time observation of a Run.
 type Status struct {
 	PipelineID PipelineID
@@ -120,4 +128,9 @@ type Status struct {
 
 	// InvalidReason is set when State is RunStateInvalid.
 	InvalidReason string
+
+	// CancelRequested and CancelCause reflect a pending cancellation
+	// request on a nonterminal Run.
+	CancelRequested bool
+	CancelCause     string
 }

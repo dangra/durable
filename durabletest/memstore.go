@@ -46,11 +46,33 @@ func (s *MemStore) GetRun(_ context.Context, id durable.RunID) (*durable.RunReco
 func (s *MemStore) UpdateRun(_ context.Context, rec *durable.RunRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.runs[rec.RunID]; !ok {
+	existing, ok := s.runs[rec.RunID]
+	if !ok {
 		return durable.ErrRunNotFound
 	}
-	s.runs[rec.RunID] = rec.Clone()
+	stored := rec.Clone()
+	if stored.Cancel == nil && existing.Cancel != nil {
+		cr := *existing.Cancel
+		stored.Cancel = &cr
+	}
+	s.runs[rec.RunID] = stored
 	return nil
+}
+
+func (s *MemStore) RequestCancel(_ context.Context, id durable.RunID, req durable.CancelRequest) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, ok := s.runs[id]
+	switch {
+	case !ok:
+		return false, durable.ErrRunNotFound
+	case rec.Terminal():
+		return false, durable.ErrRunTerminal
+	case rec.Cancel != nil:
+		return false, nil
+	}
+	rec.Cancel = &req
+	return true, nil
 }
 
 func (s *MemStore) ListNonterminal(_ context.Context) ([]*durable.RunRecord, error) {

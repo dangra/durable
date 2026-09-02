@@ -34,17 +34,13 @@ run.Attempts(ctx)
 
 Because v1 does not persist synthetic skip events, richer traversal observability may require additional event data.
 
-## Administrative cancellation or abandonment
+## Run abandonment
 
-Explicit operator-controlled Run termination remains outside v1.
-
-Its relationship with:
-
-- unwind,
-- RootFailure,
-- Outcome
-
-must be designed independently.
+Cancellation (terminate through unwind) is specified in 01-model. A
+separate, more drastic operation — abandoning a Run terminally *without*
+unwind, e.g. to force-release the slot of an unreconcilable invalid Run —
+remains outside v1. It is deliberately dangerous (partial effects are left
+unresolved) and would need its own confirmation semantics.
 
 ## Evolution validation tooling
 

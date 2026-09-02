@@ -194,8 +194,69 @@ duplicate-scheduling identity. An equivalent Input against an occupied
 slot returns the active Run unchanged regardless of start options — the
 original start time stands, and there is no expedite mechanism in v1.
 
-Because v1 has no cancellation, a far-future delayed Run occupies its slot
-until it executes; schedule distant starts only when that is acceptable.
+A delayed Run occupies its slot until it executes or is canceled; see
+Cancellation for retracting one.
+
+---
+
+## Cancellation
+
+A Run may be durably canceled:
+
+```go
+err := run.Cancel(ctx, "operator retracted")
+```
+
+Cancellation reuses unwind rather than abandoning work:
+
+```text
+Cancel(runID, cause)
+    -> durably record the request (first cancel wins)
+    -> stop selecting new forward work
+    -> RootFailure{Kind: FailureKindCanceled, Message: cause}
+    -> normal unwind of successfully executed Steps
+    -> OutcomeFailure, terminal
+```
+
+The cancellation RootFailure has no StepID: it is not a Step failure. The
+Outcome model stays binary; `Result.Canceled()` reports a failure whose
+root carries `FailureKindCanceled`.
+
+**Started operations are never abandoned.** An unresolved operation pins
+the Run as usual and continues retrying until it succeeds or returns
+`Fail` — its partial effects demand resolution before unwind can be
+computed correctly. Two accelerants bound the wait:
+
+1. The in-flight attempt's context is preempted once when the request
+   arrives; the interrupted attempt resolves through normal handler result
+   semantics.
+2. Subsequent attempts observe `Invocation.CancelRequested()` and may
+   reconcile partial effects and return `Fail` fast instead of retrying
+   toward an unwanted success.
+
+If the pinned operation succeeds, the Step is recorded and participates in
+unwind like any other. If it permanently fails on its own, that organic
+failure becomes the RootFailure — the Run terminates with unwind either
+way, but `Canceled()` is false.
+
+A never-started Run (including a delayed one) has no eligible unwind work
+and terminates immediately, freeing its slot.
+
+Additional semantics:
+
+- The request survives restart.
+- A Run remains cancelable until terminal success commits; cancellation
+  arriving after forward completion but before Output commit still unwinds.
+- Canceling a Run already in unwind is recorded but changes nothing:
+  unwind always runs to completion.
+- Canceling a terminal Run returns `ErrRunTerminal`; an unknown RunID
+  returns `ErrRunNotFound`.
+- Canceling an invalid Run records the request; it takes effect when a
+  corrected deployment makes the Run reconcilable again. Cancellation does
+  not bypass invalidity, because unwind itself requires a reconcilable
+  topology.
+- Cancellation is semantic and terminal; Engine shutdown remains
+  operational and non-semantic — stopped Runs resume under a later Engine.
 
 ---
 
@@ -345,12 +406,15 @@ type FailureKind uint8
 const (
     FailureKindSystem FailureKind = iota // zero value, the default
     FailureKindUser
+    FailureKindCanceled
 )
 ```
 
 `system` means infrastructure or environment is at fault; `user` means the
 request or intent itself is. System is the default because it is the
-overwhelmingly common case and the safe alerting posture.
+overwhelmingly common case and the safe alerting posture. `canceled` marks
+RootFailures established by Run cancellation; it is created by the engine
+and reserved — handlers do not attribute their own failures with it.
 
 **Reason** is a machine-readable slug ("invalid-image",
 "insufficient-capacity") whose destiny is metrics labels and alert

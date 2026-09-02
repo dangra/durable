@@ -15,13 +15,21 @@ const (
 	// itself: no amount of infrastructure health would have made it
 	// succeed.
 	FailureKindUser
+	// FailureKindCanceled marks a RootFailure established by Run
+	// cancellation. It is created by the engine; handlers should not
+	// attribute their own failures with it.
+	FailureKindCanceled
 )
 
 func (k FailureKind) String() string {
-	if k == FailureKindUser {
+	switch k {
+	case FailureKindUser:
 		return "user"
+	case FailureKindCanceled:
+		return "canceled"
+	default:
+		return "system"
 	}
-	return "system"
 }
 
 // FailureReasoner may be implemented by any error in a handler's error

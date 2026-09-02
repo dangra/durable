@@ -16,6 +16,10 @@ var ErrEngineStarted = errors.New("durable: engine already started")
 // ErrRunNotFound is returned when no Run exists for a RunID.
 var ErrRunNotFound = errors.New("durable: run not found")
 
+// ErrRunTerminal is returned by Cancel when the Run already has a committed
+// terminal outcome.
+var ErrRunTerminal = errors.New("durable: run already terminal")
+
 // ScheduleConflictError is returned by Schedule when a nonterminal Run
 // already occupies the (PipelineID, ResourceID) slot with different Input.
 type ScheduleConflictError struct {

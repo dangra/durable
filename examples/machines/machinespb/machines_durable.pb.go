@@ -348,6 +348,12 @@ func (r ProvisionMachineRun) Status(ctx context.Context) (durable.Status, error)
 	return r.run.Status(ctx)
 }
 
+// Cancel durably requests cancellation: the run stops selecting new
+// forward work and unwinds successfully executed steps.
+func (r ProvisionMachineRun) Cancel(ctx context.Context, cause string) error {
+	return r.run.Cancel(ctx, cause)
+}
+
 // Wait blocks until the run is terminal. A successful result carries the
 // pipeline output; a failed run has none.
 func (r ProvisionMachineRun) Wait(ctx context.Context) (ProvisionMachineResult, error) {

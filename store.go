@@ -31,6 +31,13 @@ type StepRecord struct {
 	UnwindAttempts uint64
 }
 
+// CancelRequest is a durable request to cancel a Run. The first request
+// wins; later requests are ignored.
+type CancelRequest struct {
+	Cause string
+	At    time.Time
+}
+
 // RunRecord is the durable representation of a Run: execution facts, not a
 // materialized topology. Stores persist it opaquely.
 type RunRecord struct {
@@ -62,6 +69,12 @@ type RunRecord struct {
 	LastError   string
 	LastReason  string
 	LastErrorAt time.Time
+
+	// Cancel is the pending cancellation request, if any. It is written
+	// only through Store.RequestCancel; once set it is never cleared, and
+	// UpdateRun preserves a stored request even when the incoming record
+	// lacks one.
+	Cancel *CancelRequest
 
 	CreatedAt time.Time
 	UpdatedAt time.Time
@@ -103,6 +116,10 @@ func (r *RunRecord) Clone() *RunRecord {
 		o := *r.Outcome
 		c.Outcome = &o
 	}
+	if r.Cancel != nil {
+		cr := *r.Cancel
+		c.Cancel = &cr
+	}
 	return &c
 }
 
@@ -123,8 +140,18 @@ type Store interface {
 	// GetRun returns the record for id, or ErrRunNotFound.
 	GetRun(ctx context.Context, id RunID) (*RunRecord, error)
 
-	// UpdateRun atomically replaces the record for rec.RunID.
+	// UpdateRun atomically replaces the record for rec.RunID. A stored
+	// cancellation request is monotonic: if the stored record carries one
+	// and rec does not, the stored request is preserved (the engine worker
+	// is the sole record writer, and a concurrent RequestCancel must not
+	// be clobbered by its read-modify-write).
 	UpdateRun(ctx context.Context, rec *RunRecord) error
+
+	// RequestCancel durably records a cancellation request for the Run.
+	// The first request wins: a later request returns accepted=false with
+	// the stored request unchanged. A missing Run returns ErrRunNotFound;
+	// a terminal Run returns ErrRunTerminal.
+	RequestCancel(ctx context.Context, id RunID, req CancelRequest) (accepted bool, err error)
 
 	// ListNonterminal returns all Runs without a terminal outcome.
 	ListNonterminal(ctx context.Context) ([]*RunRecord, error)

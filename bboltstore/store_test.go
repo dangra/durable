@@ -165,3 +165,50 @@ func TestEngineSurvivesRestart(t *testing.T) {
 		t.Fatalf("Wait after restart = %+v, %v; want success", res, err)
 	}
 }
+
+func TestRequestCancel(t *testing.T) {
+	s := open(t, filepath.Join(t.TempDir(), "durable.db"))
+	ctx := context.Background()
+
+	rec := &durable.RunRecord{RunID: "run-c", PipelineID: "p", ResourceID: "r", Phase: durable.PhaseForward}
+	if _, created, err := s.CreateRun(ctx, rec); err != nil || !created {
+		t.Fatalf("CreateRun = created=%v err=%v", created, err)
+	}
+
+	if _, err := s.RequestCancel(ctx, "missing", durable.CancelRequest{}); !errors.Is(err, durable.ErrRunNotFound) {
+		t.Fatalf("RequestCancel(missing) = %v, want ErrRunNotFound", err)
+	}
+
+	accepted, err := s.RequestCancel(ctx, "run-c", durable.CancelRequest{Cause: "first", At: time.Now()})
+	if err != nil || !accepted {
+		t.Fatalf("RequestCancel = accepted=%v err=%v", accepted, err)
+	}
+	// First cancel wins.
+	accepted, err = s.RequestCancel(ctx, "run-c", durable.CancelRequest{Cause: "second"})
+	if err != nil || accepted {
+		t.Fatalf("second RequestCancel = accepted=%v err=%v", accepted, err)
+	}
+
+	// UpdateRun without the request preserves the stored one.
+	if err := s.UpdateRun(ctx, rec.Clone()); err != nil {
+		t.Fatalf("UpdateRun: %v", err)
+	}
+	got, err := s.GetRun(ctx, "run-c")
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	if got.Cancel == nil || got.Cancel.Cause != "first" {
+		t.Fatalf("Cancel = %+v, want preserved first request", got.Cancel)
+	}
+
+	// Terminal runs reject cancellation.
+	oc := durable.OutcomeFailure
+	got.Outcome = &oc
+	got.Phase = durable.PhaseDone
+	if err := s.UpdateRun(ctx, got); err != nil {
+		t.Fatalf("UpdateRun terminal: %v", err)
+	}
+	if _, err := s.RequestCancel(ctx, "run-c", durable.CancelRequest{}); !errors.Is(err, durable.ErrRunTerminal) {
+		t.Fatalf("RequestCancel(terminal) = %v, want ErrRunTerminal", err)
+	}
+}

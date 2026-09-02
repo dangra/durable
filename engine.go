@@ -95,13 +95,15 @@ type Engine struct {
 	recoveryBackoff time.Duration
 	middleware      []Middleware
 
-	mu        sync.Mutex
-	pipelines map[PipelineID]*Definition
-	stepOwner map[StepID]PipelineID
-	started   bool
-	active    map[RunID]struct{}
-	invalid   map[RunID]*InvalidRunError
-	waiters   map[RunID][]chan struct{}
+	mu            sync.Mutex
+	pipelines     map[PipelineID]*Definition
+	stepOwner     map[StepID]PipelineID
+	started       bool
+	active        map[RunID]struct{}
+	invalid       map[RunID]*InvalidRunError
+	waiters       map[RunID][]chan struct{}
+	attemptCancel map[RunID]context.CancelFunc
+	wakes         map[RunID]chan struct{}
 
 	baseCtx context.Context
 	cancel  context.CancelFunc
@@ -121,9 +123,11 @@ func NewEngine(store Store, opts ...Option) *Engine {
 		concurrency: 16,
 		pipelines:   make(map[PipelineID]*Definition),
 		stepOwner:   make(map[StepID]PipelineID),
-		active:      make(map[RunID]struct{}),
-		invalid:     make(map[RunID]*InvalidRunError),
-		waiters:     make(map[RunID][]chan struct{}),
+		active:        make(map[RunID]struct{}),
+		invalid:       make(map[RunID]*InvalidRunError),
+		waiters:       make(map[RunID][]chan struct{}),
+		attemptCancel: make(map[RunID]context.CancelFunc),
+		wakes:         make(map[RunID]chan struct{}),
 	}
 	for _, o := range opts {
 		o(e)
@@ -248,12 +252,16 @@ func (e *Engine) dispatch(id RunID, delay time.Duration) {
 	go func() {
 		defer e.wg.Done()
 		if delay > 0 {
+			wake := e.armWake(id)
 			select {
 			case <-e.clock.After(delay):
+			case <-wake:
 			case <-e.baseCtx.Done():
+				e.disarmWake(id)
 				e.clearActive(id)
 				return
 			}
+			e.disarmWake(id)
 		}
 		select {
 		case e.sem <- struct{}{}:
@@ -268,6 +276,62 @@ func (e *Engine) dispatch(id RunID, delay time.Duration) {
 			e.dispatch(id, redispatchIn)
 		}
 	}()
+}
+
+// armWake registers a wake channel a delayed dispatch waits on, so a
+// cancellation (or other urgent signal) can cut a retry or start delay
+// short. At most one dispatch waits per Run.
+func (e *Engine) armWake(id RunID) chan struct{} {
+	ch := make(chan struct{}, 1)
+	e.mu.Lock()
+	e.wakes[id] = ch
+	e.mu.Unlock()
+	return ch
+}
+
+func (e *Engine) disarmWake(id RunID) {
+	e.mu.Lock()
+	delete(e.wakes, id)
+	e.mu.Unlock()
+}
+
+// wakeRun cuts short a delayed dispatch wait for the Run, if any.
+func (e *Engine) wakeRun(id RunID) {
+	e.mu.Lock()
+	ch := e.wakes[id]
+	e.mu.Unlock()
+	if ch != nil {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
+}
+
+// attemptContext derives the per-attempt handler context and registers its
+// cancel so a cancellation request can preempt the in-flight attempt.
+func (e *Engine) attemptContext(id RunID) (context.Context, func()) {
+	ctx, cancel := context.WithCancel(e.baseCtx)
+	e.mu.Lock()
+	e.attemptCancel[id] = cancel
+	e.mu.Unlock()
+	return ctx, func() {
+		e.mu.Lock()
+		delete(e.attemptCancel, id)
+		e.mu.Unlock()
+		cancel()
+	}
+}
+
+// preemptAttempt cancels the Run's in-flight attempt context, if any. The
+// interrupted attempt resolves through normal handler result semantics.
+func (e *Engine) preemptAttempt(id RunID) {
+	e.mu.Lock()
+	cancel := e.attemptCancel[id]
+	e.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 }
 
 func (e *Engine) clearActive(id RunID) {
@@ -331,6 +395,15 @@ func (e *Engine) processRun(id RunID) (time.Duration, bool) {
 			return 0, false
 
 		case ledger.KindRunForward:
+			// A pending cancellation stops new forward work; a started
+			// operation is never abandoned and continues until it
+			// resolves.
+			if rec.Cancel != nil && !forwardStarted(rec, StepID(dec.Step)) {
+				if !e.applyCancel(rec) {
+					return time.Second, true
+				}
+				continue
+			}
 			if delay, wait := e.retryGate(rec); wait {
 				return delay, true
 			}
@@ -340,6 +413,13 @@ func (e *Engine) processRun(id RunID) (time.Duration, bool) {
 			}
 
 		case ledger.KindForwardComplete:
+			// A Run remains cancelable until terminal success commits.
+			if rec.Cancel != nil {
+				if !e.applyCancel(rec) {
+					return time.Second, true
+				}
+				continue
+			}
 			if !e.reduceAndComplete(rec, def) {
 				return 0, false
 			}
@@ -364,6 +444,31 @@ func (e *Engine) processRun(id RunID) (time.Duration, bool) {
 			return 0, false
 		}
 	}
+}
+
+// forwardStarted reports whether the Step's forward operation has ever
+// reserved an attempt for this Run.
+func forwardStarted(rec *RunRecord, stepID StepID) bool {
+	sr, ok := rec.Steps[stepID]
+	return ok && sr.ForwardAttempts > 0
+}
+
+// applyCancel establishes the cancellation RootFailure and transitions the
+// Run to unwind.
+func (e *Engine) applyCancel(rec *RunRecord) bool {
+	cause := rec.Cancel.Cause
+	if cause == "" {
+		cause = "canceled"
+	}
+	rec.RootFailure = &RootFailure{FailureRecord: FailureRecord{
+		Phase:   PhaseForward,
+		Message: cause,
+		At:      e.clock.Now(),
+		Kind:    FailureKindCanceled,
+	}}
+	rec.Phase = PhaseUnwind
+	rec.NextAttemptAt = time.Time{}
+	return e.update(rec)
 }
 
 // recordLastError captures an ordinary-error attempt on the record; it
@@ -574,15 +679,16 @@ func (e *Engine) reduceAndComplete(rec *RunRecord, def *Definition) bool {
 
 func (e *Engine) invocation(rec *RunRecord, def *Definition, stepID StepID, attempt uint64, phase Phase) *Invocation {
 	return &Invocation{
-		pipelineID: rec.PipelineID,
-		resourceID: rec.ResourceID,
-		runID:      rec.RunID,
-		stepID:     stepID,
-		attempt:    attempt,
-		phase:      phase,
-		input:      rec.Input,
-		newInput:   def.cfg.NewInput,
-		states:     committedStates(rec),
+		pipelineID:      rec.PipelineID,
+		resourceID:      rec.ResourceID,
+		runID:           rec.RunID,
+		stepID:          stepID,
+		attempt:         attempt,
+		phase:           phase,
+		input:           rec.Input,
+		newInput:        def.cfg.NewInput,
+		states:          committedStates(rec),
+		cancelRequested: rec.Cancel != nil,
 	}
 }
 
@@ -605,7 +711,9 @@ func (e *Engine) invokeForward(sc *StepConfig, inv *Invocation) (state proto.Mes
 				"panic", p, "stack", string(debug.Stack()))
 		}
 	}()
-	return e.wrap(Handler(sc.Run))(e.baseCtx, inv)
+	ctx, done := e.attemptContext(inv.runID)
+	defer done()
+	return e.wrap(Handler(sc.Run))(ctx, inv)
 }
 
 func (e *Engine) invokeUnwind(sc *StepConfig, inv *Invocation, failure Failure) (err error) {
@@ -620,7 +728,9 @@ func (e *Engine) invokeUnwind(sc *StepConfig, inv *Invocation, failure Failure) 
 	h := e.wrap(func(ctx context.Context, in *Invocation) (proto.Message, error) {
 		return nil, sc.UnwindFunc(ctx, in, failure)
 	})
-	_, err = h(e.baseCtx, inv)
+	ctx, done := e.attemptContext(inv.runID)
+	defer done()
+	_, err = h(ctx, inv)
 	return err
 }
 

@@ -401,7 +401,7 @@ func (e *Engine) runForward(rec *RunRecord, def *Definition, stepID StepID) (don
 	}
 
 	now := e.clock.Now()
-	switch cause, permanent := asPermanent(err); {
+	switch pe, permanent := asPermanent(err); {
 	case err == nil:
 		var stateBytes []byte
 		if sc.HasState {
@@ -430,8 +430,10 @@ func (e *Engine) runForward(rec *RunRecord, def *Definition, stepID StepID) (don
 			StepID:  stepID,
 			Phase:   PhaseForward,
 			Attempt: sr.ForwardAttempts,
-			Message: cause.Error(),
+			Message: pe.err.Error(),
 			At:      now,
+			Kind:    pe.failureKind(),
+			Reason:  pe.failureReason(),
 		}}
 		rec.Phase = PhaseUnwind
 		if !e.update(rec) {
@@ -476,7 +478,7 @@ func (e *Engine) runUnwind(rec *RunRecord, def *Definition, stepID StepID) (done
 	}
 
 	now := e.clock.Now()
-	switch cause, permanent := asPermanent(err); {
+	switch pe, permanent := asPermanent(err); {
 	case err == nil:
 		sr.UnwindStatus = OpSucceeded
 		if !e.update(rec) {
@@ -490,8 +492,10 @@ func (e *Engine) runUnwind(rec *RunRecord, def *Definition, stepID StepID) (done
 			StepID:  stepID,
 			Phase:   PhaseUnwind,
 			Attempt: sr.UnwindAttempts,
-			Message: cause.Error(),
+			Message: pe.err.Error(),
 			At:      now,
+			Kind:    pe.failureKind(),
+			Reason:  pe.failureReason(),
 		}})
 		if !e.update(rec) {
 			return false, time.Second, true

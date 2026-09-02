@@ -143,3 +143,9 @@ Part of the [`durable` specification](README.md). This list is append-only; inva
 70. Positional generated constructors remain compile-time type-safe because every Step position has a distinct generated interface.
 
 71. Middleware wraps operations per attempt and preserves at-least-once semantics.
+
+72. Failure Kind and Reason are informational and never affect engine scheduling, retry, or unwind behavior.
+
+73. Failure Kind defaults to system; user attribution is explicit.
+
+74. Attribution carried by the error chain is overridden by explicit `Fail` options.

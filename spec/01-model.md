@@ -269,6 +269,9 @@ type FailureRecord struct {
     Attempt uint64
     Message string
     At      time.Time
+
+    Kind   FailureKind
+    Reason string
 }
 
 type RootFailure struct {
@@ -298,6 +301,58 @@ The durable representation preserves:
 Wrapped error identity, Go error types, and arbitrary structured chains are not preserved in v1.
 
 Structured durable failure details MAY be added later.
+
+---
+
+## Failure attribution
+
+Permanent failures carry two informational attribution fields. They MUST
+NOT affect engine scheduling, retry, or unwind behavior.
+
+**Kind** classifies fault:
+
+```go
+type FailureKind uint8
+
+const (
+    FailureKindSystem FailureKind = iota // zero value, the default
+    FailureKindUser
+)
+```
+
+`system` means infrastructure or environment is at fault; `user` means the
+request or intent itself is. System is the default because it is the
+overwhelmingly common case and the safe alerting posture.
+
+**Reason** is a machine-readable slug ("invalid-image",
+"insufficient-capacity") whose destiny is metrics labels and alert
+routing. Reasons SHOULD be short, lowercase, and low-cardinality;
+human-readable detail belongs in Message.
+
+`Fail` is the only permanent-failure constructor; attribution attaches via
+options:
+
+```go
+durable.Fail(err)                                    // kind=system
+durable.Fail(err, durable.WithUserKind())            // kind=user
+durable.Fail(err, durable.WithReason("invalid-image"))
+```
+
+Attribution may also be carried by any error in the handler's chain, so
+domain error types classify themselves once and resolution sites stay
+plain `Fail(err)`:
+
+```go
+type FailureReasoner interface { FailureReason() string }
+type FailureKinder   interface { FailureKind() FailureKind }
+```
+
+Precedence, per axis: explicit `Fail` option, then the first match in the
+error chain (via `errors.As`), then the default (`system` / empty reason).
+
+Reasons are also extracted from ordinary retryable errors to populate the
+Run's last-error observability fields; kind is extracted only at permanent
+resolution.
 
 ---
 

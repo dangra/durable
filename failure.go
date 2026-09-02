@@ -12,6 +12,12 @@ type FailureRecord struct {
 	Attempt uint64
 	Message string
 	At      time.Time
+
+	// Kind and Reason are informational attribution; they never affect
+	// engine behavior. Kind defaults to FailureKindSystem; Reason is a
+	// low-cardinality slug, empty when none was provided.
+	Kind   FailureKind
+	Reason string
 }
 
 // RootFailure is the permanent forward failure that established the Run's

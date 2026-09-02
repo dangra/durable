@@ -772,3 +772,95 @@ func TestMiddlewareContextReachesHandlers(t *testing.T) {
 		t.Fatalf("Wait = %+v, %v; want success", res, err)
 	}
 }
+
+// classifiedError carries its own attribution, the way domain error types
+// implement FailureKinder/FailureReasoner once so resolution sites stay
+// plain Fail(err).
+type classifiedError struct{ msg string }
+
+func (e *classifiedError) Error() string                    { return e.msg }
+func (e *classifiedError) FailureKind() durable.FailureKind { return durable.FailureKindUser }
+func (e *classifiedError) FailureReason() string            { return "invalid-image" }
+
+func failingRun(t *testing.T, id durable.PipelineID, fail error) durable.Result {
+	t.Helper()
+	def := durable.NewDefinition(durable.DefinitionConfig{
+		ID: id,
+		Steps: []durable.StepConfig{
+			stateless("s/v1", func(ctx context.Context, inv *durable.Invocation) error {
+				return fail
+			}),
+		},
+	})
+	_, pipes := startEngine(t, durabletest.NewMemStore(), def)
+	run, _, err := pipes[0].Schedule(context.Background(), "r", nil)
+	if err != nil {
+		t.Fatalf("Schedule: %v", err)
+	}
+	res, err := run.Wait(context.Background())
+	if err != nil || !res.Failed() {
+		t.Fatalf("Wait = %+v, %v; want failure", res, err)
+	}
+	return res
+}
+
+func TestFailureAttribution(t *testing.T) {
+	t.Run("defaults to system with no reason", func(t *testing.T) {
+		res := failingRun(t, "attr-default", durable.Fail(errors.New("boom")))
+		if res.RootFailure.Kind != durable.FailureKindSystem || res.RootFailure.Reason != "" {
+			t.Fatalf("RootFailure = %+v, want system kind, empty reason", res.RootFailure)
+		}
+	})
+	t.Run("explicit options", func(t *testing.T) {
+		res := failingRun(t, "attr-opts", durable.Fail(errors.New("bad region"),
+			durable.WithUserKind(), durable.WithReason("invalid-input")))
+		if res.RootFailure.Kind != durable.FailureKindUser || res.RootFailure.Reason != "invalid-input" {
+			t.Fatalf("RootFailure = %+v, want user/invalid-input", res.RootFailure)
+		}
+	})
+	t.Run("extracted from error chain", func(t *testing.T) {
+		wrapped := fmt.Errorf("preparing image: %w", &classifiedError{msg: "no manifest"})
+		res := failingRun(t, "attr-chain", durable.Fail(wrapped))
+		if res.RootFailure.Kind != durable.FailureKindUser || res.RootFailure.Reason != "invalid-image" {
+			t.Fatalf("RootFailure = %+v, want user/invalid-image from chain", res.RootFailure)
+		}
+	})
+	t.Run("options override the chain", func(t *testing.T) {
+		res := failingRun(t, "attr-precedence", durable.Fail(&classifiedError{msg: "x"},
+			durable.WithReason("overridden")))
+		if res.RootFailure.Reason != "overridden" || res.RootFailure.Kind != durable.FailureKindUser {
+			t.Fatalf("RootFailure = %+v, want reason overridden, kind still from chain", res.RootFailure)
+		}
+	})
+}
+
+func TestUnwindFailureAttribution(t *testing.T) {
+	def := durable.NewDefinition(durable.DefinitionConfig{
+		ID: "attr-unwind",
+		Steps: []durable.StepConfig{
+			{
+				ID:     "a/v1",
+				Unwind: true,
+				Run: func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+					return nil, nil
+				},
+				UnwindFunc: func(ctx context.Context, inv *durable.Invocation, f durable.Failure) error {
+					return durable.Fail(errors.New("release rejected"), durable.WithReason("release-rejected"))
+				},
+			},
+			stateless("b/v1", func(ctx context.Context, inv *durable.Invocation) error {
+				return durable.Fail(errors.New("nope"))
+			}),
+		},
+	})
+	_, pipes := startEngine(t, durabletest.NewMemStore(), def)
+	run, _, _ := pipes[0].Schedule(context.Background(), "r", nil)
+	res, err := run.Wait(context.Background())
+	if err != nil || !res.Failed() {
+		t.Fatalf("Wait = %+v, %v", res, err)
+	}
+	if len(res.UnwindFailures) != 1 || res.UnwindFailures[0].Reason != "release-rejected" ||
+		res.UnwindFailures[0].Kind != durable.FailureKindSystem {
+		t.Fatalf("UnwindFailures = %+v, want system/release-rejected", res.UnwindFailures)
+	}
+}

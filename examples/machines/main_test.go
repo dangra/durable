@@ -119,6 +119,9 @@ func TestProvisionMachineInputValidationFailsFast(t *testing.T) {
 	if !result.Failed() || result.RootFailure.StepID != "validate/v1" {
 		t.Fatalf("result = %+v, want validate/v1 root failure", result)
 	}
+	if result.RootFailure.Kind != durable.FailureKindUser || result.RootFailure.Reason != "invalid-input" {
+		t.Fatalf("RootFailure = %+v, want user/invalid-input attribution", result.RootFailure)
+	}
 }
 
 // TestFuncAdapters builds the same pipeline using the generated

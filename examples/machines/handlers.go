@@ -35,10 +35,12 @@ type validate struct{}
 func (validate) Run(ctx context.Context, inv machinespb.ValidateInvocation) error {
 	in := inv.Input()
 	if in.GetRegion() == "" {
-		return durable.Fail(errors.New("region is required"))
+		return durable.Fail(errors.New("region is required"),
+			durable.WithUserKind(), durable.WithReason("invalid-input"))
 	}
 	if in.GetMemoryMb() == 0 {
-		return durable.Fail(errors.New("memory_mb is required"))
+		return durable.Fail(errors.New("memory_mb is required"),
+			durable.WithUserKind(), durable.WithReason("invalid-input"))
 	}
 	return nil
 }
@@ -87,7 +89,8 @@ func (h *createMachine) Run(ctx context.Context, inv machinespb.CreateMachineInv
 	h.cloud.mu.Lock()
 	defer h.cloud.mu.Unlock()
 	if h.cloud.saturated[inv.Input().GetRegion()] {
-		return nil, durable.Fail(fmt.Errorf("region %s has no capacity", inv.Input().GetRegion()))
+		return nil, durable.Fail(fmt.Errorf("region %s has no capacity", inv.Input().GetRegion()),
+			durable.WithReason("insufficient-capacity"))
 	}
 	if !h.cloud.reservations[reservation.GetReservationId()] {
 		return nil, errors.New("reservation not yet visible") // transient, retried

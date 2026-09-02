@@ -2,7 +2,74 @@ package durable
 
 import "errors"
 
-// Fail marks err as a permanent operation failure.
+// FailureKind attributes a permanent failure. It is purely informational:
+// the engine's scheduling, retry, and unwind behavior never depend on it.
+type FailureKind uint8
+
+const (
+	// FailureKindSystem attributes the failure to infrastructure or
+	// environment: retrying elsewhere or later might have helped, paging
+	// someone is appropriate. It is the zero value and the default.
+	FailureKindSystem FailureKind = iota
+	// FailureKindUser attributes the failure to the request or intent
+	// itself: no amount of infrastructure health would have made it
+	// succeed.
+	FailureKindUser
+)
+
+func (k FailureKind) String() string {
+	if k == FailureKindUser {
+		return "user"
+	}
+	return "system"
+}
+
+// FailureReasoner may be implemented by any error in a handler's error
+// chain to carry a machine-readable failure reason. Reasons should be
+// short, low-cardinality slugs ("invalid-image", "insufficient-capacity"):
+// their destiny is metrics labels and alert routing. Human-readable detail
+// belongs in the error message.
+//
+// The engine extracts the reason with errors.As at resolution time — for
+// permanent failures (recorded on the FailureRecord) and for ordinary
+// retryable errors (recorded as the Run's LastReason). An explicit
+// WithReason on Fail takes precedence over the chain.
+type FailureReasoner interface {
+	FailureReason() string
+}
+
+// FailureKinder may be implemented by any error in a handler's error chain
+// to attribute permanent failures at the point where the error is created,
+// keeping resolution sites down to a plain Fail(err). An explicit
+// WithUserKind on Fail takes precedence over the chain.
+type FailureKinder interface {
+	FailureKind() FailureKind
+}
+
+// FailOption annotates a permanent failure declared with Fail.
+type FailOption func(*permanentError)
+
+// WithUserKind attributes the permanent failure to the request or intent
+// (FailureKindUser). Without it, the kind comes from the first
+// FailureKinder in the error chain, defaulting to FailureKindSystem.
+func WithUserKind() FailOption {
+	return func(e *permanentError) {
+		e.kind = FailureKindUser
+		e.kindSet = true
+	}
+}
+
+// WithReason sets the machine-readable failure reason, overriding any
+// FailureReasoner in the error chain. Keep reasons short, lowercase,
+// low-cardinality slugs.
+func WithReason(reason string) FailOption {
+	return func(e *permanentError) {
+		e.reason = reason
+	}
+}
+
+// Fail marks err as a permanent operation failure. It is the only
+// permanent-failure mechanism; options attach attribution.
 //
 // Returned from a forward handler, it resolves the current operation as
 // permanently failed, establishes the Run's RootFailure, and begins unwind.
@@ -11,15 +78,22 @@ import "errors"
 //
 // Any other non-nil error means the operation remains unresolved and is
 // retried.
-func Fail(err error) error {
+func Fail(err error, opts ...FailOption) error {
 	if err == nil {
 		err = errors.New("unspecified permanent failure")
 	}
-	return &permanentError{err: err}
+	pe := &permanentError{err: err}
+	for _, o := range opts {
+		o(pe)
+	}
+	return pe
 }
 
 type permanentError struct {
-	err error
+	err     error
+	kind    FailureKind
+	kindSet bool
+	reason  string
 }
 
 func (e *permanentError) Error() string {
@@ -28,12 +102,41 @@ func (e *permanentError) Error() string {
 
 func (e *permanentError) Unwrap() error { return e.err }
 
-// asPermanent reports whether err declares permanent failure via Fail and,
-// if so, returns the wrapped cause.
-func asPermanent(err error) (error, bool) {
+// failureKind resolves the attribution: explicit option, then the error
+// chain, then the system default.
+func (e *permanentError) failureKind() FailureKind {
+	if e.kindSet {
+		return e.kind
+	}
+	var fk FailureKinder
+	if errors.As(e.err, &fk) {
+		return fk.FailureKind()
+	}
+	return FailureKindSystem
+}
+
+// failureReason resolves the reason: explicit option, then the error chain.
+func (e *permanentError) failureReason() string {
+	if e.reason != "" {
+		return e.reason
+	}
+	return reasonOf(e.err)
+}
+
+// reasonOf extracts a FailureReasoner reason from an error chain.
+func reasonOf(err error) string {
+	var fr FailureReasoner
+	if err != nil && errors.As(err, &fr) {
+		return fr.FailureReason()
+	}
+	return ""
+}
+
+// asPermanent reports whether err declares permanent failure via Fail.
+func asPermanent(err error) (*permanentError, bool) {
 	var pe *permanentError
 	if errors.As(err, &pe) {
-		return pe.err, true
+		return pe, true
 	}
 	return nil, false
 }

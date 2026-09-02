@@ -554,6 +554,7 @@ A bound Pipeline exposes:
 ```text
 Schedule
 Active
+ActiveRun
 Runs
 Run
 ```
@@ -572,7 +573,9 @@ run, created, err := provision.Schedule(
 
 ## Typed Run
 
-Output-producing Pipelines use generated typed Runs:
+Pipelines declaring an Input or an Output use generated typed Runs — a
+typed `Input(ctx)` accessor comes with Input, a typed `Wait` result with
+Output:
 
 ```go
 type ProvisionMachineRun struct {

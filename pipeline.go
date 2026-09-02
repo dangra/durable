@@ -137,6 +137,23 @@ func (p *Pipeline) Run(ctx context.Context, id RunID) (Run, error) {
 	return Run{id: id, engine: p.engine}, nil
 }
 
+// ActiveRun returns a handle to this pipeline's nonterminal Run for a
+// resource, if one exists. It is a read-only observation for wait/inspect
+// flows (callers that know the resource but cannot reproduce the exact
+// Input); claiming the slot atomically remains Schedule's job.
+func (p *Pipeline) ActiveRun(ctx context.Context, resource ResourceID) (Run, bool, error) {
+	recs, err := p.engine.store.ListRuns(ctx, p.def.ID(), resource)
+	if err != nil {
+		return Run{}, false, err
+	}
+	for _, rec := range recs {
+		if !rec.Terminal() {
+			return Run{id: rec.RunID, engine: p.engine}, true, nil
+		}
+	}
+	return Run{}, false, nil
+}
+
 // Active returns handles for this pipeline's nonterminal Runs.
 func (p *Pipeline) Active(ctx context.Context) ([]Run, error) {
 	recs, err := p.engine.store.ListNonterminal(ctx)

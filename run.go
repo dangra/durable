@@ -137,6 +137,18 @@ func (r Run) Status(ctx context.Context) (Status, error) {
 	return st, nil
 }
 
+// InputBytes returns the Run's immutable serialized Pipeline Input (nil
+// for an Input-less pipeline). It is intended for generated code, which
+// wraps it with a typed Input accessor; the typed accessor returns a
+// defensive caller-owned copy via a fresh unmarshal.
+func (r Run) InputBytes(ctx context.Context) ([]byte, error) {
+	rec, err := r.engine.store.GetRun(ctx, r.id)
+	if err != nil {
+		return nil, err
+	}
+	return rec.Input, nil
+}
+
 // OutputBytes returns the committed Pipeline Output of a terminal
 // successful Run. It is intended for generated code, which wraps it with a
 // typed Output accessor.

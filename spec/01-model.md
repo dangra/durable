@@ -88,6 +88,30 @@ to its handle, inspect Status, or Wait. Conflicts are rejected, never
 queued: reconcile-loop callers retry, which is the proven pattern for
 this model.
 
+A blocking Run's immutable Input is readable through its pipeline's
+handle (typed on generated Runs, as a defensive copy), which is what
+version-driven reconcile loops need to distinguish "my intent is already
+in flight" from "stale work holds the slot":
+
+```go
+blocker, _ := provision.Run(ctx, conflict.RunID)
+in, _ := blocker.Input(ctx)
+if in.GetVersion() < desired {
+    blocker.Cancel(ctx, "superseded")   // unwind cleans up, slot frees
+    // reschedule the newer intent
+}
+```
+
+For wait/inspect flows that know the resource but cannot reproduce the
+exact Input, a pipeline exposes a read-only lookup:
+
+```go
+run, ok, err := provision.ActiveRun(ctx, resourceID)
+```
+
+Observation never claims the slot; Schedule remains the only atomic way
+to do that.
+
 ---
 
 ## Run

@@ -260,9 +260,16 @@ func emitPipeline(g *protogen.GeneratedFile, pl *pipelineDecl) {
 	emitMarkerView(g, pl)
 	emitDefinition(g, pl)
 	emitBoundPipeline(g, pl)
-	if pl.output != nil {
+	if pl.typedRun() {
 		emitTypedRunAndResult(g, pl)
 	}
+}
+
+// typedRun reports whether the pipeline gets a generated typed Run: any
+// pipeline with an Input (typed Input accessor) or an Output (typed Wait
+// result).
+func (pl *pipelineDecl) typedRun() bool {
+	return pl.input != nil || pl.output != nil
 }
 
 func emitStepRef(g *protogen.GeneratedFile, s *stepDecl) {
@@ -517,7 +524,7 @@ func emitBoundPipeline(g *protogen.GeneratedFile, pl *pipelineDecl) {
 
 	runType := plainRun
 	wrap := func(expr string) string { return expr }
-	if pl.output != nil {
+	if pl.typedRun() {
 		runType = name + "Run"
 		wrap = func(expr string) string { return name + "Run{run: " + expr + "}" }
 	}
@@ -537,7 +544,7 @@ func emitBoundPipeline(g *protogen.GeneratedFile, pl *pipelineDecl) {
 		g.P("func (p *", name, "Pipeline) Schedule(ctx ", ctx, ", resource ", resourceID, ", opts ...", scheduleOpt, ") (", runType, ", bool, error) {")
 		g.P("run, created, err := p.pipeline.Schedule(ctx, resource, nil, opts...)")
 	}
-	if pl.output != nil {
+	if pl.typedRun() {
 		g.P("if err != nil {")
 		g.P("return ", runType, "{}, created, err")
 		g.P("}")
@@ -551,13 +558,29 @@ func emitBoundPipeline(g *protogen.GeneratedFile, pl *pipelineDecl) {
 	g.P("// Run returns a handle to an existing run of this pipeline.")
 	g.P("func (p *", name, "Pipeline) Run(ctx ", ctx, ", id ", runID, ") (", runType, ", error) {")
 	g.P("run, err := p.pipeline.Run(ctx, id)")
-	if pl.output != nil {
+	if pl.typedRun() {
 		g.P("if err != nil {")
 		g.P("return ", runType, "{}, err")
 		g.P("}")
 		g.P("return ", wrap("run"), ", nil")
 	} else {
 		g.P("return run, err")
+	}
+	g.P("}")
+	g.P()
+
+	g.P("// ActiveRun returns a handle to this pipeline's nonterminal run for a")
+	g.P("// resource, if one exists — a read-only observation for wait/inspect")
+	g.P("// flows; claiming the slot atomically remains Schedule's job.")
+	g.P("func (p *", name, "Pipeline) ActiveRun(ctx ", ctx, ", resource ", resourceID, ") (", runType, ", bool, error) {")
+	g.P("run, ok, err := p.pipeline.ActiveRun(ctx, resource)")
+	if pl.typedRun() {
+		g.P("if err != nil || !ok {")
+		g.P("return ", runType, "{}, ok, err")
+		g.P("}")
+		g.P("return ", wrap("run"), ", true, nil")
+	} else {
+		g.P("return run, ok, err")
 	}
 	g.P("}")
 	g.P()
@@ -579,7 +602,7 @@ func emitBoundPipeline(g *protogen.GeneratedFile, pl *pipelineDecl) {
 }
 
 func emitRunSliceWrap(g *protogen.GeneratedFile, pl *pipelineDecl, runType string, wrap func(string) string) {
-	if pl.output == nil {
+	if !pl.typedRun() {
 		g.P("return runs, err")
 		return
 	}
@@ -614,6 +637,30 @@ func emitTypedRunAndResult(g *protogen.GeneratedFile, pl *pipelineDecl) {
 	g.P("return r.run.Cancel(ctx, cause)")
 	g.P("}")
 	g.P()
+	if pl.input != nil {
+		g.P("// Input returns a defensive caller-owned copy of the run's immutable")
+		g.P("// pipeline input.")
+		g.P("func (r ", name, "Run) Input(ctx ", ctx, ") (*", g.QualifiedGoIdent(pl.input.GoIdent), ", error) {")
+		g.P("b, err := r.run.InputBytes(ctx)")
+		g.P("if err != nil {")
+		g.P("return nil, err")
+		g.P("}")
+		g.P("msg := &", g.QualifiedGoIdent(pl.input.GoIdent), "{}")
+		g.P("if err := ", g.QualifiedGoIdent(protoPkg.Ident("Unmarshal")), "(b, msg); err != nil {")
+		g.P("return nil, err")
+		g.P("}")
+		g.P("return msg, nil")
+		g.P("}")
+		g.P()
+	}
+	if pl.output == nil {
+		g.P("// Wait blocks until the run is terminal.")
+		g.P("func (r ", name, "Run) Wait(ctx ", ctx, ") (", g.QualifiedGoIdent(durablePkg.Ident("Result")), ", error) {")
+		g.P("return r.run.Wait(ctx)")
+		g.P("}")
+		g.P()
+		return
+	}
 	g.P("// Wait blocks until the run is terminal. A successful result carries the")
 	g.P("// pipeline output; a failed run has none.")
 	g.P("func (r ", name, "Run) Wait(ctx ", ctx, ") (", name, "Result, error) {")

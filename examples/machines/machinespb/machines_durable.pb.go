@@ -312,6 +312,17 @@ func (p *ProvisionMachinePipeline) Run(ctx context.Context, id durable.RunID) (P
 	return ProvisionMachineRun{run: run}, nil
 }
 
+// ActiveRun returns a handle to this pipeline's nonterminal run for a
+// resource, if one exists — a read-only observation for wait/inspect
+// flows; claiming the slot atomically remains Schedule's job.
+func (p *ProvisionMachinePipeline) ActiveRun(ctx context.Context, resource durable.ResourceID) (ProvisionMachineRun, bool, error) {
+	run, ok, err := p.pipeline.ActiveRun(ctx, resource)
+	if err != nil || !ok {
+		return ProvisionMachineRun{}, ok, err
+	}
+	return ProvisionMachineRun{run: run}, true, nil
+}
+
 // Active returns handles for this pipeline's nonterminal runs.
 func (p *ProvisionMachinePipeline) Active(ctx context.Context) ([]ProvisionMachineRun, error) {
 	runs, err := p.pipeline.Active(ctx)
@@ -354,6 +365,20 @@ func (r ProvisionMachineRun) Status(ctx context.Context) (durable.Status, error)
 // forward work and unwinds successfully executed steps.
 func (r ProvisionMachineRun) Cancel(ctx context.Context, cause string) error {
 	return r.run.Cancel(ctx, cause)
+}
+
+// Input returns a defensive caller-owned copy of the run's immutable
+// pipeline input.
+func (r ProvisionMachineRun) Input(ctx context.Context) (*ProvisionMachineInput, error) {
+	b, err := r.run.InputBytes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	msg := &ProvisionMachineInput{}
+	if err := proto.Unmarshal(b, msg); err != nil {
+		return nil, err
+	}
+	return msg, nil
 }
 
 // Wait blocks until the run is terminal. A successful result carries the
@@ -488,6 +513,14 @@ func (p *DecommissionMachinePipeline) Schedule(ctx context.Context, resource dur
 func (p *DecommissionMachinePipeline) Run(ctx context.Context, id durable.RunID) (durable.Run, error) {
 	run, err := p.pipeline.Run(ctx, id)
 	return run, err
+}
+
+// ActiveRun returns a handle to this pipeline's nonterminal run for a
+// resource, if one exists — a read-only observation for wait/inspect
+// flows; claiming the slot atomically remains Schedule's job.
+func (p *DecommissionMachinePipeline) ActiveRun(ctx context.Context, resource durable.ResourceID) (durable.Run, bool, error) {
+	run, ok, err := p.pipeline.ActiveRun(ctx, resource)
+	return run, ok, err
 }
 
 // Active returns handles for this pipeline's nonterminal runs.

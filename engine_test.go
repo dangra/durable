@@ -1238,3 +1238,135 @@ func TestExclusionGroupSemantics(t *testing.T) {
 		t.Fatalf("post-terminal b.Schedule = created=%v err=%v", created, err)
 	}
 }
+
+func TestActiveRun(t *testing.T) {
+	release := make(chan struct{})
+	def := durable.NewDefinition(durable.DefinitionConfig{
+		ID: "observed",
+		Steps: []durable.StepConfig{
+			stateless("s/v1", func(ctx context.Context, inv *durable.Invocation) error {
+				select {
+				case <-release:
+					return nil
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}),
+		},
+	})
+	_, pipes := startEngine(t, durabletest.NewMemStore(), def)
+	p := pipes[0]
+
+	if _, ok, err := p.ActiveRun(context.Background(), "r"); err != nil || ok {
+		t.Fatalf("ActiveRun before schedule = ok=%v err=%v", ok, err)
+	}
+	run, _, err := p.Schedule(context.Background(), "r", nil)
+	if err != nil {
+		t.Fatalf("Schedule: %v", err)
+	}
+	got, ok, err := p.ActiveRun(context.Background(), "r")
+	if err != nil || !ok || got.ID() != run.ID() {
+		t.Fatalf("ActiveRun = %s ok=%v err=%v, want %s", got.ID(), ok, err, run.ID())
+	}
+	close(release)
+	if res, err := run.Wait(context.Background()); err != nil || !res.Succeeded() {
+		t.Fatalf("Wait = %+v, %v", res, err)
+	}
+	if _, ok, err := p.ActiveRun(context.Background(), "r"); err != nil || ok {
+		t.Fatalf("ActiveRun after terminal = ok=%v err=%v", ok, err)
+	}
+}
+
+// TestSupersedeReconcile exercises the full reconcile-loop toolkit: a newer
+// intent hits a conflict, inspects the blocking run's input, finds it
+// stale, cancels it (unwinding its work), and reschedules.
+func TestSupersedeReconcile(t *testing.T) {
+	var mu sync.Mutex
+	var unwound []string
+	started := make(chan struct{})
+	var startedOnce sync.Once
+	def := durable.NewDefinition(durable.DefinitionConfig{
+		ID: "versioned",
+		Steps: []durable.StepConfig{
+			{
+				ID:     "apply/v1",
+				Unwind: true,
+				Run: func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+					in := inv.InputMessage().(*wrapperspb.StringValue)
+					if in.GetValue() == "v1" {
+						// The stale run holds the slot until preempted,
+						// then resolves fast so cancellation can proceed.
+						if inv.CancelRequested() {
+							return nil, nil
+						}
+						startedOnce.Do(func() { close(started) })
+						<-ctx.Done()
+						return nil, ctx.Err()
+					}
+					return nil, nil
+				},
+				UnwindFunc: func(ctx context.Context, inv *durable.Invocation, f durable.Failure) error {
+					in := inv.InputMessage().(*wrapperspb.StringValue)
+					mu.Lock()
+					unwound = append(unwound, in.GetValue())
+					mu.Unlock()
+					return nil
+				},
+			},
+		},
+		NewInput: func() proto.Message { return &wrapperspb.StringValue{} },
+	})
+	_, pipes := startEngine(t, durabletest.NewMemStore(), def)
+	p := pipes[0]
+
+	stale, _, err := p.Schedule(context.Background(), "res", str("v1"))
+	if err != nil {
+		t.Fatalf("Schedule v1: %v", err)
+	}
+	<-started // the stale run's operation is in flight
+
+	// The reconcile loop delivers newer intent.
+	_, _, err = p.Schedule(context.Background(), "res", str("v2"))
+	var conflict *durable.ScheduleConflictError
+	if !errors.As(err, &conflict) {
+		t.Fatalf("Schedule v2 = %v, want conflict", err)
+	}
+
+	// Inspect the blocker: is it doing older or newer work?
+	blocker, err := p.Run(context.Background(), conflict.RunID)
+	if err != nil {
+		t.Fatalf("Run lookup: %v", err)
+	}
+	b, err := blocker.InputBytes(context.Background())
+	if err != nil {
+		t.Fatalf("InputBytes: %v", err)
+	}
+	blockerInput := &wrapperspb.StringValue{}
+	if err := proto.Unmarshal(b, blockerInput); err != nil {
+		t.Fatalf("unmarshal blocker input: %v", err)
+	}
+	if blockerInput.GetValue() != "v1" {
+		t.Fatalf("blocker input = %q, want v1", blockerInput.GetValue())
+	}
+
+	// Stale: cancel it, let unwind clean up, then reschedule.
+	if err := blocker.Cancel(context.Background(), "superseded by v2"); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	if res, err := stale.Wait(context.Background()); err != nil || !res.Canceled() {
+		t.Fatalf("stale Wait = %+v, %v; want canceled", res, err)
+	}
+	fresh, created, err := p.Schedule(context.Background(), "res", str("v2"))
+	if err != nil || !created {
+		t.Fatalf("reschedule v2 = created=%v err=%v", created, err)
+	}
+	if res, err := fresh.Wait(context.Background()); err != nil || !res.Succeeded() {
+		t.Fatalf("v2 Wait = %+v, %v", res, err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(unwound) != 1 || unwound[0] != "v1" {
+		t.Fatalf("unwound = %v, want the stale v1 work", unwound)
+	}
+}

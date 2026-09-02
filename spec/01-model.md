@@ -67,6 +67,12 @@ Run C -> active
 
 but at most one nonterminal Run.
 
+RunIDs are generated as ULIDs: time-prefixed, lexicographically
+creation-ordered, with the timestamp extractable by tooling. This is an
+implementation convenience for debugging, key layout, and retention
+tooling — RunIDs remain opaque strings, no API compares them, and
+`CreatedAt` stays authoritative for ordering.
+
 ---
 
 ## StepID

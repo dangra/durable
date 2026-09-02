@@ -13,6 +13,8 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
+	"github.com/oklog/ulid/v2"
+
 	"github.com/dangra/durable"
 	"github.com/dangra/durable/durabletest"
 )
@@ -1138,5 +1140,40 @@ func TestOrganicFailureBeatsCancel(t *testing.T) {
 	}
 	if res.RootFailure.StepID != "s/v1" {
 		t.Fatalf("RootFailure = %+v, want step s/v1", res.RootFailure)
+	}
+}
+
+func TestRunIDsAreULIDs(t *testing.T) {
+	def := durable.NewDefinition(durable.DefinitionConfig{
+		ID: "ulids",
+		Steps: []durable.StepConfig{
+			stateless("s/v1", func(context.Context, *durable.Invocation) error { return nil }),
+		},
+	})
+	_, pipes := startEngine(t, durabletest.NewMemStore(), def)
+
+	before := time.Now().Add(-time.Second)
+	run1, _, err := pipes[0].Schedule(context.Background(), "r1", nil)
+	if err != nil {
+		t.Fatalf("Schedule: %v", err)
+	}
+	run2, _, err := pipes[0].Schedule(context.Background(), "r2", nil)
+	if err != nil {
+		t.Fatalf("Schedule: %v", err)
+	}
+
+	id1, err := ulid.Parse(string(run1.ID()))
+	if err != nil {
+		t.Fatalf("RunID %q is not a ULID: %v", run1.ID(), err)
+	}
+	id2, err := ulid.Parse(string(run2.ID()))
+	if err != nil {
+		t.Fatalf("RunID %q is not a ULID: %v", run2.ID(), err)
+	}
+	if id1 == id2 {
+		t.Fatal("distinct runs share a RunID")
+	}
+	if at := ulid.Time(id1.Time()); at.Before(before) || at.After(time.Now().Add(time.Second)) {
+		t.Fatalf("embedded timestamp %v not near now", at)
 	}
 }

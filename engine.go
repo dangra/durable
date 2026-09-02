@@ -3,7 +3,6 @@ package durable
 import (
 	"context"
 	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -13,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/oklog/ulid/v2"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/dangra/durable/internal/ledger"
@@ -116,13 +116,13 @@ type Engine struct {
 // scheduling is accepted.
 func NewEngine(store Store, opts ...Option) *Engine {
 	e := &Engine{
-		store:       store,
-		clock:       wallClock{},
-		logger:      slog.Default(),
-		retry:       defaultRetryPolicy,
-		concurrency: 16,
-		pipelines:   make(map[PipelineID]*Definition),
-		stepOwner:   make(map[StepID]PipelineID),
+		store:         store,
+		clock:         wallClock{},
+		logger:        slog.Default(),
+		retry:         defaultRetryPolicy,
+		concurrency:   16,
+		pipelines:     make(map[PipelineID]*Definition),
+		stepOwner:     make(map[StepID]PipelineID),
 		active:        make(map[RunID]struct{}),
 		invalid:       make(map[RunID]*InvalidRunError),
 		waiters:       make(map[RunID][]chan struct{}),
@@ -840,10 +840,21 @@ func opState(s OpStatus) ledger.OpState {
 	}
 }
 
+// runIDEntropy makes concurrent Schedule calls collision-free and orders
+// RunIDs created within the same millisecond.
+var runIDEntropy = &ulid.LockedMonotonicReader{MonotonicReader: ulid.Monotonic(rand.Reader, 0)}
+
+// newRunID generates a ULID RunID: time-prefixed and lexicographically
+// creation-ordered. This is an implementation convenience for debugging,
+// key layout, and tooling — RunIDs remain opaque strings, no API compares
+// them, and CreatedAt stays authoritative for ordering.
 func newRunID(now time.Time) RunID {
-	var b [6]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		panic(fmt.Sprintf("durable: reading random bytes: %v", err))
+	if now.Before(time.Unix(0, 0)) {
+		now = time.Unix(0, 0)
 	}
-	return RunID(fmt.Sprintf("%016x%s", now.UnixNano(), hex.EncodeToString(b[:])))
+	id, err := ulid.New(ulid.Timestamp(now), runIDEntropy)
+	if err != nil {
+		panic(fmt.Sprintf("durable: generating run id: %v", err))
+	}
+	return RunID(id.String())
 }

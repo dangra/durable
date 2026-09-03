@@ -2,7 +2,6 @@ package durable
 
 import (
 	"context"
-	"crypto/rand"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -12,7 +11,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/oklog/ulid/v2"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/dangra/durable/internal/dispatcher"
@@ -1248,23 +1246,4 @@ func opState(s OpStatus) ledger.OpState {
 	default:
 		return ledger.OpNone
 	}
-}
-
-// runIDEntropy makes concurrent Schedule calls collision-free and orders
-// RunIDs created within the same millisecond.
-var runIDEntropy = &ulid.LockedMonotonicReader{MonotonicReader: ulid.Monotonic(rand.Reader, 0)}
-
-// newRunID generates a ULID RunID: time-prefixed and lexicographically
-// creation-ordered. This is an implementation convenience for debugging,
-// key layout, and tooling — RunIDs remain opaque strings, no API compares
-// them, and CreatedAt stays authoritative for ordering.
-func newRunID(now time.Time) RunID {
-	if now.Before(time.Unix(0, 0)) {
-		now = time.Unix(0, 0)
-	}
-	id, err := ulid.New(ulid.Timestamp(now), runIDEntropy)
-	if err != nil {
-		panic(fmt.Sprintf("durable: generating run id: %v", err))
-	}
-	return RunID(id.String())
 }

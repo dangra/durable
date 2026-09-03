@@ -36,8 +36,7 @@ func (e *awaitResolution) Error() string {
 
 // asAwait reports whether err is an AwaitRun resolution.
 func asAwait(err error) (*awaitResolution, bool) {
-	var ar *awaitResolution
-	if errors.As(err, &ar) {
+	if ar, ok := errors.AsType[*awaitResolution](err); ok {
 		return ar, true
 	}
 	return nil, false

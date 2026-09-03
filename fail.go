@@ -116,6 +116,8 @@ func (e *permanentError) failureKind() FailureKind {
 	if e.kindSet {
 		return e.kind
 	}
+	// Not errors.AsType: FailureKinder is a plain interface, not an error,
+	// and AsType's constraint requires E to implement error.
 	var fk FailureKinder
 	if errors.As(e.err, &fk) {
 		return fk.FailureKind()
@@ -142,8 +144,7 @@ func reasonOf(err error) string {
 
 // asPermanent reports whether err declares permanent failure via Fail.
 func asPermanent(err error) (*permanentError, bool) {
-	var pe *permanentError
-	if errors.As(err, &pe) {
+	if pe, ok := errors.AsType[*permanentError](err); ok {
 		return pe, true
 	}
 	return nil, false

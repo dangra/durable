@@ -2,6 +2,7 @@ package durable
 
 import (
 	"context"
+	"slices"
 
 	"google.golang.org/protobuf/proto"
 )
@@ -42,8 +43,8 @@ func WithMiddleware(mw ...Middleware) Option {
 // wrap composes the engine's middleware chain around h, first middleware
 // outermost.
 func (e *Engine) wrap(h Handler) Handler {
-	for i := len(e.middleware) - 1; i >= 0; i-- {
-		h = e.middleware[i](h)
+	for _, v := range slices.Backward(e.middleware) {
+		h = v(h)
 	}
 	return h
 }

@@ -9,6 +9,7 @@ import (
 	"math"
 	mrand "math/rand/v2"
 	"runtime/debug"
+	"slices"
 	"sync"
 	"time"
 
@@ -285,11 +286,9 @@ func (e *Engine) acquireClass(rec *RunRecord, class string) (proceed, held bool)
 		c.inUse++
 		return true, true
 	}
-	for _, w := range c.waiters {
-		if w == rec.RunID {
-			e.throttled[rec.RunID] = class
-			return false, false
-		}
+	if slices.Contains(c.waiters, rec.RunID) {
+		e.throttled[rec.RunID] = class
+		return false, false
 	}
 	c.waiters = append(c.waiters, rec.RunID)
 	e.throttled[rec.RunID] = class
@@ -420,9 +419,7 @@ func (e *Engine) dispatch(id RunID, delay time.Duration) {
 	e.active[id] = struct{}{}
 	e.mu.Unlock()
 
-	e.wg.Add(1)
-	go func() {
-		defer e.wg.Done()
+	e.wg.Go(func() {
 		if delay > 0 {
 			wake := e.armWake(id)
 			select {
@@ -447,7 +444,7 @@ func (e *Engine) dispatch(id RunID, delay time.Duration) {
 		if again && e.baseCtx.Err() == nil {
 			e.dispatch(id, redispatchIn)
 		}
-	}()
+	})
 }
 
 // armWake registers a wake channel a delayed dispatch waits on, so a
@@ -654,12 +651,11 @@ func (e *Engine) applyCancel(rec *RunRecord) bool {
 	if cause == "" {
 		cause = "canceled"
 	}
-	rec.RootFailure = &RootFailure{FailureRecord: FailureRecord{
+	rec.RootFailure = &RootFailure{
 		Phase:   PhaseForward,
 		Message: cause,
 		At:      e.clock.Now(),
-		Kind:    FailureKindCanceled,
-	}}
+		Kind:    FailureKindCanceled}
 	rec.Phase = PhaseUnwind
 	rec.NextAttemptAt = time.Time{}
 	return e.apply(rec, Transition{Cursor: idleCursor(rec), RootFailure: rec.RootFailure})
@@ -713,15 +709,13 @@ func (e *Engine) awaitGate(rec *RunRecord) bool {
 		return false
 	}
 	parked := rec.RunID
-	e.wg.Add(1)
-	go func() {
-		defer e.wg.Done()
+	e.wg.Go(func() {
 		select {
 		case <-ch:
 			e.dispatch(parked, 0)
 		case <-e.baseCtx.Done():
 		}
-	}()
+	})
 	return true
 }
 
@@ -842,15 +836,14 @@ func (e *Engine) runForward(rec *RunRecord, def *Definition, stepID StepID) (don
 
 	case permanent:
 		sr.ForwardStatus = OpFailed
-		rec.RootFailure = &RootFailure{FailureRecord: FailureRecord{
+		rec.RootFailure = &RootFailure{
 			StepID:  stepID,
 			Phase:   PhaseForward,
 			Attempt: sr.ForwardAttempts,
 			Message: pe.err.Error(),
 			At:      now,
 			Kind:    pe.failureKind(),
-			Reason:  pe.failureReason(),
-		}}
+			Reason:  pe.failureReason()}
 		rec.Phase = PhaseUnwind
 		clearLastError(rec)
 		if !e.apply(rec, Transition{Cursor: idleCursor(rec), Steps: []StepWrite{{StepID: stepID, Record: *sr}}, RootFailure: rec.RootFailure}) {
@@ -914,15 +907,14 @@ func (e *Engine) runUnwind(rec *RunRecord, def *Definition, stepID StepID) (done
 
 	case permanent:
 		sr.UnwindStatus = OpFailed
-		rec.UnwindFailures = append(rec.UnwindFailures, UnwindFailure{FailureRecord: FailureRecord{
+		rec.UnwindFailures = append(rec.UnwindFailures, UnwindFailure{
 			StepID:  stepID,
 			Phase:   PhaseUnwind,
 			Attempt: sr.UnwindAttempts,
 			Message: pe.err.Error(),
 			At:      now,
 			Kind:    pe.failureKind(),
-			Reason:  pe.failureReason(),
-		}})
+			Reason:  pe.failureReason()})
 		clearLastError(rec)
 		uf := rec.UnwindFailures[len(rec.UnwindFailures)-1]
 		if !e.apply(rec, Transition{Cursor: idleCursor(rec), Steps: []StepWrite{{StepID: stepID, Record: *sr}}, UnwindFailure: &uf}) {

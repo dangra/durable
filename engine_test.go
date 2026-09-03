@@ -520,8 +520,7 @@ func TestUnresolvedStepRemovedIsInvalid(t *testing.T) {
 
 	run, _ := pipes[0].Run(context.Background(), runID)
 	_, err := run.Wait(context.Background())
-	var ie *durable.InvalidRunError
-	if !errors.As(err, &ie) {
+	if _, ok := errors.AsType[*durable.InvalidRunError](err); !ok {
 		t.Fatalf("Wait = %v, want InvalidRunError", err)
 	}
 	st, err := run.Status(context.Background())
@@ -562,8 +561,7 @@ func TestInvalidReducerRepairedByRedeploy(t *testing.T) {
 		t.Fatalf("Schedule: %v", err)
 	}
 	_, err = run.Wait(context.Background())
-	var ie *durable.InvalidRunError
-	if !errors.As(err, &ie) {
+	if _, ok := errors.AsType[*durable.InvalidRunError](err); !ok {
 		t.Fatalf("Wait = %v, want InvalidRunError", err)
 	}
 	if err := e1.Stop(context.Background()); err != nil {
@@ -604,8 +602,7 @@ func TestNilStateFromStateProducingHandlerIsInvalid(t *testing.T) {
 	_, pipes := startEngine(t, durabletest.NewMemStore(), def)
 	run, _, _ := pipes[0].Schedule(context.Background(), "r", nil)
 	_, err := run.Wait(context.Background())
-	var ie *durable.InvalidRunError
-	if !errors.As(err, &ie) {
+	if _, ok := errors.AsType[*durable.InvalidRunError](err); !ok {
 		t.Fatalf("Wait = %v, want InvalidRunError", err)
 	}
 }
@@ -1554,8 +1551,7 @@ func TestAwaitedRunIDPreventsChildRespawn(t *testing.T) {
 					return nil // child completed; do not respawn
 				}
 				run, _, err := childPipe.Schedule(ctx, "child-res", nil)
-				var conflict *durable.ScheduleConflictError
-				if errors.As(err, &conflict) {
+				if conflict, ok := errors.AsType[*durable.ScheduleConflictError](err); ok {
 					return durable.AwaitRun(conflict.RunID)
 				}
 				if err != nil {
@@ -1858,7 +1854,7 @@ func TestUnconfiguredClassIsUnlimited(t *testing.T) {
 	_, pipes := startEngine(t, durabletest.NewMemStore(), def)
 
 	var runs []durable.Run
-	for i := 0; i < parallel; i++ {
+	for i := range parallel {
 		r, _, err := pipes[0].Schedule(context.Background(), durable.ResourceID(fmt.Sprintf("r%d", i)), nil)
 		if err != nil {
 			t.Fatalf("Schedule: %v", err)

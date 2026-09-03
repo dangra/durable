@@ -89,8 +89,8 @@ func (r Run) Cancel(ctx context.Context, cause string) error {
 		e.logger.Debug("durable: cancel requested", "run", string(r.id), "cause", cause)
 	}
 	e.preemptAttempt(r.id)
-	e.wakes.Fire(r.id)
-	e.dispatch(r.id, 0)
+	e.disp.Wake(r.id)
+	e.disp.Dispatch(r.id, 0)
 	return nil
 }
 
@@ -143,7 +143,7 @@ func (r Run) Status(ctx context.Context) (Status, error) {
 				st.State = RunStateScheduled
 			}
 			st.NextAttemptAt = rec.NextAttemptAt
-		} else if e.isActive(r.id) {
+		} else if e.disp != nil && e.disp.IsActive(r.id) {
 			st.State = RunStateRunning
 		} else {
 			st.State = RunStateRunnable

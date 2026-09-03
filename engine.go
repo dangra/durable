@@ -15,6 +15,7 @@ import (
 	"github.com/oklog/ulid/v2"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/dangra/durable/internal/dispatcher"
 	"github.com/dangra/durable/internal/ledger"
 	"github.com/dangra/durable/internal/tokenpool"
 	"github.com/dangra/durable/internal/watchset"
@@ -165,14 +166,16 @@ type Engine struct {
 	attemptCancel map[RunID]context.CancelFunc
 
 	// waiters broadcasts a Run's terminal/invalid notification to
-	// Run.Wait callers and await watchers; wakes cuts delayed dispatches
-	// short. Both are internally locked, independent of mu.
+	// Run.Wait callers and await watchers; it is internally locked,
+	// independent of mu.
 	waiters watchset.Set[RunID]
-	wakes   watchset.Signals[RunID]
+
+	// disp runs at most one worker per Run with bounded concurrency; it
+	// exists once the engine has started.
+	disp *dispatcher.Dispatcher[RunID]
 
 	baseCtx context.Context
 	cancel  context.CancelFunc
-	sem     chan struct{}
 	wg      sync.WaitGroup
 }
 
@@ -243,7 +246,13 @@ func (e *Engine) Start(ctx context.Context) error {
 	}
 	e.started = true
 	e.baseCtx, e.cancel = context.WithCancel(context.Background())
-	e.sem = make(chan struct{}, e.concurrency)
+	e.disp = dispatcher.New(dispatcher.Config[RunID]{
+		Ctx:         e.baseCtx,
+		Concurrency: e.concurrency,
+		Clock:       e.clock,
+		Spawn:       e.wg.Go,
+		Run:         e.processRun,
+	})
 	e.mu.Unlock()
 
 	recs, err := e.store.ListNonterminal(ctx)
@@ -258,7 +267,7 @@ func (e *Engine) Start(ctx context.Context) error {
 		if hasUnresolvedOp(rec) {
 			delay = e.recoveryBackoff
 		}
-		e.dispatch(rec.RunID, delay)
+		e.disp.Dispatch(rec.RunID, delay)
 	}
 
 	if e.retention.TerminalAfter > 0 {
@@ -293,7 +302,7 @@ func (e *Engine) acquireClass(rec *RunRecord, class string) (proceed, held bool,
 	bypass := class == "" || rec.Cancel != nil
 	granted, held, waited, kicks := e.pool.Acquire(class, rec.RunID, bypass, e.clock.Now())
 	for _, id := range kicks {
-		e.dispatch(id, 0)
+		e.disp.Dispatch(id, 0)
 	}
 	return granted, held, waited
 }
@@ -301,7 +310,7 @@ func (e *Engine) acquireClass(rec *RunRecord, class string) (proceed, held bool,
 // releaseClass returns a token and wakes the head waiter, if any.
 func (e *Engine) releaseClass(class string) {
 	if kick, ok := e.pool.Release(class); ok {
-		e.dispatch(kick, 0)
+		e.disp.Dispatch(kick, 0)
 	}
 }
 
@@ -310,7 +319,7 @@ func (e *Engine) releaseClass(class string) {
 // invalidity), waking the next waiter if its departure exposed capacity.
 func (e *Engine) clearClassWait(id RunID) {
 	if kick, ok := e.pool.Clear(id); ok {
-		e.dispatch(kick, 0)
+		e.disp.Dispatch(kick, 0)
 	}
 }
 
@@ -406,54 +415,6 @@ func hasUnresolvedOp(rec *RunRecord) bool {
 	return false
 }
 
-// dispatch schedules processing of a Run after delay. At most one worker
-// exists per Run at a time; a dispatch suppressed by that guard is
-// recorded as a re-poke and honored when the current worker exits, so a
-// wake (a class-token release, a cancellation) arriving in the window
-// between a worker's last decision and its exit is never lost.
-func (e *Engine) dispatch(id RunID, delay time.Duration) {
-	e.mu.Lock()
-	if _, dup := e.active[id]; dup {
-		e.repoke[id] = struct{}{}
-		e.mu.Unlock()
-		return
-	}
-	e.active[id] = struct{}{}
-	e.mu.Unlock()
-
-	e.wg.Go(func() {
-		if delay > 0 {
-			wake := e.wakes.Arm(id)
-			select {
-			case <-e.clock.After(delay):
-			case <-wake:
-			case <-e.baseCtx.Done():
-				e.wakes.Disarm(id)
-				e.clearActive(id)
-				return
-			}
-			e.wakes.Disarm(id)
-		}
-		select {
-		case e.sem <- struct{}{}:
-		case <-e.baseCtx.Done():
-			e.clearActive(id)
-			return
-		}
-		redispatchIn, again := e.processRun(id)
-		<-e.sem
-		// A suppressed dispatch is urgent (a token release, a
-		// cancellation): redispatch immediately even over a retry wait —
-		// the next reconciliation re-derives any remaining delay.
-		if e.clearActive(id) {
-			redispatchIn, again = 0, true
-		}
-		if again && e.baseCtx.Err() == nil {
-			e.dispatch(id, redispatchIn)
-		}
-	})
-}
-
 // attemptContext derives the per-attempt handler context and registers its
 // cancel so a cancellation request can preempt the in-flight attempt.
 func (e *Engine) attemptContext(id RunID) (context.Context, func()) {
@@ -478,24 +439,6 @@ func (e *Engine) preemptAttempt(id RunID) {
 	if cancel != nil {
 		cancel()
 	}
-}
-
-// clearActive releases the Run's worker slot and reports whether a
-// dispatch was suppressed while it was held (the caller owes a re-poke).
-func (e *Engine) clearActive(id RunID) (repoke bool) {
-	e.mu.Lock()
-	delete(e.active, id)
-	_, repoke = e.repoke[id]
-	delete(e.repoke, id)
-	e.mu.Unlock()
-	return repoke
-}
-
-func (e *Engine) isActive(id RunID) bool {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	_, ok := e.active[id]
-	return ok
 }
 
 // processRun advances one Run until it becomes terminal, invalid, must wait
@@ -809,7 +752,7 @@ func (e *Engine) awaitGate(rec *RunRecord) bool {
 	e.wg.Go(func() {
 		select {
 		case <-ch:
-			e.dispatch(parked, 0)
+			e.disp.Dispatch(parked, 0)
 		case <-e.baseCtx.Done():
 			cancelWatch()
 		}

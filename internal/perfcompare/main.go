@@ -1,10 +1,10 @@
 // Command perfcompare gates the performance regression suite: it parses
 // two `go test -bench` outputs (base and head), collapses each metric's
-// -count repetitions to one estimate — the median for (near-)deterministic
-// counters, the best sample for wall-clock figures, since runner
-// interference only ever adds time — and applies per-metric-class
-// thresholds: tight and two-sided for deterministic counters, loose for
-// wall-clock figures. It prints a markdown table (suitable for a GitHub
+// -count repetitions to one estimate — the median for deterministic
+// counters, the best sample for wall-clock and disk-byte figures, since
+// runner interference only ever adds time and un-batched bytes — and
+// applies per-metric-class thresholds: tight and two-sided for
+// deterministic counters, loose for wall-clock figures. It prints a markdown table (suitable for a GitHub
 // job summary) and exits non-zero when any gated metric regresses, when
 // gated coverage present in base is missing from head, or when either
 // input recorded a test failure, panic, or build failure.
@@ -33,7 +33,7 @@ type class struct {
 	lowerIsBad  bool    // metric where a decrease is a regression
 	twoSided    bool    // deterministic metric where any move is a regression
 	informative bool    // never gates
-	wallClock   bool    // compare best-of-count samples, not the median
+	bestOf      bool    // compare best-of-count samples, not the median
 }
 
 func classify(unit string) class {
@@ -44,21 +44,24 @@ func classify(unit string) class {
 	case "transitions/run", "transitions/cycle":
 		return class{threshold: 0.001, twoSided: true}
 	// Physical disk bytes: near-deterministic, but the adaptive group
-	// commit makes page accounting mildly timing-dependent.
+	// commit makes page accounting timing-dependent one-sidedly —
+	// scheduling noise only ever reduces coalescing and adds bytes — so
+	// the smallest sample is the closest to the deterministic ideal.
 	case "diskB/run", "diskB/attempt", "diskB/cycle":
-		return class{threshold: 0.10}
+		return class{threshold: 0.10, bestOf: true}
 	// Allocation counters: near-deterministic, small timing wiggle.
 	case "B/op", "allocs/op":
 		return class{threshold: 0.10}
-	// Wall clock: noisy on shared runners, gate loosely — and on the
-	// best sample of each side, not the median. Interference (a
-	// contended VM, a slow disk) only ever adds time, so the minimum is
-	// the least-noisy observation of true cost; medians of -count 3 have
-	// been observed 7-15x apart on identical code across CI runs.
+	// Wall clock: a smoke alarm for order-of-magnitude regressions, not
+	// a precision gate — shared-runner weather has produced >40% splits
+	// on identical code even with best-of sampling and interleaved
+	// head/base runs, so anything tighter than 50% gates on noise. The
+	// best sample of each side is compared: interference (a contended
+	// VM, a slow disk) only ever adds time.
 	case "ns/op", "p50-ms", "p99-ms", "start-ms", "wake-p50-ms":
-		return class{threshold: 0.25, wallClock: true}
+		return class{threshold: 0.50, bestOf: true}
 	case "runs/sec", "unwinds/sec", "cycles/sec":
-		return class{threshold: 0.25, lowerIsBad: true, wallClock: true}
+		return class{threshold: 0.50, lowerIsBad: true, bestOf: true}
 	// wake-max-ms (a population max — one scheduler stall away from
 	// doubling) and anything unrecognized: report, never gate.
 	default:
@@ -121,11 +124,11 @@ func median(vs []float64) float64 {
 	return s[len(s)/2]
 }
 
-// estimate collapses one metric's samples per its class: wall-clock
-// metrics take the best sample (min, or max when lower is bad), all
-// others the median.
+// estimate collapses one metric's samples per its class: classes with
+// one-sided noise take the best sample (min, or max when lower is bad),
+// all others the median.
 func estimate(vs []float64, c class) float64 {
-	if !c.wallClock {
+	if !c.bestOf {
 		return median(vs)
 	}
 	best := vs[0]

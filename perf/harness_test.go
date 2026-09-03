@@ -4,12 +4,13 @@
 // Metrics come in two tiers. Deterministic counters gate tightly in CI:
 // transitions/run (logical store writes observed via a durable.Observer,
 // exactly deterministic, gated two-sided at 0.1%) and the
-// near-deterministic byte and allocation metrics (diskB/*, B/op,
-// allocs/op, gated at 10%). Every scenario runs with the observer
-// installed, so observer-path overhead is itself gated. Wall-clock metrics
-// (p50-ms, p99-ms, runs/sec, ns/op) are gated loosely at 25% on the best
-// of the -count samples, since shared-runner noise only adds time; the
-// internal/perfcompare tool applies the per-metric-class thresholds.
+// near-deterministic byte and allocation metrics (diskB/* on the best
+// sample, B/op and allocs/op on the median, gated at 10%). Every scenario
+// runs with the observer installed, so observer-path overhead is itself
+// gated. Wall-clock metrics (p50-ms, p99-ms, runs/sec, ns/op) are a
+// smoke alarm gated at 50% on the best of the -count samples, since
+// shared-runner noise only adds time; the internal/perfcompare tool
+// applies the per-metric-class thresholds.
 //
 // Every scenario is write-deterministic: retries are bounded by attempt
 // number, never by timing, so the logical write counts are identical

@@ -168,9 +168,10 @@ jobs:
             exit 0
           fi
           # transitions/* gate two-sided at 0.1% (exactly deterministic),
-          # disk bytes and allocations at 10%, wall clock at 25%; the
-          # thresholds live in internal/perfcompare, which also fails on
-          # recorded test failures and on gated metrics missing from head.
+          # disk bytes (best sample) and allocations at 10%, wall clock
+          # (best sample) at 50%; the thresholds live in
+          # internal/perfcompare, which also fails on recorded test
+          # failures and on gated metrics missing from head.
           go run ./internal/perfcompare /tmp/perf-base.txt /tmp/perf-head.txt | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Report (master)
         if: github.event_name == 'push'

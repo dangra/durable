@@ -1,0 +1,116 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+# Least privilege: nothing here writes to the repository.
+permissions:
+  contents: read
+
+# Supersede stale runs of the same ref; never cancel master pushes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    name: Build & test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Verify go.mod is tidy
+        run: go mod tidy -diff
+      - name: Verify gofmt
+        run: |
+          out=$(gofmt -l .)
+          if [ -n "$out" ]; then
+            echo "::error::files are not gofmt'd:"
+            echo "$out"
+            exit 1
+          fi
+      - name: Vet
+        run: go vet ./...
+      - name: Test (race detector)
+        run: go test -race -count=1 ./...
+      - name: Benchmarks compile and run once
+        run: go test -run xxx -bench . -benchtime 1x ./...
+      - name: Example smoke test
+        run: go run ./examples/machines
+
+  staticcheck:
+    name: Staticcheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      # Tool versions come from go.mod tool directives (single source of
+      # truth, bumped by dependabot's gomod updates).
+      - name: Staticcheck
+        run: go tool staticcheck ./...
+
+  govulncheck:
+    name: Vulnerability scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: govulncheck
+        run: go tool govulncheck ./...
+
+  proto:
+    name: Protobuf lint, breaking & drift
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history so buf breaking can diff against the base branch.
+          fetch-depth: 0
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Set up buf
+        uses: bufbuild/buf-action@8c6a16e16f12ba20b6470afa9c2ba9b5ba8c97c3 # v1.5.0
+        with:
+          setup_only: true
+          version: 1.72.0
+      - name: Lint
+        run: buf lint
+      - name: Format
+        run: buf format --diff --exit-code
+      - name: Breaking changes against base branch
+        if: github.event_name == 'pull_request'
+        run: buf breaking --against ".git#branch=origin/${{ github.base_ref }}"
+      # buf.gen.yaml invokes protoc-gen-go via 'go tool', so its version is
+      # locked to go.mod's protobuf runtime — nothing to install or match.
+      - name: Generated code drift
+        run: |
+          buf generate
+          # git status --porcelain, not git diff: newly generated files are
+          # untracked, and a diff-only check would miss them entirely.
+          if [ -n "$(git status --porcelain)" ]; then
+            git status --porcelain
+            git diff
+            echo "::error::generated code is out of date; run 'buf generate' and commit the result"
+            exit 1
+          fi

@@ -1,15 +1,15 @@
 // Package perf holds the performance regression suite: engine-level
 // workload scenarios modeled on the flyd machine-orchestration use case.
 //
-// Metrics come in two tiers. Deterministic counters (diskB/run,
-// txwrites/run, and the allocation metrics from -benchmem) are gated in CI
-// with tight thresholds — they are scheduling-independent, so they compare
-// reliably even on noisy shared runners. Wall-clock metrics (p50-ms,
-// p99-ms, runs/sec, ns/op) are gated loosely; the internal/perfcompare
-// tool applies per-metric thresholds.
+// Metrics come in two tiers. Deterministic counters gate tightly in CI:
+// transitions/run (logical store writes, exactly deterministic, gated
+// two-sided at 0.1%) and the near-deterministic byte and allocation
+// metrics (diskB/*, B/op, allocs/op, gated at 10%). Wall-clock metrics
+// (p50-ms, p99-ms, runs/sec, ns/op) are gated loosely at 25%; the
+// internal/perfcompare tool applies the per-metric-class thresholds.
 //
 // Every scenario is write-deterministic: retries are bounded by attempt
-// number, never by timing, so the durable write counts are identical
+// number, never by timing, so the logical write counts are identical
 // across runs and machines.
 package perf
 
@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -50,9 +51,57 @@ var fatInput = wrapperspb.Bytes(make([]byte, inputSize))
 
 type env struct {
 	store  *bboltstore.Store
+	writes *atomic.Int64
 	engine *durable.Engine
 	pipe   *durable.Pipeline
 }
+
+// countingStore counts logical write calls. Unlike bbolt-level
+// transaction/page counts — which the adaptive group commit makes
+// timing-dependent — these are exactly deterministic per scenario, so
+// they gate at effectively zero tolerance. Every Store method is
+// implemented explicitly, no embedding: a write method added to the
+// interface later breaks this build instead of slipping through
+// uncounted.
+type countingStore struct {
+	inner  durable.Store
+	writes atomic.Int64
+}
+
+func (c *countingStore) CreateRun(ctx context.Context, rec *durable.RunRecord) (*durable.RunRecord, bool, error) {
+	c.writes.Add(1)
+	return c.inner.CreateRun(ctx, rec)
+}
+
+func (c *countingStore) ApplyTransition(ctx context.Context, id durable.RunID, t durable.Transition) error {
+	c.writes.Add(1)
+	return c.inner.ApplyTransition(ctx, id, t)
+}
+
+func (c *countingStore) RequestCancel(ctx context.Context, id durable.RunID, req durable.CancelRequest) (bool, error) {
+	c.writes.Add(1)
+	return c.inner.RequestCancel(ctx, id, req)
+}
+
+func (c *countingStore) ReapTerminal(ctx context.Context, before time.Time, limit int) (int, error) {
+	n, err := c.inner.ReapTerminal(ctx, before, limit)
+	c.writes.Add(int64(n)) // one logical delete per reaped run
+	return n, err
+}
+
+func (c *countingStore) GetRun(ctx context.Context, id durable.RunID) (*durable.RunRecord, error) {
+	return c.inner.GetRun(ctx, id)
+}
+
+func (c *countingStore) ListNonterminal(ctx context.Context) ([]*durable.RunRecord, error) {
+	return c.inner.ListNonterminal(ctx)
+}
+
+func (c *countingStore) ListRuns(ctx context.Context, pipeline durable.PipelineID, resource durable.ResourceID) ([]*durable.RunRecord, error) {
+	return c.inner.ListRuns(ctx, pipeline, resource)
+}
+
+func (c *countingStore) Close() error { return c.inner.Close() }
 
 // newEnv builds a store and engine with the given definition bound, not
 // yet started.
@@ -62,6 +111,7 @@ func newEnv(b *testing.B, def *durable.Definition, opts ...durable.Option) *env 
 	if err != nil {
 		b.Fatal(err)
 	}
+	counting := &countingStore{inner: store}
 	opts = append([]durable.Option{
 		durable.WithConcurrency(32),
 		durable.WithRetryPolicy(durable.RetryPolicy{
@@ -70,7 +120,7 @@ func newEnv(b *testing.B, def *durable.Definition, opts ...durable.Option) *env 
 		durable.WithRecoveryBackoff(0),
 		durable.WithLogger(discardLogger()),
 	}, opts...)
-	e := durable.NewEngine(store, opts...)
+	e := durable.NewEngine(counting, opts...)
 	pipe, err := def.Bind(e)
 	if err != nil {
 		b.Fatal(err)
@@ -81,7 +131,7 @@ func newEnv(b *testing.B, def *durable.Definition, opts ...durable.Option) *env 
 		_ = e.Stop(ctx)
 		_ = store.Close()
 	})
-	return &env{store: store, engine: e, pipe: pipe}
+	return &env{store: store, writes: &counting.writes, engine: e, pipe: pipe}
 }
 
 func (v *env) start(b *testing.B) {
@@ -98,6 +148,7 @@ type stepSpec struct {
 	unwind    bool
 	retries   uint64 // succeed on attempt retries+1
 	permanent bool   // durable.Fail instead of succeeding
+	class     string // concurrency class, if any
 }
 
 func machinePipeline(id durable.PipelineID, specs [numSteps]stepSpec) *durable.Definition {
@@ -106,9 +157,10 @@ func machinePipeline(id durable.PipelineID, specs [numSteps]stepSpec) *durable.D
 	for i, spec := range specs {
 		spec := spec
 		sc := durable.StepConfig{
-			ID:       durable.StepID(fmt.Sprintf("%s-step-%d/v1", id, i)),
-			HasState: true,
-			Unwind:   spec.unwind,
+			ID:               durable.StepID(fmt.Sprintf("%s-step-%d/v1", id, i)),
+			HasState:         true,
+			Unwind:           spec.unwind,
+			ConcurrencyClass: spec.class,
 			Run: func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
 				if inv.Attempt() <= spec.retries {
 					return nil, errTransient
@@ -166,13 +218,14 @@ func runPopulation(b *testing.B, pipe *durable.Pipeline, n int, prefix string) [
 	return lat
 }
 
-// report emits the two metric tiers: deterministic store counters per run
-// and wall-clock latency/throughput.
-func report(b *testing.B, stats bboltstore.StoreStats, runs int, lat []time.Duration, elapsed time.Duration) {
+// report emits the two metric tiers: the exactly-deterministic logical
+// write count and near-deterministic disk bytes per run, plus wall-clock
+// latency/throughput.
+func report(b *testing.B, v *env, runs int, lat []time.Duration, elapsed time.Duration) {
 	b.Helper()
 	n := float64(runs) * float64(b.N)
-	b.ReportMetric(float64(stats.TxPageAllocBytes)/n, "diskB/run")
-	b.ReportMetric(float64(stats.TxWrites)/n, "txwrites/run")
+	b.ReportMetric(float64(v.store.Stats().TxPageAllocBytes)/n, "diskB/run")
+	b.ReportMetric(float64(v.writes.Load())/n, "transitions/run")
 	if len(lat) > 0 {
 		sort.Slice(lat, func(i, j int) bool { return lat[i] < lat[j] })
 		b.ReportMetric(ms(lat[len(lat)/2]), "p50-ms")

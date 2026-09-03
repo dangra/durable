@@ -9,7 +9,6 @@ import (
 	"math"
 	mrand "math/rand/v2"
 	"runtime/debug"
-	"slices"
 	"sync"
 	"time"
 
@@ -17,6 +16,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/dangra/durable/internal/ledger"
+	"github.com/dangra/durable/internal/tokenpool"
 	"github.com/dangra/durable/internal/watchset"
 )
 
@@ -150,9 +150,11 @@ type Engine struct {
 
 	classCapacity map[string]int
 
+	// pool gates operations on their step's concurrency class; it is
+	// internally locked, independent of mu.
+	pool *tokenpool.Pool[string, RunID]
+
 	mu            sync.Mutex
-	classes       map[string]*concClass
-	throttled     map[RunID]throttlePark
 	awaitParked   map[RunID]time.Time
 	pipelines     map[PipelineID]*Definition
 	stepOwner     map[StepID]PipelineID
@@ -191,13 +193,12 @@ func NewEngine(store Store, opts ...Option) *Engine {
 		invalid:       make(map[RunID]*InvalidRunError),
 		attemptCancel: make(map[RunID]context.CancelFunc),
 		classCapacity: make(map[string]int),
-		classes:       make(map[string]*concClass),
-		throttled:     make(map[RunID]throttlePark),
 		awaitParked:   make(map[RunID]time.Time),
 	}
 	for _, o := range opts {
 		o(e)
 	}
+	e.pool = tokenpool.New[string, RunID](e.classCapacity)
 	// A StoreOp subscription observes every Store call, so the wrap must
 	// cover the engine's own store handle.
 	if e.hasStoreObserver() {
@@ -282,160 +283,35 @@ func (e *Engine) Start(ctx context.Context) error {
 	return nil
 }
 
-// concClass is the in-memory token pool of one concurrency class.
-type concClass struct {
-	capacity int
-	inUse    int
-	waiters  []RunID // FIFO
-}
-
-// throttlePark records a Run parked on a concurrency class and since
-// when, for Status and the ClassWait observer event.
-type throttlePark struct {
-	class string
-	since time.Time
-}
-
-// acquireClass gates an operation on its step's concurrency class.
-// proceed=false parks the Run as throttled (woken FIFO on release). A
-// pending cancellation bypasses the gate so the Run can resolve; bypassed
-// and classless acquisitions hold no token (held=false). waited is how
-// long the Run had been parked before this token grant (zero when it
-// never parked and on token-less proceeds, so a bypassed cancellation
-// never reports a phantom grant).
-//
-// FIFO membership is owned here (and by clearClassWait), never by
-// releaseClass: a woken Run keeps its queue slot until it actually takes
-// a token, is canceled, or turns invalid — and every path that declines
-// a wake passes it on to the next waiter, so a free token can never
-// strand the queue.
+// acquireClass gates an operation on its step's concurrency class via
+// the token pool. proceed=false parks the Run as throttled (woken FIFO
+// on release); a pending cancellation — or a classless step — bypasses
+// the gate so the Run can resolve, holding no token. waited is how long
+// the Run had been parked before an actual token grant. Kicks owed by
+// the pool (declined or cascaded wakes) are dispatched here.
 func (e *Engine) acquireClass(rec *RunRecord, class string) (proceed, held bool, waited time.Duration) {
-	now := e.clock.Now()
-	var kick RunID
-	e.mu.Lock()
-	prior, wasParked := e.throttled[rec.RunID]
-
-	// unpark removes this Run's park state (FIFO slot included) and, if
-	// its class now has spare capacity, names the next waiter to wake —
-	// a declined wake (cancel bypass, class change) is handed on.
-	unpark := func() {
-		if !wasParked {
-			return
-		}
-		delete(e.throttled, rec.RunID)
-		if c := e.classes[prior.class]; c != nil {
-			c.waiters = slices.DeleteFunc(c.waiters, func(w RunID) bool { return w == rec.RunID })
-			kick = nextWaiterLocked(c)
-		}
-	}
-
-	if class == "" || rec.Cancel != nil {
-		unpark()
-		e.mu.Unlock()
-		e.kickWaiter(kick)
-		return true, false, 0
-	}
-	cap, limited := e.classCapacity[class]
-	if !limited {
-		unpark()
-		e.mu.Unlock()
-		e.kickWaiter(kick)
-		return true, false, 0
-	}
-	c := e.classes[class]
-	if c == nil {
-		c = &concClass{capacity: cap}
-		e.classes[class] = c
-	}
-	if c.inUse < c.capacity {
-		unpark()
-		c.inUse++
-		// Cascade: with capacity still free and others queued (two
-		// releases before the head ran), the head alone was woken —
-		// wake the next in line too.
-		kick = nextWaiterLocked(c)
-		e.mu.Unlock()
-		e.kickWaiter(kick)
-		if wasParked {
-			waited = now.Sub(prior.since)
-		}
-		return true, true, waited
-	}
-	if !slices.Contains(c.waiters, rec.RunID) {
-		c.waiters = append(c.waiters, rec.RunID)
-	}
-	since := now
-	if wasParked {
-		since = prior.since // keep the original park time across re-checks
-	}
-	e.throttled[rec.RunID] = throttlePark{class: class, since: since}
-	e.mu.Unlock()
-	return false, false, 0
-}
-
-// nextWaiterLocked names the head waiter to wake when the class has free
-// capacity. Callers hold e.mu.
-func nextWaiterLocked(c *concClass) RunID {
-	if c != nil && c.inUse < c.capacity && len(c.waiters) > 0 {
-		return c.waiters[0]
-	}
-	return ""
-}
-
-// kickWaiter dispatches a waiter named by nextWaiterLocked. Callers must
-// not hold e.mu.
-func (e *Engine) kickWaiter(id RunID) {
-	if id != "" {
+	bypass := class == "" || rec.Cancel != nil
+	granted, held, waited, kicks := e.pool.Acquire(class, rec.RunID, bypass, e.clock.Now())
+	for _, id := range kicks {
 		e.dispatch(id, 0)
 	}
+	return granted, held, waited
 }
 
-// clearClassWaitLocked removes every trace of a Run's concurrency-class
-// park — the throttled entry and its waiters-FIFO slot — and returns the
-// next waiter to wake if the departure exposed free capacity. Callers
-// hold e.mu and must pass the result to kickWaiter after unlocking.
-func (e *Engine) clearClassWaitLocked(id RunID) (kick RunID) {
-	park, ok := e.throttled[id]
-	if !ok {
-		return ""
-	}
-	delete(e.throttled, id)
-	if c := e.classes[park.class]; c != nil {
-		c.waiters = slices.DeleteFunc(c.waiters, func(w RunID) bool { return w == id })
-		kick = nextWaiterLocked(c)
-	}
-	return kick
-}
-
-// clearClassWait is clearClassWaitLocked for paths that resolve a Run
-// without passing through acquireClass (cancellation, invalidity).
-func (e *Engine) clearClassWait(id RunID) {
-	e.mu.Lock()
-	kick := e.clearClassWaitLocked(id)
-	e.mu.Unlock()
-	e.kickWaiter(kick)
-}
-
-// releaseClass returns a token and wakes the head waiter, if any. The
-// waiter keeps its FIFO slot until it actually acquires: if it declines
-// (canceled meanwhile), its unpark hands the wake to the next in line.
+// releaseClass returns a token and wakes the head waiter, if any.
 func (e *Engine) releaseClass(class string) {
-	e.mu.Lock()
-	var next RunID
-	if c := e.classes[class]; c != nil {
-		c.inUse--
-		next = nextWaiterLocked(c)
+	if kick, ok := e.pool.Release(class); ok {
+		e.dispatch(kick, 0)
 	}
-	e.mu.Unlock()
-	e.kickWaiter(next)
 }
 
-// throttledClass reports the class a Run is currently parked on, if any.
-func (e *Engine) throttledClass(id RunID) (string, bool) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	park, ok := e.throttled[id]
-	return park.class, ok
+// clearClassWait removes a Run's concurrency-class park for paths that
+// resolve it without passing through acquireClass (cancellation,
+// invalidity), waking the next waiter if its departure exposed capacity.
+func (e *Engine) clearClassWait(id RunID) {
+	if kick, ok := e.pool.Clear(id); ok {
+		e.dispatch(kick, 0)
+	}
 }
 
 // retentionLoop sweeps terminal Runs older than the policy on a jittered
@@ -1389,9 +1265,8 @@ func (e *Engine) markInvalid(rec *RunRecord, stepID StepID, reason string) {
 		return
 	}
 	e.invalid[rec.RunID] = ie
-	kick := e.clearClassWaitLocked(rec.RunID)
 	e.mu.Unlock()
-	e.kickWaiter(kick)
+	e.clearClassWait(rec.RunID)
 	e.logger.Error("durable: run invalid for current deployment",
 		"run", rec.RunID,
 		"pipeline", rec.PipelineID,

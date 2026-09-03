@@ -374,16 +374,16 @@ func (e *Engine) Stats() EngineStats {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	st := EngineStats{
-		ActiveRuns:    len(e.active),
-		AwaitingRuns:  len(e.awaitParked),
-		ThrottledRuns: len(e.throttled),
-		DelayedRuns:   e.wakes.Len(),
-		InvalidRuns:   len(e.invalid),
+		ActiveRuns:   len(e.active),
+		AwaitingRuns: len(e.awaitParked),
+		DelayedRuns:  e.wakes.Len(),
+		InvalidRuns:  len(e.invalid),
 	}
-	if len(e.classes) > 0 {
-		st.Classes = make(map[string]ClassStats, len(e.classes))
-		for name, c := range e.classes {
-			st.Classes[name] = ClassStats{Capacity: c.capacity, InUse: c.inUse, Waiting: len(c.waiters)}
+	if usage := e.pool.Snapshot(); len(usage) > 0 {
+		st.Classes = make(map[string]ClassStats, len(usage))
+		for name, u := range usage {
+			st.Classes[name] = ClassStats{Capacity: u.Capacity, InUse: u.InUse, Waiting: u.Waiting}
+			st.ThrottledRuns += u.Waiting
 		}
 	}
 	return st

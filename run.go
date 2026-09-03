@@ -133,7 +133,7 @@ func (r Run) Status(ctx context.Context) (Status, error) {
 		} else if rec.AwaitingRunID != "" && rec.Cancel == nil {
 			st.State = RunStateAwaiting
 			st.AwaitingRunID = rec.AwaitingRunID
-		} else if class, ok := e.throttledClass(r.id); ok {
+		} else if class, ok := e.pool.ParkedOn(r.id); ok {
 			st.State = RunStateThrottled
 			st.ThrottledClass = class
 		} else if !rec.NextAttemptAt.IsZero() && e.clock.Now().Before(rec.NextAttemptAt) {

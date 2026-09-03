@@ -1,6 +1,7 @@
 package durable
 
 import (
+	"log/slog"
 	"sync"
 
 	"google.golang.org/protobuf/proto"
@@ -24,8 +25,36 @@ type Invocation struct {
 	cancelRequested bool
 	awaitedRunID    RunID
 
-	mu        sync.Mutex
-	violation error
+	baseLogger *slog.Logger
+
+	mu           sync.Mutex
+	violation    error
+	scopedLogger *slog.Logger
+}
+
+// Logger returns a logger scoped to this invocation: the Engine's
+// WithLogger logger with the canonical keys (pipeline, resource, run,
+// step, phase, attempt) pre-attached, so handler and middleware lines
+// correlate with the Engine's own lifecycle logging. It is built lazily —
+// handlers that never log pay nothing — and is safe for concurrent use.
+func (inv *Invocation) Logger() *slog.Logger {
+	inv.mu.Lock()
+	defer inv.mu.Unlock()
+	if inv.scopedLogger == nil {
+		base := inv.baseLogger
+		if base == nil {
+			base = slog.Default()
+		}
+		inv.scopedLogger = base.With(
+			"pipeline", string(inv.pipelineID),
+			"resource", string(inv.resourceID),
+			"run", string(inv.runID),
+			"step", string(inv.stepID),
+			"phase", inv.phase.String(),
+			"attempt", inv.attempt,
+		)
+	}
+	return inv.scopedLogger
 }
 
 // AwaitedRunID reports the Run the previous attempt of this operation

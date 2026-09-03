@@ -11,4 +11,14 @@
 // against the currently registered pipeline definition using monotonic
 // forward and unwind frontiers. See the spec/ directory for the full
 // specification.
+//
+// # Logging
+//
+// The Engine logs lifecycle events through the log/slog logger given to
+// WithLogger: per-attempt progress at Debug, once-per-run milestones at
+// Info, permanent unwind failures at Warn, and anomalies at Error, all
+// carrying the canonical keys pipeline, resource, run, step, phase,
+// attempt, and error. Handlers log through Invocation.Logger, which
+// pre-attaches the same keys. Metrics and tracing hooks are future work;
+// per-attempt tracing spans can be built today with WithMiddleware.
 package durable

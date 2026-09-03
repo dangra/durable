@@ -94,8 +94,10 @@ func (s *Signals[K]) Disarm(k K) {
 	s.mu.Unlock()
 }
 
-// Fire wakes the key's armed waiter without blocking; unarmed keys and
-// repeat fires are no-ops.
+// Fire wakes the key's armed waiter without blocking. Firing an unarmed
+// key is a no-op, and fires while the single buffered slot is still
+// undelivered coalesce into it; once the waiter has drained the slot, a
+// later Fire delivers again.
 func (s *Signals[K]) Fire(k K) {
 	s.mu.Lock()
 	ch := s.armed[k]

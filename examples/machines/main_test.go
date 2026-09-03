@@ -220,9 +220,15 @@ func TestExclusionGroup(t *testing.T) {
 		t.Fatalf("ActiveRun = %s ok=%v err=%v, want %s", active.ID(), ok, err, run.ID())
 	}
 
-	// A different machine is unaffected.
-	if _, created, err := decommission.Schedule(context.Background(), "machine-10"); err != nil || !created {
+	// A different machine is unaffected. Wait for it: the final
+	// released-order assertion needs machine-10's release to precede
+	// machine-9's deterministically.
+	otherRun, created, err := decommission.Schedule(context.Background(), "machine-10")
+	if err != nil || !created {
 		t.Fatalf("other-machine decommission = created=%v err=%v", created, err)
+	}
+	if res, err := otherRun.Wait(context.Background()); err != nil || !res.Succeeded() {
+		t.Fatalf("other-machine Wait = %+v, %v", res, err)
 	}
 
 	// Once provisioning finishes, the group slot frees.

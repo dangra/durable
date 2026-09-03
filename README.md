@@ -111,3 +111,7 @@ go test ./...
 `buf generate` runs `protoc-gen-go` (via `go tool`, version-locked to
 go.mod's protobuf runtime) and `protoc-gen-durable` (via `go run`) — no
 plugin installs needed.
+
+## License
+
+[Apache-2.0](LICENSE)

@@ -20,7 +20,15 @@
 // Lifecycle lines carry the canonical keys pipeline, resource, and run;
 // operation-scoped lines add step, phase, and attempt; failure causes
 // appear under error. Handlers log through Invocation.Logger, which
-// pre-attaches the same canonical keys. Metrics and tracing hooks are
-// future work; per-attempt tracing spans can be built today with
-// WithMiddleware.
+// pre-attaches the same canonical keys.
+//
+// # Metrics
+//
+// WithObserver installs typed lifecycle callbacks (attempts, terminal
+// outcomes, unwind starts, wake and throttle waits, store operations)
+// for counter- and histogram-style metrics; Engine.Stats returns a
+// point-in-time occupancy snapshot for poll-style gauges. Adapters for
+// specific metrics systems belong in application code — see Observer.
+// Tracing hooks are future work; per-attempt tracing spans can be built
+// today with WithMiddleware.
 package durable

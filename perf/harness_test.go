@@ -2,9 +2,11 @@
 // workload scenarios modeled on the flyd machine-orchestration use case.
 //
 // Metrics come in two tiers. Deterministic counters gate tightly in CI:
-// transitions/run (logical store writes, exactly deterministic, gated
-// two-sided at 0.1%) and the near-deterministic byte and allocation
-// metrics (diskB/*, B/op, allocs/op, gated at 10%). Wall-clock metrics
+// transitions/run (logical store writes observed via a durable.Observer,
+// exactly deterministic, gated two-sided at 0.1%) and the
+// near-deterministic byte and allocation metrics (diskB/*, B/op,
+// allocs/op, gated at 10%). Every scenario runs with the observer
+// installed, so observer-path overhead is itself gated. Wall-clock metrics
 // (p50-ms, p99-ms, runs/sec, ns/op) are gated loosely at 25% on the best
 // of the -count samples, since shared-runner noise only adds time; the
 // internal/perfcompare tool applies the per-metric-class thresholds.
@@ -57,52 +59,25 @@ type env struct {
 	pipe   *durable.Pipeline
 }
 
-// countingStore counts logical write calls. Unlike bbolt-level
-// transaction/page counts — which the adaptive group commit makes
-// timing-dependent — these are exactly deterministic per scenario, so
-// they gate at effectively zero tolerance. Every Store method is
-// implemented explicitly, no embedding: a write method added to the
-// interface later breaks this build instead of slipping through
-// uncounted.
-type countingStore struct {
-	inner  durable.Store
-	writes atomic.Int64
+// countingObserver counts logical write calls through the StoreOp
+// observer. Unlike bbolt-level transaction/page counts — which the
+// adaptive group commit makes timing-dependent — these are exactly
+// deterministic per scenario, so they gate at effectively zero
+// tolerance. Installing it in every scenario also makes observer-path
+// overhead part of every gated metric: a regression in the emit path
+// shows up in the wall-clock and allocation gates.
+func countingObserver(writes *atomic.Int64) durable.Observer {
+	return durable.Observer{
+		StoreOp: func(ev durable.StoreOpEvent) {
+			switch ev.Op {
+			case "CreateRun", "ApplyTransition", "RequestCancel":
+				writes.Add(1)
+			}
+		},
+		// One logical delete per reaped run.
+		RunsReaped: func(count int) { writes.Add(int64(count)) },
+	}
 }
-
-func (c *countingStore) CreateRun(ctx context.Context, rec *durable.RunRecord) (*durable.RunRecord, bool, error) {
-	c.writes.Add(1)
-	return c.inner.CreateRun(ctx, rec)
-}
-
-func (c *countingStore) ApplyTransition(ctx context.Context, id durable.RunID, t durable.Transition) error {
-	c.writes.Add(1)
-	return c.inner.ApplyTransition(ctx, id, t)
-}
-
-func (c *countingStore) RequestCancel(ctx context.Context, id durable.RunID, req durable.CancelRequest) (bool, error) {
-	c.writes.Add(1)
-	return c.inner.RequestCancel(ctx, id, req)
-}
-
-func (c *countingStore) ReapTerminal(ctx context.Context, before time.Time, limit int) (int, error) {
-	n, err := c.inner.ReapTerminal(ctx, before, limit)
-	c.writes.Add(int64(n)) // one logical delete per reaped run
-	return n, err
-}
-
-func (c *countingStore) GetRun(ctx context.Context, id durable.RunID) (*durable.RunRecord, error) {
-	return c.inner.GetRun(ctx, id)
-}
-
-func (c *countingStore) ListNonterminal(ctx context.Context) ([]*durable.RunRecord, error) {
-	return c.inner.ListNonterminal(ctx)
-}
-
-func (c *countingStore) ListRuns(ctx context.Context, pipeline durable.PipelineID, resource durable.ResourceID) ([]*durable.RunRecord, error) {
-	return c.inner.ListRuns(ctx, pipeline, resource)
-}
-
-func (c *countingStore) Close() error { return c.inner.Close() }
 
 // newEnv builds a store and engine with the given definition bound, not
 // yet started.
@@ -112,7 +87,7 @@ func newEnv(b *testing.B, def *durable.Definition, opts ...durable.Option) *env 
 	if err != nil {
 		b.Fatal(err)
 	}
-	counting := &countingStore{inner: store}
+	writes := new(atomic.Int64)
 	opts = append([]durable.Option{
 		durable.WithConcurrency(32),
 		durable.WithRetryPolicy(durable.RetryPolicy{
@@ -120,8 +95,9 @@ func newEnv(b *testing.B, def *durable.Definition, opts ...durable.Option) *env 
 		}),
 		durable.WithRecoveryBackoff(0),
 		durable.WithLogger(discardLogger()),
+		durable.WithObserver(countingObserver(writes)),
 	}, opts...)
-	e := durable.NewEngine(counting, opts...)
+	e := durable.NewEngine(store, opts...)
 	pipe, err := def.Bind(e)
 	if err != nil {
 		b.Fatal(err)
@@ -132,7 +108,7 @@ func newEnv(b *testing.B, def *durable.Definition, opts ...durable.Option) *env 
 		_ = e.Stop(ctx)
 		_ = store.Close()
 	})
-	return &env{store: store, writes: &counting.writes, engine: e, pipe: pipe}
+	return &env{store: store, writes: writes, engine: e, pipe: pipe}
 }
 
 func (v *env) start(b *testing.B) {

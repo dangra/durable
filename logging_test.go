@@ -106,15 +106,16 @@ func TestLoggingLifecycle(t *testing.T) {
 	}
 
 	logs := buf.String()
+	id := string(run.ID())
 	mustLog(t, logs,
-		`msg="durable: run scheduled"`,
-		`msg="durable: operation failed; will retry" run=`+string(run.ID())+` step=flaky/v1 phase=forward attempt=1 error="transient boom" next_attempt_at=`,
-		`msg="durable: operation succeeded" run=`+string(run.ID())+` step=flaky/v1 phase=forward attempt=2`,
-		`msg="durable: run failed; unwinding" pipeline=logging resource=res-1 run=`+string(run.ID())+` step=explode/v1 attempt=1 error="permanent boom"`,
-		`level=WARN msg="durable: unwind step failed permanently" pipeline=logging resource=res-1 run=`+string(run.ID())+` step=flaky/v1 attempt=1 error="cleanup broken"`,
-		`level=INFO msg="durable: run complete" pipeline=logging resource=res-1 run=`+string(run.ID())+` outcome=failure elapsed=`,
+		`level=DEBUG msg="durable: run scheduled" pipeline=logging resource=res-1 run=`+id,
+		`level=DEBUG msg="durable: operation failed; will retry" pipeline=logging resource=res-1 run=`+id+` step=flaky/v1 phase=forward attempt=1 error="transient boom" next_attempt_at=`,
+		`level=DEBUG msg="durable: operation succeeded" pipeline=logging resource=res-1 run=`+id+` step=flaky/v1 phase=forward attempt=2`,
+		`level=INFO msg="durable: run failed; unwinding" pipeline=logging resource=res-1 run=`+id+` step=explode/v1 attempt=1 error="permanent boom"`,
+		`level=WARN msg="durable: unwind step failed permanently" pipeline=logging resource=res-1 run=`+id+` step=flaky/v1 attempt=1 error="cleanup broken"`,
+		`level=INFO msg="durable: run complete" pipeline=logging resource=res-1 run=`+id+` outcome=failure elapsed=`,
 		// Invocation.Logger pre-attaches the canonical keys.
-		`msg="hello from handler" pipeline=logging resource=res-1 run=`+string(run.ID())+` step=flaky/v1 phase=forward attempt=2`,
+		`level=INFO msg="hello from handler" pipeline=logging resource=res-1 run=`+id+` step=flaky/v1 phase=forward attempt=2`,
 	)
 }
 
@@ -147,11 +148,11 @@ func TestLoggingCancel(t *testing.T) {
 	}
 
 	logs := buf.String()
+	id := string(run.ID())
 	mustLog(t, logs,
-		`msg="durable: run scheduled"`,
-		`start_at=`,
-		`msg="durable: cancel requested" run=`+string(run.ID())+` cause="operator request"`,
-		`msg="durable: cancellation accepted; unwinding" pipeline=logging-cancel resource=res-1 run=`+string(run.ID())+` cause="operator request"`,
-		`msg="durable: run complete"`,
+		`level=DEBUG msg="durable: run scheduled" pipeline=logging-cancel resource=res-1 run=`+id+` start_at=`,
+		`level=DEBUG msg="durable: cancel requested" run=`+id+` cause="operator request"`,
+		`level=INFO msg="durable: cancellation accepted; unwinding" pipeline=logging-cancel resource=res-1 run=`+id+` cause="operator request"`,
+		`level=INFO msg="durable: run complete" pipeline=logging-cancel resource=res-1 run=`+id+` outcome=failure`,
 	)
 }

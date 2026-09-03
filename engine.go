@@ -73,9 +73,11 @@ func WithClock(c Clock) Option {
 // awaiting, throttled) at Debug; once-per-run milestones (terminal
 // outcome, unwind start, cancellation accepted) at Info; permanent unwind
 // failures at Warn; and anomalies (handler panics, store errors, invalid
-// runs) at Error. Lines carry the canonical keys pipeline, resource, run,
-// step, phase, attempt, and error where applicable — the same keys
-// Invocation.Logger pre-attaches for handler code.
+// runs) at Error. Lifecycle lines carry the canonical keys pipeline,
+// resource, and run; operation-scoped lines add step, phase, and attempt;
+// failure causes appear under error. Anomaly diagnostics carry at least
+// run. Invocation.Logger pre-attaches the same canonical keys for handler
+// code.
 func WithLogger(l *slog.Logger) Option {
 	return func(e *Engine) {
 		if l != nil {
@@ -781,6 +783,7 @@ func (e *Engine) parkAwait(rec *RunRecord, stepID StepID, attempts uint64, targe
 	}
 	if e.debugLog() {
 		e.logger.Debug("durable: run awaiting",
+			"pipeline", string(rec.PipelineID), "resource", string(rec.ResourceID),
 			"run", string(rec.RunID), "step", string(stepID), "target", string(target))
 	}
 	return true, 0, false
@@ -875,6 +878,7 @@ func (e *Engine) runForward(rec *RunRecord, def *Definition, stepID StepID) (don
 		}
 		if e.debugLog() {
 			e.logger.Debug("durable: operation succeeded",
+				"pipeline", string(rec.PipelineID), "resource", string(rec.ResourceID),
 				"run", string(rec.RunID), "step", string(stepID), "phase", PhaseForward.String(),
 				"attempt", sr.ForwardAttempts, "elapsed", now.Sub(opStart))
 		}
@@ -910,6 +914,7 @@ func (e *Engine) runForward(rec *RunRecord, def *Definition, stepID StepID) (don
 		}
 		if e.debugLog() {
 			e.logger.Debug("durable: operation failed; will retry",
+				"pipeline", string(rec.PipelineID), "resource", string(rec.ResourceID),
 				"run", string(rec.RunID), "step", string(stepID), "phase", PhaseForward.String(),
 				"attempt", sr.ForwardAttempts, "error", err, "next_attempt_at", rec.NextAttemptAt)
 		}
@@ -961,6 +966,7 @@ func (e *Engine) runUnwind(rec *RunRecord, def *Definition, stepID StepID) (done
 		}
 		if e.debugLog() {
 			e.logger.Debug("durable: operation succeeded",
+				"pipeline", string(rec.PipelineID), "resource", string(rec.ResourceID),
 				"run", string(rec.RunID), "step", string(stepID), "phase", PhaseUnwind.String(),
 				"attempt", sr.UnwindAttempts, "elapsed", now.Sub(opStart))
 		}
@@ -998,6 +1004,7 @@ func (e *Engine) runUnwind(rec *RunRecord, def *Definition, stepID StepID) (done
 		}
 		if e.debugLog() {
 			e.logger.Debug("durable: operation failed; will retry",
+				"pipeline", string(rec.PipelineID), "resource", string(rec.ResourceID),
 				"run", string(rec.RunID), "step", string(stepID), "phase", PhaseUnwind.String(),
 				"attempt", sr.UnwindAttempts, "error", err, "next_attempt_at", rec.NextAttemptAt)
 		}

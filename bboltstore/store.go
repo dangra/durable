@@ -448,3 +448,22 @@ func (s *Store) ListRuns(_ context.Context, pipeline durable.PipelineID, resourc
 }
 
 func (s *Store) Close() error { return s.db.Close() }
+
+// StoreStats are cumulative write-side counters for performance
+// measurement, expressed without exposing the underlying bbolt types.
+type StoreStats struct {
+	// TxPageAllocBytes is the total bytes of pages allocated by write
+	// transactions — the write-amplification measure.
+	TxPageAllocBytes int64
+	// TxWrites is the number of write operations performed.
+	TxWrites int64
+}
+
+// Stats returns cumulative counters since Open.
+func (s *Store) Stats() StoreStats {
+	st := s.db.Stats()
+	return StoreStats{
+		TxPageAllocBytes: st.TxStats.GetPageAlloc(),
+		TxWrites:         st.TxStats.GetWrite(),
+	}
+}

@@ -114,3 +114,48 @@ jobs:
             echo "::error::generated code is out of date; run 'buf generate' and commit the result"
             exit 1
           fi
+
+  perf:
+    name: Performance regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history so the base-branch merge-base can be checked out.
+          fetch-depth: 0
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Run suite (head)
+        run: go test -run xxx -bench . -benchtime 1x -count 3 -benchmem ./perf/ | tee /tmp/perf-head.txt
+      - name: Run suite (base)
+        if: github.event_name == 'pull_request'
+        run: |
+          base=$(git merge-base "origin/${{ github.base_ref }}" HEAD)
+          git worktree add /tmp/base-tree "$base"
+          if [ -d /tmp/base-tree/perf ]; then
+            (cd /tmp/base-tree && go test -run xxx -bench . -benchtime 1x -count 3 -benchmem ./perf/ | tee /tmp/perf-base.txt)
+          else
+            echo "no perf suite on base commit; skipping comparison"
+          fi
+      - name: Gate against base
+        if: github.event_name == 'pull_request'
+        run: |
+          if [ ! -f /tmp/perf-base.txt ]; then
+            echo "### Performance suite: no baseline on base branch" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          # Deterministic counters gate at 5-10%, wall clock at 25%; the
+          # thresholds live in internal/perfcompare.
+          go run ./internal/perfcompare /tmp/perf-base.txt /tmp/perf-head.txt | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Report (master)
+        if: github.event_name == 'push'
+        run: go run ./internal/perfcompare -report /tmp/perf-head.txt | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Upload results
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: perf-${{ github.sha }}
+          path: /tmp/perf-head.txt

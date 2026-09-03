@@ -8,7 +8,7 @@ import (
 )
 
 // Observer receives engine lifecycle events for metrics. Nil fields are
-// skipped; installing an empty Observer costs nothing. Use WithObserver
+// skipped at the cost of a nil check per event. Use WithObserver
 // (repeatable — observers compose) to install one.
 //
 // Callbacks run synchronously on engine goroutines immediately after the
@@ -324,7 +324,12 @@ func (s *observedStore) ListRuns(ctx context.Context, pipeline PipelineID, resou
 	return recs, err
 }
 
-func (s *observedStore) Close() error { return s.inner.Close() }
+func (s *observedStore) Close() error {
+	start := s.engine.clock.Now()
+	err := s.inner.Close()
+	s.op("Close", start, err)
+	return err
+}
 
 // ClassStats is the point-in-time state of one configured concurrency
 // class.

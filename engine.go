@@ -301,10 +301,13 @@ func (e *Engine) acquireClass(rec *RunRecord, class string) (proceed, held bool,
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	prior, wasParked := e.throttled[rec.RunID]
-	delete(e.throttled, rec.RunID)
 	if wasParked {
 		waited = now.Sub(prior.since)
 	}
+	// Fully unpark, waiters-FIFO entry included: a bypass (cancellation)
+	// or a different class must not leave a stale entry behind to eat a
+	// future wake or inflate Stats. The park path below re-registers.
+	e.clearClassWaitLocked(rec.RunID)
 	if class == "" || rec.Cancel != nil {
 		return true, false, waited
 	}
@@ -325,11 +328,30 @@ func (e *Engine) acquireClass(rec *RunRecord, class string) (proceed, held bool,
 	if wasParked {
 		since = prior.since // keep the original park time across re-checks
 	}
-	if !slices.Contains(c.waiters, rec.RunID) {
-		c.waiters = append(c.waiters, rec.RunID)
-	}
+	c.waiters = append(c.waiters, rec.RunID)
 	e.throttled[rec.RunID] = throttlePark{class: class, since: since}
 	return false, false, 0
+}
+
+// clearClassWaitLocked removes every trace of a Run's concurrency-class
+// park: the throttled entry and its waiters-FIFO slot. Callers hold e.mu.
+func (e *Engine) clearClassWaitLocked(id RunID) {
+	park, ok := e.throttled[id]
+	if !ok {
+		return
+	}
+	delete(e.throttled, id)
+	if c := e.classes[park.class]; c != nil {
+		c.waiters = slices.DeleteFunc(c.waiters, func(w RunID) bool { return w == id })
+	}
+}
+
+// clearClassWait is clearClassWaitLocked for paths that resolve a Run
+// without passing through acquireClass (cancellation, invalidity).
+func (e *Engine) clearClassWait(id RunID) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.clearClassWaitLocked(id)
 }
 
 // releaseClass returns a token and wakes the next throttled Run, if any.
@@ -721,6 +743,10 @@ func (e *Engine) applyCancel(rec *RunRecord) bool {
 	if !e.apply(rec, Transition{Cursor: idleCursor(rec), RootFailure: rec.RootFailure}) {
 		return false
 	}
+	// A canceled Run may have been parked on a class without ever
+	// re-entering acquireClass; drop its park state so Stats stays
+	// accurate and no stale FIFO entry eats a future wake.
+	e.clearClassWait(rec.RunID)
 	e.logger.Info("durable: cancellation accepted; unwinding",
 		"pipeline", string(rec.PipelineID), "resource", string(rec.ResourceID),
 		"run", string(rec.RunID), "cause", cause)
@@ -760,6 +786,14 @@ func clearLastError(rec *RunRecord) {
 // cancellation bypasses the park so the operation can resolve.
 func (e *Engine) awaitGate(rec *RunRecord) bool {
 	if rec.AwaitingRunID == "" || rec.Cancel != nil {
+		if rec.AwaitingRunID != "" {
+			// A cancellation is bypassing an existing park: the Run
+			// proceeds now, so it is no longer awaiting. The stale
+			// watcher goroutine sees the missing entry and stays silent.
+			e.mu.Lock()
+			delete(e.awaitParked, rec.RunID)
+			e.mu.Unlock()
+		}
 		return false
 	}
 	target := rec.AwaitingRunID
@@ -797,11 +831,16 @@ func (e *Engine) awaitGate(rec *RunRecord) bool {
 		case <-ch:
 			woke := e.clock.Now()
 			e.mu.Lock()
+			_, present := e.awaitParked[parked]
 			delete(e.awaitParked, parked)
 			e.mu.Unlock()
-			e.emitWaiterWoken(WakeEvent{
-				PipelineID: pipeline, ResourceID: resource,
-				RunID: parked, Target: target, Duration: woke.Sub(since)})
+			// A cancellation bypass may have already unparked the Run;
+			// only a still-current park is a wake worth reporting.
+			if present {
+				e.emitWaiterWoken(WakeEvent{
+					PipelineID: pipeline, ResourceID: resource,
+					RunID: parked, Target: target, Duration: woke.Sub(since)})
+			}
 			e.dispatch(parked, 0)
 		case <-e.baseCtx.Done():
 			e.mu.Lock()
@@ -1293,6 +1332,7 @@ func (e *Engine) markInvalid(rec *RunRecord, stepID StepID, reason string) {
 	ie := &InvalidRunError{RunID: rec.RunID, PipelineID: rec.PipelineID, Reason: reason}
 	e.mu.Lock()
 	e.invalid[rec.RunID] = ie
+	e.clearClassWaitLocked(rec.RunID)
 	e.mu.Unlock()
 	e.logger.Error("durable: run invalid for current deployment",
 		"run", rec.RunID,

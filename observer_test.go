@@ -363,6 +363,152 @@ func TestObserverClassWaitAndStats(t *testing.T) {
 	})
 }
 
+// TestObserverCancelThrottledRun asserts canceling a throttled Run clears
+// its park state — Stats drops to zero, and the stale FIFO slot does not
+// eat the wake a later waiter needs.
+func TestObserverCancelThrottledRun(t *testing.T) {
+	entered := make(chan struct{}, 2)
+	release := make(chan struct{})
+	def := durable.NewDefinition(durable.DefinitionConfig{
+		ID: "observed-cancel-throttle",
+		Steps: []durable.StepConfig{{
+			ID:               "gated/v1",
+			ConcurrencyClass: "boot",
+			Run: func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+				entered <- struct{}{}
+				select {
+				case <-release:
+					return nil, nil
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
+			},
+		}},
+	})
+	log := &eventLog{}
+	e, pipes := startObservedEngine(t, log, []*durable.Definition{def}, durable.WithConcurrencyClass("boot", 1))
+	pipe := pipes[0]
+
+	holder, _, err := pipe.Schedule(context.Background(), "res-hold", nil)
+	if err != nil {
+		t.Fatalf("Schedule holder: %v", err)
+	}
+	<-entered // holder owns the only token
+	doomed, _, err := pipe.Schedule(context.Background(), "res-doomed", nil)
+	if err != nil {
+		t.Fatalf("Schedule doomed: %v", err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for e.Stats().Classes["boot"].Waiting != 1 {
+		if time.Now().After(deadline) {
+			t.Fatalf("doomed never queued: %+v", e.Stats())
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if err := doomed.Cancel(context.Background(), "superseded"); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	if res, err := doomed.Wait(context.Background()); err != nil || !res.Canceled() {
+		t.Fatalf("doomed Wait = %+v, %v", res, err)
+	}
+	if st := e.Stats(); st.ThrottledRuns != 0 || st.Classes["boot"].Waiting != 0 {
+		t.Errorf("park state leaked after cancel: %+v", st)
+	}
+
+	// The token's next release must reach a real waiter, not a stale slot.
+	waiter, _, err := pipe.Schedule(context.Background(), "res-wait", nil)
+	if err != nil {
+		t.Fatalf("Schedule waiter: %v", err)
+	}
+	for e.Stats().Classes["boot"].Waiting != 1 {
+		if time.Now().After(deadline) {
+			t.Fatalf("waiter never queued: %+v", e.Stats())
+		}
+		time.Sleep(time.Millisecond)
+	}
+	close(release)
+	<-entered // the waiter got the token
+	for _, r := range []durable.Run{holder, waiter} {
+		if res, err := r.Wait(context.Background()); err != nil || res.Outcome != durable.OutcomeSuccess {
+			t.Fatalf("Wait = %+v, %v", res, err)
+		}
+	}
+}
+
+// TestObserverCancelAwaitingRun asserts canceling a parked waiter clears
+// AwaitingRuns immediately and suppresses the stale WaiterWoken event
+// when the abandoned target later completes.
+func TestObserverCancelAwaitingRun(t *testing.T) {
+	release := make(chan struct{})
+	target := durable.NewDefinition(durable.DefinitionConfig{
+		ID: "cancel-await-target",
+		Steps: []durable.StepConfig{
+			stateless("hold/v1", func(ctx context.Context, inv *durable.Invocation) error {
+				select {
+				case <-release:
+					return nil
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}),
+		},
+	})
+	var targetID durable.RunID
+	waiter := durable.NewDefinition(durable.DefinitionConfig{
+		ID: "cancel-await-waiter",
+		Steps: []durable.StepConfig{
+			stateless("wait/v1", func(ctx context.Context, inv *durable.Invocation) error {
+				if _, ok := inv.AwaitedRunID(); ok {
+					return nil
+				}
+				return durable.AwaitRun(targetID)
+			}),
+		},
+	})
+	log := &eventLog{}
+	e, pipes := startObservedEngine(t, log, []*durable.Definition{target, waiter})
+	targetPipe, waiterPipe := pipes[0], pipes[1]
+
+	trun, _, err := targetPipe.Schedule(context.Background(), "res-t", nil)
+	if err != nil {
+		t.Fatalf("Schedule target: %v", err)
+	}
+	targetID = trun.ID()
+	wrun, _, err := waiterPipe.Schedule(context.Background(), "res-w", nil)
+	if err != nil {
+		t.Fatalf("Schedule waiter: %v", err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for e.Stats().AwaitingRuns == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("waiter never parked")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if err := wrun.Cancel(context.Background(), "abandoned"); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	if res, err := wrun.Wait(context.Background()); err != nil || !res.Canceled() {
+		t.Fatalf("waiter Wait = %+v, %v", res, err)
+	}
+	if st := e.Stats(); st.AwaitingRuns != 0 {
+		t.Errorf("AwaitingRuns leaked after cancel: %+v", st)
+	}
+
+	close(release)
+	if res, err := trun.Wait(context.Background()); err != nil || res.Outcome != durable.OutcomeSuccess {
+		t.Fatalf("target Wait = %+v, %v", res, err)
+	}
+	// Give the stale watcher goroutine a beat, then assert it stayed
+	// silent: the canceled Run was not woken by the target completing.
+	time.Sleep(50 * time.Millisecond)
+	log.locked(func() {
+		if len(log.wakes) != 0 {
+			t.Errorf("stale watcher emitted: %+v", log.wakes)
+		}
+	})
+}
+
 // TestObserverPanicIsolated asserts a panicking callback neither affects
 // the Run nor later observers.
 func TestObserverPanicIsolated(t *testing.T) {

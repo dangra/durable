@@ -5,7 +5,8 @@
 // transitions/run (logical store writes, exactly deterministic, gated
 // two-sided at 0.1%) and the near-deterministic byte and allocation
 // metrics (diskB/*, B/op, allocs/op, gated at 10%). Wall-clock metrics
-// (p50-ms, p99-ms, runs/sec, ns/op) are gated loosely at 25%; the
+// (p50-ms, p99-ms, runs/sec, ns/op) are gated loosely at 25% on the best
+// of the -count samples, since shared-runner noise only adds time; the
 // internal/perfcompare tool applies the per-metric-class thresholds.
 //
 // Every scenario is write-deterministic: retries are bounded by attempt

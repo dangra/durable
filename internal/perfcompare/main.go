@@ -30,16 +30,21 @@ type class struct {
 
 func classify(unit string) class {
 	switch unit {
-	// Deterministic store counters: scheduling-independent, gate tightly.
-	case "diskB/run", "diskB/attempt", "txwrites/run":
-		return class{threshold: 0.05}
+	// Logical store-write counts: exactly deterministic per scenario —
+	// any change is a real engine-behavior change.
+	case "transitions/run", "transitions/cycle":
+		return class{threshold: 0.001}
+	// Physical disk bytes: near-deterministic, but the adaptive group
+	// commit makes page accounting mildly timing-dependent.
+	case "diskB/run", "diskB/attempt", "diskB/cycle":
+		return class{threshold: 0.10}
 	// Allocation counters: near-deterministic, small timing wiggle.
 	case "B/op", "allocs/op":
 		return class{threshold: 0.10}
 	// Wall clock: noisy on shared runners, gate loosely.
-	case "ns/op", "p50-ms", "p99-ms", "start-ms":
+	case "ns/op", "p50-ms", "p99-ms", "start-ms", "wake-p50-ms", "wake-p99-ms":
 		return class{threshold: 0.25}
-	case "runs/sec", "unwinds/sec":
+	case "runs/sec", "unwinds/sec", "cycles/sec":
 		return class{threshold: 0.25, lowerIsBad: true}
 	default:
 		return class{informative: true}
@@ -59,7 +64,11 @@ func parse(path string) (samples, error) {
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 1024*1024), 1024*1024)
 	for sc.Scan() {
-		fields := strings.Fields(sc.Text())
+		line := sc.Text()
+		if name, ok := strings.CutPrefix(strings.TrimSpace(line), "--- FAIL: "); ok {
+			return nil, fmt.Errorf("benchmark failed in %s: %s", path, name)
+		}
+		fields := strings.Fields(line)
 		if len(fields) < 4 || !strings.HasPrefix(fields[0], "Benchmark") {
 			continue
 		}
@@ -164,6 +173,14 @@ func main() {
 				regressions++
 			}
 			fmt.Printf("| %s | %s | %.4g | %.4g | %+.1f%% | %s |\n", b, u, o, h, delta*100, verdict)
+		}
+	}
+	// A benchmark that reported in base but vanished from head is lost
+	// coverage, not a pass.
+	for _, bname := range sortedKeys(base) {
+		if _, ok := head[bname]; !ok {
+			fmt.Printf("| %s | — | — | — | — | **MISSING from head** |\n", bname)
+			regressions++
 		}
 	}
 	if regressions > 0 {

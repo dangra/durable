@@ -27,7 +27,7 @@ func BenchmarkBootBurst(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		lat = append(lat, runPopulation(b, v.pipe, runs, fmt.Sprintf("boot-%d", i))...)
 	}
-	report(b, v.store.Stats(), runs, lat, time.Since(start))
+	report(b, v, runs, lat, time.Since(start))
 }
 
 // BenchmarkRetryStorm is the degraded-host case: a population of runs
@@ -60,12 +60,11 @@ func BenchmarkRetryStorm(b *testing.B) {
 	}
 	elapsed := time.Since(start)
 
-	stats := store.env.store.Stats()
 	total := stormRuns + healthyRuns
 	// Per-attempt cost across the storm: the cursor-write efficiency gate.
 	attempts := float64(b.N) * float64(stormRuns*(numSteps+retriesPerRun)+healthyRuns*numSteps)
-	b.ReportMetric(float64(stats.TxPageAllocBytes)/attempts, "diskB/attempt")
-	report(b, stats, total, healthyLat, elapsed)
+	b.ReportMetric(float64(store.env.store.Stats().TxPageAllocBytes)/attempts, "diskB/attempt")
+	report(b, store.env, total, healthyLat, elapsed)
 	// report's p50/p99 above are healthy-run latencies: isolation.
 }
 
@@ -108,7 +107,7 @@ func BenchmarkUnwindWave(b *testing.B) {
 	elapsed := time.Since(start)
 	unwinds := float64(b.N) * float64(runs*(numSteps-1))
 	b.ReportMetric(unwinds/elapsed.Seconds(), "unwinds/sec")
-	report(b, v.store.Stats(), runs, lat, elapsed)
+	report(b, v, runs, lat, elapsed)
 }
 
 // BenchmarkRecovery is the engine-restart case: Start over a store
@@ -125,6 +124,7 @@ func BenchmarkRecovery(b *testing.B) {
 		v := newEnv(b, def)
 		ids := seedPopulation(b, v, nonterminal, terminal)
 		before := v.store.Stats()
+		v.resetWrites()
 		b.StartTimer()
 
 		startBegin := time.Now()
@@ -147,7 +147,7 @@ func BenchmarkRecovery(b *testing.B) {
 		b.ReportMetric(ms(startDur), "start-ms")
 		b.ReportMetric(float64(nonterminal)/drain.Seconds(), "runs/sec")
 		b.ReportMetric(float64(stats.TxPageAllocBytes-before.TxPageAllocBytes)/float64(nonterminal), "diskB/run")
-		b.ReportMetric(float64(stats.TxWrites-before.TxWrites)/float64(nonterminal), "txwrites/run")
+		b.ReportMetric(float64(v.writes.Load())/float64(nonterminal), "transitions/run")
 		b.StartTimer()
 	}
 }

@@ -9,6 +9,15 @@ on:
 permissions:
   contents: read
 
+# An explicit 'bash' shell opts every run step into -o pipefail (the
+# implicit default is plain 'bash -e', without it): several steps pipe
+# through tee, and the pipe must not mask the real command's exit — a
+# failing perf suite or a regressing perfcompare gate would otherwise
+# report tee's success.
+defaults:
+  run:
+    shell: bash
+
 # Supersede stale runs of the same ref; never cancel master pushes.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -148,8 +157,10 @@ jobs:
             echo "### Performance suite: no baseline on base branch" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          # Deterministic counters gate at 5-10%, wall clock at 25%; the
-          # thresholds live in internal/perfcompare.
+          # transitions/* gate two-sided at 0.1% (exactly deterministic),
+          # disk bytes and allocations at 10%, wall clock at 25%; the
+          # thresholds live in internal/perfcompare, which also fails on
+          # recorded test failures and on gated metrics missing from head.
           go run ./internal/perfcompare /tmp/perf-base.txt /tmp/perf-head.txt | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Report (master)
         if: github.event_name == 'push'

@@ -1,15 +1,15 @@
 // Package perf holds the performance regression suite: engine-level
 // workload scenarios modeled on the flyd machine-orchestration use case.
 //
-// Metrics come in two tiers. Deterministic counters (diskB/run,
-// txwrites/run, and the allocation metrics from -benchmem) are gated in CI
-// with tight thresholds — they are scheduling-independent, so they compare
-// reliably even on noisy shared runners. Wall-clock metrics (p50-ms,
-// p99-ms, runs/sec, ns/op) are gated loosely; the internal/perfcompare
-// tool applies per-metric thresholds.
+// Metrics come in two tiers. Deterministic counters gate tightly in CI:
+// transitions/run (logical store writes, exactly deterministic, gated
+// two-sided at 0.1%) and the near-deterministic byte and allocation
+// metrics (diskB/*, B/op, allocs/op, gated at 10%). Wall-clock metrics
+// (p50-ms, p99-ms, runs/sec, ns/op) are gated loosely at 25%; the
+// internal/perfcompare tool applies the per-metric-class thresholds.
 //
 // Every scenario is write-deterministic: retries are bounded by attempt
-// number, never by timing, so the durable write counts are identical
+// number, never by timing, so the logical write counts are identical
 // across runs and machines.
 package perf
 
@@ -56,29 +56,52 @@ type env struct {
 	pipe   *durable.Pipeline
 }
 
-// countingStore counts logical write calls (CreateRun, ApplyTransition,
-// RequestCancel). Unlike bbolt-level transaction/page counts — which the
-// adaptive group commit makes timing-dependent — these are exactly
-// deterministic per scenario, so they gate at effectively zero tolerance.
+// countingStore counts logical write calls. Unlike bbolt-level
+// transaction/page counts — which the adaptive group commit makes
+// timing-dependent — these are exactly deterministic per scenario, so
+// they gate at effectively zero tolerance. Every Store method is
+// implemented explicitly, no embedding: a write method added to the
+// interface later breaks this build instead of slipping through
+// uncounted.
 type countingStore struct {
-	durable.Store
+	inner  durable.Store
 	writes atomic.Int64
 }
 
 func (c *countingStore) CreateRun(ctx context.Context, rec *durable.RunRecord) (*durable.RunRecord, bool, error) {
 	c.writes.Add(1)
-	return c.Store.CreateRun(ctx, rec)
+	return c.inner.CreateRun(ctx, rec)
 }
 
 func (c *countingStore) ApplyTransition(ctx context.Context, id durable.RunID, t durable.Transition) error {
 	c.writes.Add(1)
-	return c.Store.ApplyTransition(ctx, id, t)
+	return c.inner.ApplyTransition(ctx, id, t)
 }
 
 func (c *countingStore) RequestCancel(ctx context.Context, id durable.RunID, req durable.CancelRequest) (bool, error) {
 	c.writes.Add(1)
-	return c.Store.RequestCancel(ctx, id, req)
+	return c.inner.RequestCancel(ctx, id, req)
 }
+
+func (c *countingStore) ReapTerminal(ctx context.Context, before time.Time, limit int) (int, error) {
+	n, err := c.inner.ReapTerminal(ctx, before, limit)
+	c.writes.Add(int64(n)) // one logical delete per reaped run
+	return n, err
+}
+
+func (c *countingStore) GetRun(ctx context.Context, id durable.RunID) (*durable.RunRecord, error) {
+	return c.inner.GetRun(ctx, id)
+}
+
+func (c *countingStore) ListNonterminal(ctx context.Context) ([]*durable.RunRecord, error) {
+	return c.inner.ListNonterminal(ctx)
+}
+
+func (c *countingStore) ListRuns(ctx context.Context, pipeline durable.PipelineID, resource durable.ResourceID) ([]*durable.RunRecord, error) {
+	return c.inner.ListRuns(ctx, pipeline, resource)
+}
+
+func (c *countingStore) Close() error { return c.inner.Close() }
 
 // newEnv builds a store and engine with the given definition bound, not
 // yet started.
@@ -88,7 +111,7 @@ func newEnv(b *testing.B, def *durable.Definition, opts ...durable.Option) *env 
 	if err != nil {
 		b.Fatal(err)
 	}
-	counting := &countingStore{Store: store}
+	counting := &countingStore{inner: store}
 	opts = append([]durable.Option{
 		durable.WithConcurrency(32),
 		durable.WithRetryPolicy(durable.RetryPolicy{
@@ -212,9 +235,6 @@ func report(b *testing.B, v *env, runs int, lat []time.Duration, elapsed time.Du
 		b.ReportMetric(n/elapsed.Seconds(), "runs/sec")
 	}
 }
-
-// resetWrites zeroes the logical write counter (e.g. after seeding).
-func (v *env) resetWrites() { v.writes.Store(0) }
 
 func ms(d time.Duration) float64 { return float64(d) / float64(time.Millisecond) }
 

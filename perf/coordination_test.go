@@ -21,6 +21,16 @@ import (
 // tokens), not payload costs, so the deterministic byte gates stay
 // sensitive to coordination-path writes.
 
+// enteredSignal marks a stale run's arrival exactly once. The step runs
+// at-least-once, so a redispatch (e.g. during abnormal shutdown) must not
+// close the channel twice.
+type enteredSignal struct {
+	ch   chan struct{}
+	once sync.Once
+}
+
+func (s *enteredSignal) signal() { s.once.Do(func() { close(s.ch) }) }
+
 // BenchmarkSupersedeCycle is the reconcile-loop pattern from the flyd
 // version-check flows: a stale run holds the slot, newer intent conflicts,
 // introspects the blocker's input, cancels it (unwinding its work), and
@@ -31,17 +41,17 @@ func BenchmarkSupersedeCycle(b *testing.B) {
 
 	var (
 		mu      sync.Mutex
-		entered = map[durable.ResourceID]chan struct{}{}
+		entered = map[durable.ResourceID]*enteredSignal{}
 	)
-	enteredCh := func(res durable.ResourceID) chan struct{} {
+	enteredSig := func(res durable.ResourceID) *enteredSignal {
 		mu.Lock()
 		defer mu.Unlock()
-		ch, ok := entered[res]
+		sig, ok := entered[res]
 		if !ok {
-			ch = make(chan struct{})
-			entered[res] = ch
+			sig = &enteredSignal{ch: make(chan struct{})}
+			entered[res] = sig
 		}
-		return ch
+		return sig
 	}
 
 	def := durable.NewDefinition(durable.DefinitionConfig{
@@ -54,8 +64,8 @@ func BenchmarkSupersedeCycle(b *testing.B) {
 					return nil, nil // resolve so cancellation can proceed
 				}
 				in := inv.InputMessage().(*wrapperspb.BytesValue)
-				if in.GetValue()[0] == 1 { // stale generation: hold the slot
-					close(enteredCh(inv.ResourceID()))
+				if v := in.GetValue(); len(v) > 0 && v[0] == 1 { // stale generation: hold the slot
+					enteredSig(inv.ResourceID()).signal()
 					<-ctx.Done()
 					return nil, ctx.Err()
 				}
@@ -85,7 +95,7 @@ func BenchmarkSupersedeCycle(b *testing.B) {
 					b.Error(err)
 					return
 				}
-				<-enteredCh(res) // stale run holds the slot mid-flight
+				<-enteredSig(res).ch // stale run holds the slot mid-flight
 				// Each resource signals exactly once; drop the entry so the
 				// map doesn't accumulate across cycles and iterations
 				// (flagged by Copilot review).
@@ -161,7 +171,10 @@ func BenchmarkAwaitFanout(b *testing.B) {
 			},
 		}},
 	})
-	var targetPipe *durable.Pipeline
+	// The waiter receives the target RunID as its input and parks on it
+	// directly: the driver already knows the ID, and a lookup scan here
+	// would charge unrelated store-scan costs — growing with the terminal
+	// population left behind by earlier iterations — to the wake metrics.
 	waiter := durable.NewDefinition(durable.DefinitionConfig{
 		ID: "fan-waiter",
 		Steps: []durable.StepConfig{{
@@ -170,28 +183,26 @@ func BenchmarkAwaitFanout(b *testing.B) {
 				if _, ok := inv.AwaitedRunID(); ok {
 					return nil, nil
 				}
-				run, ok, err := targetPipe.ActiveRun(ctx, inv.ResourceID())
-				if err != nil {
-					return nil, err
-				}
-				if !ok {
-					return nil, nil // target already done (never in this scenario)
-				}
-				return nil, durable.AwaitRun(run.ID())
+				in := inv.InputMessage().(*wrapperspb.StringValue)
+				return nil, durable.AwaitRun(durable.RunID(in.GetValue()))
 			},
 		}},
+		NewInput: func() proto.Message { return &wrapperspb.StringValue{} },
 	})
 	// Every target holds a worker slot while blocked, and waiter attempts
 	// need workers besides — size the pool for the whole population.
 	v := newEnv(b, target, durable.WithConcurrency(pairs*2+16))
-	var err error
-	targetPipe = v.pipe
+	targetPipe := v.pipe
 	waiterPipe, err := waiter.Bind(v.engine)
 	if err != nil {
 		b.Fatal(err)
 	}
 	v.start(b)
 
+	// Failure handling below never calls b.Fatal while spawned goroutines
+	// are live: Fatalf's runtime.Goexit would skip the release/join steps
+	// and leave goroutines logging into a completed benchmark. Instead:
+	// b.Error, release everything, join, return.
 	b.ResetTimer()
 	var wakeLat []time.Duration
 	for i := 0; i < b.N; i++ {
@@ -199,36 +210,73 @@ func BenchmarkAwaitFanout(b *testing.B) {
 		release.Store(&ch)
 		enteredCount.Store(0)
 
-		// Targets first, all in flight before any waiter looks for them.
-		var targets []durable.Run
+		// Targets first, scheduled concurrently — sequential Schedules
+		// would keep the store's adaptive group commit disengaged and
+		// charge worst-case per-write fsync costs to the gated byte
+		// metrics — and all in flight before any waiter parks.
+		var (
+			failed atomic.Bool
+			swg    sync.WaitGroup
+		)
+		targets := make([]durable.Run, pairs)
 		for p := 0; p < pairs; p++ {
-			run, _, err := targetPipe.Schedule(context.Background(), durable.ResourceID(fmt.Sprintf("fan-%d-%d", i, p)), nil)
-			if err != nil {
-				b.Fatal(err)
-			}
-			targets = append(targets, run)
+			swg.Add(1)
+			go func(p int) {
+				defer swg.Done()
+				run, _, err := targetPipe.Schedule(context.Background(),
+					durable.ResourceID(fmt.Sprintf("fan-%d-%d", i, p)), nil)
+				if err != nil {
+					b.Error(err)
+					failed.Store(true)
+					return
+				}
+				targets[p] = run
+			}(p)
+		}
+		swg.Wait()
+		if failed.Load() {
+			close(ch)
+			return
 		}
 		deadline := time.Now().Add(30 * time.Second)
 		for enteredCount.Load() < int64(pairs) {
 			if time.Now().After(deadline) {
-				b.Fatal("targets never all entered")
+				b.Errorf("only %d/%d targets entered within 30s", enteredCount.Load(), pairs)
+				close(ch)
+				return
 			}
 			time.Sleep(100 * time.Microsecond)
 		}
 
 		// Waiters park 1:1 on the targets.
+		waiters := make([]durable.Run, pairs)
+		for p := 0; p < pairs; p++ {
+			swg.Add(1)
+			go func(p int) {
+				defer swg.Done()
+				run, _, err := waiterPipe.Schedule(context.Background(),
+					durable.ResourceID(fmt.Sprintf("fan-%d-%d", i, p)),
+					wrapperspb.String(string(targets[p].ID())))
+				if err != nil {
+					b.Error(err)
+					failed.Store(true)
+					return
+				}
+				waiters[p] = run
+			}(p)
+		}
+		swg.Wait()
+		if failed.Load() {
+			close(ch)
+			return
+		}
+
 		var (
 			wg   sync.WaitGroup
 			mu   sync.Mutex
 			done = make([]time.Time, 0, pairs)
 		)
-		waiters := make([]durable.Run, pairs)
-		for p := 0; p < pairs; p++ {
-			run, _, err := waiterPipe.Schedule(context.Background(), durable.ResourceID(fmt.Sprintf("fan-%d-%d", i, p)), nil)
-			if err != nil {
-				b.Fatal(err)
-			}
-			waiters[p] = run
+		for _, run := range waiters {
 			wg.Add(1)
 			go func(run durable.Run) {
 				defer wg.Done()
@@ -241,7 +289,12 @@ func BenchmarkAwaitFanout(b *testing.B) {
 				mu.Unlock()
 			}(run)
 		}
-		waitAllAwaiting(b, waiters)
+		if err := waitAllAwaiting(waiters); err != nil {
+			b.Error(err)
+			close(ch)
+			wg.Wait()
+			return
+		}
 
 		releasedAt := time.Now()
 		close(ch)
@@ -250,6 +303,7 @@ func BenchmarkAwaitFanout(b *testing.B) {
 			wakeLat = append(wakeLat, at.Sub(releasedAt))
 		}
 		for _, t := range targets {
+			// All goroutines joined above, so Fatalf is safe here.
 			if res, err := t.Wait(context.Background()); err != nil || !res.Succeeded() {
 				b.Fatalf("target Wait = %+v, %v", res, err)
 			}
@@ -258,29 +312,38 @@ func BenchmarkAwaitFanout(b *testing.B) {
 	n := float64(pairs*2) * float64(b.N) // targets + waiters
 	b.ReportMetric(float64(v.store.Stats().TxPageAllocBytes)/n, "diskB/run")
 	b.ReportMetric(float64(v.writes.Load())/n, "transitions/run")
-	sort.Slice(wakeLat, func(i, j int) bool { return wakeLat[i] < wakeLat[j] })
-	b.ReportMetric(ms(wakeLat[len(wakeLat)/2]), "wake-p50-ms")
-	b.ReportMetric(ms(wakeLat[len(wakeLat)*99/100]), "wake-p99-ms")
+	if len(wakeLat) > 0 {
+		sort.Slice(wakeLat, func(i, j int) bool { return wakeLat[i] < wakeLat[j] })
+		b.ReportMetric(ms(wakeLat[len(wakeLat)/2]), "wake-p50-ms")
+		// The slowest wake, honestly named: at -benchtime 1x there are
+		// only `pairs` samples, so a "p99" would be this same single
+		// worst sample — too noisy to gate. perfcompare treats
+		// wake-max-ms as informative.
+		b.ReportMetric(ms(wakeLat[len(wakeLat)-1]), "wake-max-ms")
+	}
 }
 
-func waitAllAwaiting(b *testing.B, runs []durable.Run) {
-	b.Helper()
+// waitAllAwaiting polls until every run is parked in RunStateAwaiting.
+// It returns an error instead of failing the benchmark itself: callers
+// have live goroutines holding b and must release and join them first.
+func waitAllAwaiting(runs []durable.Run) error {
 	deadline := time.Now().Add(30 * time.Second)
 	for _, r := range runs {
 		for {
 			st, err := r.Status(context.Background())
 			if err != nil {
-				b.Fatal(err)
+				return err
 			}
 			if st.State == durable.RunStateAwaiting {
 				break
 			}
 			if time.Now().After(deadline) {
-				b.Fatalf("waiter %s never parked (state %v)", r.ID(), st.State)
+				return fmt.Errorf("waiter %s never parked (state %v)", r.ID(), st.State)
 			}
 			time.Sleep(100 * time.Microsecond)
 		}
 	}
+	return nil
 }
 
 // BenchmarkThrottleContention drives the machine-start shape through a

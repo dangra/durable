@@ -122,9 +122,11 @@ func BenchmarkRecovery(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		b.StopTimer()
 		v := newEnv(b, def)
+		// seedPopulation writes through the raw v.store, bypassing the
+		// counting decorator, so v.writes is still zero here: the
+		// reported transitions/run window opens at engine start.
 		ids := seedPopulation(b, v, nonterminal, terminal)
 		before := v.store.Stats()
-		v.resetWrites()
 		b.StartTimer()
 
 		startBegin := time.Now()

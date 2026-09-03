@@ -163,6 +163,7 @@ const (
     RunStateRunning
     RunStateWaitingRetry
     RunStateScheduled
+    RunStateAwaiting
     RunStateInvalid
     RunStateDone
 )
@@ -170,7 +171,9 @@ const (
 
 `RunStateScheduled` means the Run was accepted with a delayed start and no
 operation attempt has been reserved yet; `RunStateWaitingRetry` means an
-attempted operation is waiting for its next attempt.
+attempted operation is waiting for its next attempt; `RunStateAwaiting`
+means the in-flight operation is parked via `AwaitRun` until another Run
+terminates.
 
 `RunStateInvalid` means the current application deployment cannot safely continue the nonterminal Run.
 
@@ -295,6 +298,8 @@ type Status struct {
 
     CancelRequested bool
     CancelCause     string
+
+    AwaitingRunID RunID
 }
 ```
 
@@ -546,8 +551,9 @@ cursor                        rewritten on every attempt — small
 ```
 
 The Cursor is the per-Run scheduling state: phase, retry/start
-eligibility, last-error fields, and the **single in-flight operation**
-(step, attempt count) — leaning on the one-operation-per-Run invariant.
+eligibility, last-error fields, the **single in-flight operation**
+(step, attempt count), and its park target when awaiting another Run —
+leaning on the one-operation-per-Run invariant.
 Because only the Cursor is rewritten per attempt, per-attempt write
 volume is bounded by the Cursor, independent of Input and State sizes.
 

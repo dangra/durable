@@ -22,9 +22,19 @@ type Invocation struct {
 	states   map[StepID][]byte
 
 	cancelRequested bool
+	awaitedRunID    RunID
 
 	mu        sync.Mutex
 	violation error
+}
+
+// AwaitedRunID reports the Run the previous attempt of this operation
+// parked on via AwaitRun, once that Run reached terminality (or turned out
+// to be missing). It lets a handler distinguish "woken after the awaited
+// Run completed" from a first execution — the memory that prevents a
+// schedule-then-await step from respawning its child on re-execution.
+func (inv *Invocation) AwaitedRunID() (RunID, bool) {
+	return inv.awaitedRunID, inv.awaitedRunID != ""
 }
 
 // CancelRequested reports whether a cancellation request was pending when

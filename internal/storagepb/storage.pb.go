@@ -340,6 +340,8 @@ type Cursor struct {
 	LastReason    string                 `protobuf:"bytes,6,opt,name=last_reason,json=lastReason,proto3" json:"last_reason,omitempty"`
 	LastErrorAt   *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=last_error_at,json=lastErrorAt,proto3" json:"last_error_at,omitempty"`
 	UpdatedAt     *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	// Parks the in-flight operation until this run terminates.
+	AwaitingRunId string `protobuf:"bytes,9,opt,name=awaiting_run_id,json=awaitingRunId,proto3" json:"awaiting_run_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -428,6 +430,13 @@ func (x *Cursor) GetUpdatedAt() *timestamppb.Timestamp {
 		return x.UpdatedAt
 	}
 	return nil
+}
+
+func (x *Cursor) GetAwaitingRunId() string {
+	if x != nil {
+		return x.AwaitingRunId
+	}
+	return ""
 }
 
 type StepRecord struct {
@@ -770,7 +779,7 @@ const file_durable_storage_v1_storage_proto_rawDesc = "" +
 	"slot_group\x18\x04 \x01(\tR\tslotGroup\x12\x14\n" +
 	"\x05input\x18\x05 \x01(\fR\x05input\x129\n" +
 	"\n" +
-	"created_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"\xed\x02\n" +
+	"created_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"\x95\x03\n" +
 	"\x06Cursor\x12/\n" +
 	"\x05phase\x18\x01 \x01(\x0e2\x19.durable.storage.v1.PhaseR\x05phase\x12\x17\n" +
 	"\astep_id\x18\x02 \x01(\tR\x06stepId\x12\x1a\n" +
@@ -782,7 +791,8 @@ const file_durable_storage_v1_storage_proto_rawDesc = "" +
 	"lastReason\x12>\n" +
 	"\rlast_error_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\vlastErrorAt\x129\n" +
 	"\n" +
-	"updated_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"\xfe\x01\n" +
+	"updated_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12&\n" +
+	"\x0fawaiting_run_id\x18\t \x01(\tR\rawaitingRunId\"\xfe\x01\n" +
 	"\n" +
 	"StepRecord\x12C\n" +
 	"\x0eforward_status\x18\x01 \x01(\x0e2\x1c.durable.storage.v1.OpStatusR\rforwardStatus\x12)\n" +

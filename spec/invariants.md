@@ -177,3 +177,11 @@ Part of the [`durable` specification](README.md). This list is append-only; inva
 87. Immutable facts are written once; per-attempt durable writes are bounded by the scheduling cursor, independent of Input and State sizes.
 
 88. Retention reaps only terminal Runs; nonterminal Runs, invalid ones included, are never reaped regardless of age.
+
+89. Handlers never block on other Runs; cross-run waiting is the AwaitRun resolution.
+
+90. A parked operation remains unresolved, pins its Run, holds no worker, and survives restart.
+
+91. Waking from a park is at-least-once re-execution; the wake attempt observes the awaited RunID.
+
+92. Awaiting a terminal or nonexistent Run resolves immediately; a park closing an await cycle invalidates the parking Run.

@@ -133,6 +133,7 @@ func putRun(tx *bolt.Tx, rec *durable.RunRecord) error {
 		LastReason:    rec.LastReason,
 		LastErrorAt:   rec.LastErrorAt,
 		UpdatedAt:     rec.UpdatedAt,
+		AwaitingRunID: rec.AwaitingRunID,
 	})
 	if err != nil {
 		return err
@@ -282,6 +283,7 @@ func getRun(tx *bolt.Tx, id durable.RunID) (*durable.RunRecord, error) {
 	rec.Phase = cur.Phase
 	rec.NextAttemptAt = cur.NextAttemptAt
 	rec.LastError, rec.LastReason, rec.LastErrorAt = cur.LastError, cur.LastReason, cur.LastErrorAt
+	rec.AwaitingRunID = cur.AwaitingRunID
 	rec.UpdatedAt = cur.UpdatedAt
 	if cur.StepID != "" {
 		sr := rec.Step(cur.StepID)

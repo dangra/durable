@@ -69,6 +69,8 @@ message Cursor {
   string last_reason = 6;
   google.protobuf.Timestamp last_error_at = 7;
   google.protobuf.Timestamp updated_at = 8;
+  // Parks the in-flight operation until this run terminates.
+  string awaiting_run_id = 9;
 }
 
 message StepRecord {

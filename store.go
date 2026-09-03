@@ -49,6 +49,10 @@ type Cursor struct {
 	StepID   StepID
 	Attempts uint64
 
+	// AwaitingRunID parks the in-flight operation until the referenced
+	// Run terminates; empty when not parked.
+	AwaitingRunID RunID
+
 	NextAttemptAt time.Time
 	LastError     string
 	LastReason    string
@@ -111,6 +115,10 @@ type RunRecord struct {
 	// attempt — a retry, or the first attempt of a delayed Run. It
 	// survives restart.
 	NextAttemptAt time.Time
+
+	// AwaitingRunID mirrors Cursor.AwaitingRunID: the in-flight operation
+	// is parked until that Run terminates.
+	AwaitingRunID RunID
 
 	// LastError, LastReason, and LastErrorAt describe the most recent
 	// ordinary-error attempt of the current unresolved operation. They are

@@ -70,6 +70,7 @@ func MarshalCursor(c durable.Cursor) ([]byte, error) {
 		LastReason:    c.LastReason,
 		LastErrorAt:   ts(c.LastErrorAt),
 		UpdatedAt:     ts(c.UpdatedAt),
+		AwaitingRunId: string(c.AwaitingRunID),
 	})
 }
 
@@ -87,6 +88,7 @@ func UnmarshalCursor(b []byte) (durable.Cursor, error) {
 		LastReason:    pb.GetLastReason(),
 		LastErrorAt:   fromTS(pb.GetLastErrorAt()),
 		UpdatedAt:     fromTS(pb.GetUpdatedAt()),
+		AwaitingRunID: durable.RunID(pb.GetAwaitingRunId()),
 	}, nil
 }
 

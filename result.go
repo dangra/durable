@@ -34,6 +34,9 @@ const (
 	// RunStateScheduled means the Run was accepted with a delayed start
 	// and its first operation is not yet eligible.
 	RunStateScheduled
+	// RunStateAwaiting means the Run's in-flight operation is parked via
+	// AwaitRun until another Run terminates.
+	RunStateAwaiting
 	// RunStateInvalid means the current application deployment cannot
 	// safely continue the nonterminal Run. It is an operational runtime
 	// condition, not a terminal business outcome; a corrected deployment
@@ -52,6 +55,8 @@ func (s RunState) String() string {
 		return "waiting-retry"
 	case RunStateScheduled:
 		return "scheduled"
+	case RunStateAwaiting:
+		return "awaiting"
 	case RunStateInvalid:
 		return "invalid"
 	case RunStateDone:
@@ -133,4 +138,8 @@ type Status struct {
 	// request on a nonterminal Run.
 	CancelRequested bool
 	CancelCause     string
+
+	// AwaitingRunID is set when State is RunStateAwaiting: the Run whose
+	// termination this Run is parked on.
+	AwaitingRunID RunID
 }

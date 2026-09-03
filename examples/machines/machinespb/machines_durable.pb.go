@@ -38,6 +38,14 @@ func (inv ValidateInvocation) StepID() durable.StepID         { return inv.core.
 func (inv ValidateInvocation) Attempt() uint64                { return inv.core.Attempt() }
 func (inv ValidateInvocation) Phase() durable.Phase           { return inv.core.Phase() }
 
+// CancelRequested reports whether a cancellation request was pending when
+// this attempt was reserved.
+func (inv ValidateInvocation) CancelRequested() bool { return inv.core.CancelRequested() }
+
+// AwaitedRunID reports the run the previous attempt parked on via
+// durable.AwaitRun, once it reached terminality.
+func (inv ValidateInvocation) AwaitedRunID() (durable.RunID, bool) { return inv.core.AwaitedRunID() }
+
 // Input returns a defensive caller-owned copy of the immutable pipeline input.
 func (inv ValidateInvocation) Input() *ProvisionMachineInput {
 	msg, _ := inv.core.InputMessage().(*ProvisionMachineInput)
@@ -72,6 +80,14 @@ func (inv SelectHostInvocation) RunID() durable.RunID           { return inv.cor
 func (inv SelectHostInvocation) StepID() durable.StepID         { return inv.core.StepID() }
 func (inv SelectHostInvocation) Attempt() uint64                { return inv.core.Attempt() }
 func (inv SelectHostInvocation) Phase() durable.Phase           { return inv.core.Phase() }
+
+// CancelRequested reports whether a cancellation request was pending when
+// this attempt was reserved.
+func (inv SelectHostInvocation) CancelRequested() bool { return inv.core.CancelRequested() }
+
+// AwaitedRunID reports the run the previous attempt parked on via
+// durable.AwaitRun, once it reached terminality.
+func (inv SelectHostInvocation) AwaitedRunID() (durable.RunID, bool) { return inv.core.AwaitedRunID() }
 
 // Input returns a defensive caller-owned copy of the immutable pipeline input.
 func (inv SelectHostInvocation) Input() *ProvisionMachineInput {
@@ -109,6 +125,16 @@ func (inv ReserveCapacityInvocation) RunID() durable.RunID           { return in
 func (inv ReserveCapacityInvocation) StepID() durable.StepID         { return inv.core.StepID() }
 func (inv ReserveCapacityInvocation) Attempt() uint64                { return inv.core.Attempt() }
 func (inv ReserveCapacityInvocation) Phase() durable.Phase           { return inv.core.Phase() }
+
+// CancelRequested reports whether a cancellation request was pending when
+// this attempt was reserved.
+func (inv ReserveCapacityInvocation) CancelRequested() bool { return inv.core.CancelRequested() }
+
+// AwaitedRunID reports the run the previous attempt parked on via
+// durable.AwaitRun, once it reached terminality.
+func (inv ReserveCapacityInvocation) AwaitedRunID() (durable.RunID, bool) {
+	return inv.core.AwaitedRunID()
+}
 
 // Input returns a defensive caller-owned copy of the immutable pipeline input.
 func (inv ReserveCapacityInvocation) Input() *ProvisionMachineInput {
@@ -154,6 +180,16 @@ func (inv CreateMachineInvocation) RunID() durable.RunID           { return inv.
 func (inv CreateMachineInvocation) StepID() durable.StepID         { return inv.core.StepID() }
 func (inv CreateMachineInvocation) Attempt() uint64                { return inv.core.Attempt() }
 func (inv CreateMachineInvocation) Phase() durable.Phase           { return inv.core.Phase() }
+
+// CancelRequested reports whether a cancellation request was pending when
+// this attempt was reserved.
+func (inv CreateMachineInvocation) CancelRequested() bool { return inv.core.CancelRequested() }
+
+// AwaitedRunID reports the run the previous attempt parked on via
+// durable.AwaitRun, once it reached terminality.
+func (inv CreateMachineInvocation) AwaitedRunID() (durable.RunID, bool) {
+	return inv.core.AwaitedRunID()
+}
 
 // Input returns a defensive caller-owned copy of the immutable pipeline input.
 func (inv CreateMachineInvocation) Input() *ProvisionMachineInput {
@@ -428,6 +464,16 @@ func (inv ReleaseMachineInvocation) RunID() durable.RunID           { return inv
 func (inv ReleaseMachineInvocation) StepID() durable.StepID         { return inv.core.StepID() }
 func (inv ReleaseMachineInvocation) Attempt() uint64                { return inv.core.Attempt() }
 func (inv ReleaseMachineInvocation) Phase() durable.Phase           { return inv.core.Phase() }
+
+// CancelRequested reports whether a cancellation request was pending when
+// this attempt was reserved.
+func (inv ReleaseMachineInvocation) CancelRequested() bool { return inv.core.CancelRequested() }
+
+// AwaitedRunID reports the run the previous attempt parked on via
+// durable.AwaitRun, once it reached terminality.
+func (inv ReleaseMachineInvocation) AwaitedRunID() (durable.RunID, bool) {
+	return inv.core.AwaitedRunID()
+}
 
 // State returns the committed state of the referenced step for this run.
 // ok is false when no committed state exists.

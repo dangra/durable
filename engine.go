@@ -474,6 +474,9 @@ func (e *Engine) processRun(id RunID) (time.Duration, bool) {
 				}
 				continue
 			}
+			if e.awaitGate(rec) {
+				return 0, false
+			}
 			if delay, wait := e.retryGate(rec); wait {
 				return delay, true
 			}
@@ -495,6 +498,9 @@ func (e *Engine) processRun(id RunID) (time.Duration, bool) {
 			}
 
 		case ledger.KindRunUnwind:
+			if e.awaitGate(rec) {
+				return 0, false
+			}
 			if delay, wait := e.retryGate(rec); wait {
 				return delay, true
 			}
@@ -556,6 +562,100 @@ func clearLastError(rec *RunRecord) {
 	rec.LastErrorAt = time.Time{}
 }
 
+// awaitGate parks the Run when its in-flight operation awaits another
+// Run that is still nonterminal: it registers a completion watcher and
+// returns true (no redispatch — the watcher wakes the Run). A pending
+// cancellation bypasses the park so the operation can resolve.
+func (e *Engine) awaitGate(rec *RunRecord) bool {
+	if rec.AwaitingRunID == "" || rec.Cancel != nil {
+		return false
+	}
+	target := rec.AwaitingRunID
+	if cycle, err := e.awaitCycle(rec.RunID, target); err == nil && cycle {
+		e.markInvalid(rec, "", fmt.Sprintf("await cycle: awaiting run %s would deadlock back to this run", target))
+		return true
+	}
+	// Register before checking terminality so a completion between the
+	// check and the registration cannot be missed.
+	ch := e.waiterChan(target)
+	trec, err := e.store.GetRun(e.baseCtx, target)
+	switch {
+	case errors.Is(err, ErrRunNotFound):
+		// Resolve immediately: the target never existed or was reaped.
+		e.removeWaiter(target, ch)
+		return false
+	case err != nil:
+		e.removeWaiter(target, ch)
+		if e.baseCtx.Err() == nil {
+			e.logger.Error("durable: await target read failed", "run", rec.RunID, "target", target, "error", err)
+		}
+		return false
+	case trec.Terminal():
+		e.removeWaiter(target, ch)
+		return false
+	}
+	parked := rec.RunID
+	e.wg.Add(1)
+	go func() {
+		defer e.wg.Done()
+		select {
+		case <-ch:
+			e.dispatch(parked, 0)
+		case <-e.baseCtx.Done():
+		}
+	}()
+	return true
+}
+
+// parkAwait records an AwaitRun resolution: the operation stays
+// unresolved, the awaited Run is durably noted on the cursor, and the next
+// reconciliation parks through awaitGate (or proceeds immediately if the
+// target is already terminal or missing).
+func (e *Engine) parkAwait(rec *RunRecord, stepID StepID, attempts uint64, target RunID) (bool, time.Duration, bool) {
+	if target == "" {
+		e.markInvalid(rec, stepID, "AwaitRun with empty RunID")
+		return false, 0, false
+	}
+	rec.AwaitingRunID = target
+	if !e.apply(rec, Transition{Cursor: activeCursor(rec, stepID, attempts)}) {
+		return false, time.Second, true
+	}
+	// Detect cycles after persisting the park: with every parker checking
+	// after its own durable write, the later writer always sees the full
+	// chain, so a concurrently-formed cycle cannot escape detection.
+	cycle, err := e.awaitCycle(rec.RunID, target)
+	if err != nil {
+		return false, time.Second, true
+	}
+	if cycle {
+		e.markInvalid(rec, stepID, fmt.Sprintf("await cycle: awaiting run %s would deadlock back to this run", target))
+		return false, 0, false
+	}
+	return true, 0, false
+}
+
+// awaitCycle walks the await chain from target looking for self.
+func (e *Engine) awaitCycle(self, target RunID) (bool, error) {
+	cur := target
+	for hops := 0; cur != "" && hops < 64; hops++ {
+		if cur == self {
+			return true, nil
+		}
+		rec, err := e.store.GetRun(e.baseCtx, cur)
+		if errors.Is(err, ErrRunNotFound) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		if rec.Terminal() {
+			return false, nil
+		}
+		cur = rec.AwaitingRunID
+	}
+	return false, nil
+}
+
 // retryGate returns a wait when the Run's next attempt is not yet eligible.
 func (e *Engine) retryGate(rec *RunRecord) (time.Duration, bool) {
 	if rec.NextAttemptAt.IsZero() {
@@ -575,6 +675,8 @@ func (e *Engine) runForward(rec *RunRecord, def *Definition, stepID StepID) (don
 	sr := rec.Step(stepID)
 
 	// Durably reserve the attempt before invoking application code.
+	awaited := rec.AwaitingRunID
+	rec.AwaitingRunID = ""
 	sr.ForwardStatus = OpUnresolved
 	sr.ForwardAttempts++
 	rec.NextAttemptAt = time.Time{}
@@ -583,11 +685,16 @@ func (e *Engine) runForward(rec *RunRecord, def *Definition, stepID StepID) (don
 	}
 
 	inv := e.invocation(rec, def, stepID, sr.ForwardAttempts, PhaseForward)
+	inv.awaitedRunID = awaited
 	state, err := e.invokeForward(sc, inv)
 
 	if v := inv.takeViolation(); v != nil {
 		e.markInvalid(rec, stepID, v.Error())
 		return false, 0, false
+	}
+
+	if aw, ok := asAwait(err); ok {
+		return e.parkAwait(rec, stepID, sr.ForwardAttempts, aw.target)
 	}
 
 	now := e.clock.Now()
@@ -649,6 +756,8 @@ func (e *Engine) runUnwind(rec *RunRecord, def *Definition, stepID StepID) (done
 	sc := def.step(stepID)
 	sr := rec.Step(stepID)
 
+	awaited := rec.AwaitingRunID
+	rec.AwaitingRunID = ""
 	sr.UnwindStatus = OpUnresolved
 	sr.UnwindAttempts++
 	rec.NextAttemptAt = time.Time{}
@@ -657,6 +766,7 @@ func (e *Engine) runUnwind(rec *RunRecord, def *Definition, stepID StepID) (done
 	}
 
 	inv := e.invocation(rec, def, stepID, sr.UnwindAttempts, PhaseUnwind)
+	inv.awaitedRunID = awaited
 	failure := Failure{
 		UnwindFailures: append([]UnwindFailure(nil), rec.UnwindFailures...),
 	}
@@ -668,6 +778,10 @@ func (e *Engine) runUnwind(rec *RunRecord, def *Definition, stepID StepID) (done
 	if v := inv.takeViolation(); v != nil {
 		e.markInvalid(rec, stepID, v.Error())
 		return false, 0, false
+	}
+
+	if aw, ok := asAwait(err); ok {
+		return e.parkAwait(rec, stepID, sr.UnwindAttempts, aw.target)
 	}
 
 	now := e.clock.Now()
@@ -823,6 +937,7 @@ func activeCursor(rec *RunRecord, stepID StepID, attempts uint64) Cursor {
 		Phase:         rec.Phase,
 		StepID:        stepID,
 		Attempts:      attempts,
+		AwaitingRunID: rec.AwaitingRunID,
 		NextAttemptAt: rec.NextAttemptAt,
 		LastError:     rec.LastError,
 		LastReason:    rec.LastReason,
@@ -913,6 +1028,22 @@ func (e *Engine) waiterChan(id RunID) chan struct{} {
 	e.waiters[id] = append(e.waiters[id], ch)
 	e.mu.Unlock()
 	return ch
+}
+
+// removeWaiter unregisters a waiter channel that will not be waited on.
+func (e *Engine) removeWaiter(id RunID, ch chan struct{}) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	chs := e.waiters[id]
+	for i, c := range chs {
+		if c == ch {
+			e.waiters[id] = append(chs[:i], chs[i+1:]...)
+			break
+		}
+	}
+	if len(e.waiters[id]) == 0 {
+		delete(e.waiters, id)
+	}
 }
 
 func (e *Engine) notify(id RunID) {

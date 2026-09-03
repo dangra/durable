@@ -121,6 +121,9 @@ func (r Run) Status(ctx context.Context) (Status, error) {
 		if ie := e.invalidFor(r.id); ie != nil {
 			st.State = RunStateInvalid
 			st.InvalidReason = ie.Reason
+		} else if rec.AwaitingRunID != "" && rec.Cancel == nil {
+			st.State = RunStateAwaiting
+			st.AwaitingRunID = rec.AwaitingRunID
 		} else if !rec.NextAttemptAt.IsZero() && e.clock.Now().Before(rec.NextAttemptAt) {
 			if started(rec) {
 				st.State = RunStateWaitingRetry

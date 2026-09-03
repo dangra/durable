@@ -333,6 +333,60 @@ Additional semantics:
 
 ---
 
+## Awaiting other Runs
+
+Handlers MUST NOT block on other Runs' completion: an in-handler
+`run.Wait` holds a worker slot, and enough of them exhaust the bounded
+pool and deadlock the Engine. Cross-run waiting is a resolution instead:
+
+```go
+return durable.AwaitRun(child.ID())
+```
+
+`AwaitRun` parks the current operation: it remains unresolved (still
+pinning the Run), the worker is released, no retry attempts burn, and
+`Status` reports `RunStateAwaiting` with the target. The moment the
+target reaches terminality — or immediately, if it is already terminal
+or does not exist (never created, or reaped by retention) — the
+operation re-executes as a fresh attempt. Waking is at-least-once
+re-execution, not resumption: the handler runs again from the top.
+
+The wake attempt's Invocation reports what was awaited:
+
+```go
+if childID, ok := inv.AwaitedRunID(); ok {
+    // woken after childID terminated — check its outcome, do not respawn
+}
+```
+
+This is the durable memory that makes schedule-then-await steps safe:
+without it, re-execution after the child completed would find a free
+slot and spawn another child. `AwaitedRunID` is populated from the park
+when the wake attempt is reserved and cleared when the operation
+resolves; a crash after scheduling a child but before the park commits
+re-executes without it — the ordinary at-least-once window, closable
+with a deterministic child ResourceID where it matters.
+
+Any Run may be awaited, across pipelines. Awaits MUST NOT form a cycle:
+a park that closes a cycle of awaits marks the parking Run invalid for
+the current deployment (detected after the park is durably recorded, so
+concurrently formed cycles cannot escape).
+
+A pending cancellation bypasses the park: the operation re-executes,
+observes `CancelRequested`, and resolves so cancellation can proceed.
+The park survives restart.
+
+Canonical shapes:
+
+```text
+wait-for-existing:   ActiveRun -> found? AwaitRun : proceed
+create-then-wait:    AwaitedRunID? proceed : Schedule -> AwaitRun
+drain-then-start:    Schedule -> conflict? AwaitRun(blocker) : done
+                     (waking re-executes; Schedule retries the freed slot)
+```
+
+---
+
 ## Duplicate scheduling
 
 If no nonterminal Run occupies the slot:
@@ -390,6 +444,9 @@ ordinary error
 
 durable.Fail(err)
     permanent semantic operation failure
+
+durable.AwaitRun(id)
+    operation parks until the referenced Run terminates
 
 runtime contract violation
     Run invalid for current deployment

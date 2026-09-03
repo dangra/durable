@@ -106,7 +106,11 @@ jobs:
       - name: Generated code drift
         run: |
           buf generate
-          if ! git diff --exit-code; then
+          # git status --porcelain, not git diff: newly generated files are
+          # untracked, and a diff-only check would miss them entirely.
+          if [ -n "$(git status --porcelain)" ]; then
+            git status --porcelain
+            git diff
             echo "::error::generated code is out of date; run 'buf generate' and commit the result"
             exit 1
           fi

@@ -216,3 +216,53 @@ func TestShutdownStopsWork(t *testing.T) {
 		t.Fatalf("active = %d after shutdown", h.d.Active())
 	}
 }
+
+// TestWakeImmediatelyAfterDispatch: the wake is armed before Dispatch
+// returns, so a Wake issued right after — with the worker goroutine not
+// yet scheduled — must still cut the delay short. This is the
+// cancel-a-just-scheduled-delayed-run window.
+func TestWakeImmediatelyAfterDispatch(t *testing.T) {
+	ran := make(chan struct{})
+	h := newHarness(t, 1, func(string) (time.Duration, bool) {
+		close(ran)
+		return 0, false
+	})
+	h.d.Dispatch("k", time.Hour)
+	h.d.Wake("k") // no polling: the arm must already be in place
+	select {
+	case <-ran:
+	case <-time.After(5 * time.Second):
+		t.Fatal("immediate wake after dispatch was missed")
+	}
+}
+
+// TestNewValidatesConfig: an unusable configuration panics at
+// construction, not on some later Dispatch.
+func TestNewValidatesConfig(t *testing.T) {
+	valid := Config[string]{
+		Ctx:         context.Background(),
+		Concurrency: 1,
+		Clock:       wallClock{},
+		Spawn:       func(fn func()) { go fn() },
+		Run:         func(string) (time.Duration, bool) { return 0, false },
+	}
+	New(valid) // must not panic
+	for name, mutate := range map[string]func(*Config[string]){
+		"zero concurrency": func(c *Config[string]) { c.Concurrency = 0 },
+		"nil ctx":          func(c *Config[string]) { c.Ctx = nil },
+		"nil clock":        func(c *Config[string]) { c.Clock = nil },
+		"nil spawn":        func(c *Config[string]) { c.Spawn = nil },
+		"nil run":          func(c *Config[string]) { c.Run = nil },
+	} {
+		cfg := valid
+		mutate(&cfg)
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("%s did not panic", name)
+				}
+			}()
+			New(cfg)
+		}()
+	}
+}

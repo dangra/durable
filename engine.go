@@ -160,8 +160,6 @@ type Engine struct {
 	pipelines     map[PipelineID]*Definition
 	stepOwner     map[StepID]PipelineID
 	started       bool
-	active        map[RunID]struct{}
-	repoke        map[RunID]struct{}
 	invalid       map[RunID]*InvalidRunError
 	attemptCancel map[RunID]context.CancelFunc
 
@@ -191,8 +189,6 @@ func NewEngine(store Store, opts ...Option) *Engine {
 		concurrency:   16,
 		pipelines:     make(map[PipelineID]*Definition),
 		stepOwner:     make(map[StepID]PipelineID),
-		active:        make(map[RunID]struct{}),
-		repoke:        make(map[RunID]struct{}),
 		invalid:       make(map[RunID]*InvalidRunError),
 		attemptCancel: make(map[RunID]context.CancelFunc),
 		classCapacity: make(map[string]int),

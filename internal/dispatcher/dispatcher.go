@@ -52,8 +52,17 @@ type Dispatcher[K comparable] struct {
 	repoke map[K]struct{}
 }
 
-// New builds a Dispatcher from cfg.
+// New builds a Dispatcher from cfg. An unusable configuration — no
+// concurrency budget, or a nil Ctx, Clock, Spawn, or Run — is a caller
+// bug and panics here, where the mistake is, rather than deadlocking or
+// crashing on some later Dispatch.
 func New[K comparable](cfg Config[K]) *Dispatcher[K] {
+	switch {
+	case cfg.Concurrency <= 0:
+		panic("dispatcher: Concurrency must be positive")
+	case cfg.Ctx == nil, cfg.Clock == nil, cfg.Spawn == nil, cfg.Run == nil:
+		panic("dispatcher: Ctx, Clock, Spawn, and Run are all required")
+	}
 	return &Dispatcher[K]{
 		cfg:    cfg,
 		sem:    make(chan struct{}, cfg.Concurrency),
@@ -76,9 +85,18 @@ func (d *Dispatcher[K]) Dispatch(k K, delay time.Duration) {
 	d.active[k] = struct{}{}
 	d.mu.Unlock()
 
+	// Arm the wake before Dispatch returns, not inside the worker: a
+	// Wake issued after Dispatch must never miss — arming in the
+	// goroutine would leave a window where Fire is a no-op and an
+	// urgent wake (a cancellation of a just-scheduled delayed Run)
+	// waits out the whole delay.
+	var wake <-chan struct{}
+	if delay > 0 {
+		wake = d.wakes.Arm(k)
+	}
+
 	d.cfg.Spawn(func() {
 		if delay > 0 {
-			wake := d.wakes.Arm(k)
 			select {
 			case <-d.cfg.Clock.After(delay):
 			case <-wake:
@@ -110,8 +128,9 @@ func (d *Dispatcher[K]) Dispatch(k K, delay time.Duration) {
 }
 
 // Wake cuts short the delay of k's dispatched-but-waiting worker, if
-// any. It does not create a worker: pair it with Dispatch when the key
-// might not have one.
+// any; the wake is armed before a delayed Dispatch returns, so a Wake
+// issued after that return is never missed. It does not create a
+// worker: pair it with Dispatch when the key might not have one.
 func (d *Dispatcher[K]) Wake(k K) {
 	d.wakes.Fire(k)
 }

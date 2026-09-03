@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"sync/atomic"
 	"time"
 
 	bolt "go.etcd.io/bbolt"
@@ -40,12 +41,24 @@ var (
 // Store is a durable.Store backed by a bbolt database file.
 type Store struct {
 	db *bolt.DB
+	// pending counts in-flight ApplyTransition calls for adaptive group
+	// commit: a lone caller commits immediately, concurrent callers
+	// coalesce into shared transactions.
+	pending atomic.Int64
 }
 
 // Open opens (creating if needed) the database at path. It fails if another
 // process holds the file lock, enforcing exclusive ownership.
 func Open(path string) (*Store, error) {
-	db, err := bolt.Open(path, 0o600, &bolt.Options{Timeout: time.Second})
+	db, err := bolt.Open(path, 0o600, &bolt.Options{
+		Timeout: time.Second,
+		// Hashmap freelists stay fast as churn grows (array freelists
+		// degrade); a large initial mmap avoids remap stalls, where a
+		// write growing the file blocks behind long-running readers on
+		// the remap lock. Reserves virtual address space only.
+		FreelistType:    bolt.FreelistMapType,
+		InitialMmapSize: 1 << 30,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("bboltstore: opening %s: %w", path, err)
 	}
@@ -61,6 +74,7 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("bboltstore: initializing buckets: %w", err)
 	}
+	db.MaxBatchDelay = 2 * time.Millisecond
 	return &Store{db: db}, nil
 }
 
@@ -75,7 +89,12 @@ func stepKey(id durable.RunID, step durable.StepID) []byte {
 func (s *Store) CreateRun(_ context.Context, rec *durable.RunRecord) (*durable.RunRecord, bool, error) {
 	var existing *durable.RunRecord
 	created := false
-	err := s.db.Update(func(tx *bolt.Tx) error {
+	commit := s.db.Update
+	if s.pending.Add(1) > 1 {
+		commit = s.db.Batch
+	}
+	defer s.pending.Add(-1)
+	err := commit(func(tx *bolt.Tx) error {
 		key := slotKey(rec)
 		if activeID := tx.Bucket(slotsBucket).Get(key); activeID != nil {
 			var err error
@@ -152,7 +171,12 @@ func putRun(tx *bolt.Tx, rec *durable.RunRecord) error {
 }
 
 func (s *Store) ApplyTransition(_ context.Context, id durable.RunID, t durable.Transition) error {
-	return s.db.Update(func(tx *bolt.Tx) error {
+	commit := s.db.Update
+	if s.pending.Add(1) > 1 {
+		commit = s.db.Batch
+	}
+	defer s.pending.Add(-1)
+	return commit(func(tx *bolt.Tx) error {
 		metaBytes := tx.Bucket(metaBucket).Get([]byte(id))
 		if metaBytes == nil {
 			return durable.ErrRunNotFound

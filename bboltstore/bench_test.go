@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -31,9 +33,11 @@ func benchEngine(b *testing.B, def *durable.Definition) (*Store, *durable.Pipeli
 	if err != nil {
 		b.Fatal(err)
 	}
-	e := durable.NewEngine(s, durable.WithRetryPolicy(durable.RetryPolicy{
-		Initial: time.Microsecond, Max: time.Microsecond, Multiplier: 1,
-	}))
+	e := durable.NewEngine(s,
+		durable.WithRetryPolicy(durable.RetryPolicy{Initial: time.Microsecond, Max: time.Microsecond, Multiplier: 1}),
+		durable.WithConcurrency(64),
+		durable.WithLogger(slog.New(slog.DiscardHandler)),
+	)
 	p, err := def.Bind(e)
 	if err != nil {
 		b.Fatal(err)
@@ -118,4 +122,43 @@ func BenchmarkRetryWrites(b *testing.B) {
 	d := after.TxStats.Sub(&before.TxStats)
 	b.ReportMetric(float64(d.GetPageAlloc())/float64(b.N), "diskB/op")
 	b.ReportMetric(float64(d.GetPageAlloc())/float64(b.N)/(retries+1), "diskB/attempt")
+}
+
+// BenchmarkConcurrentRuns measures transition throughput when many runs
+// execute in parallel — the single-writer serialization question. Small
+// payloads isolate commit costs from byte costs.
+func BenchmarkConcurrentRuns(b *testing.B) {
+	const parallel = 32
+	var steps []durable.StepConfig
+	for i := 0; i < 4; i++ {
+		steps = append(steps, durable.StepConfig{
+			ID: durable.StepID(fmt.Sprintf("step-%d/v1", i)),
+			Run: func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+				return nil, nil
+			},
+		})
+	}
+	def := durable.NewDefinition(durable.DefinitionConfig{ID: "bench-conc", Steps: steps})
+	_, p := benchEngine(b, def)
+
+	b.ResetTimer()
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, parallel)
+	for i := 0; i < b.N; i++ {
+		sem <- struct{}{}
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			run, _, err := p.Schedule(context.Background(), durable.ResourceID(fmt.Sprintf("c-%d", i)), nil)
+			if err != nil {
+				b.Error(err)
+				return
+			}
+			if res, err := run.Wait(context.Background()); err != nil || !res.Succeeded() {
+				b.Errorf("run: %+v %v", res, err)
+			}
+		}(i)
+	}
+	wg.Wait()
 }

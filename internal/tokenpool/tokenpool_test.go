@@ -155,7 +155,8 @@ func TestRecheckKeepsSlotAndParkTime(t *testing.T) {
 
 // TestKeyChangeUnparks: a waiter parked on one key acquiring under
 // another (deployment changed the step's class) releases its old slot
-// and hands on any exposed wake, without reporting cross-key wait time.
+// and hands on any exposed wake; the waited it reports on the grant
+// spans the whole park, regardless of which key it began under.
 func TestKeyChangeUnparks(t *testing.T) {
 	p := New[string, string](map[string]int{"boot": 1, "destroy": 1})
 	grant(t, p, "boot", "a", t0)
@@ -274,4 +275,72 @@ func TestConcurrentChurn(t *testing.T) {
 	if u.InUse != 0 || u.Waiting != 0 {
 		t.Fatalf("pool did not drain: %+v", u)
 	}
+}
+
+// TestCrossKeyParkVacatesPriorQueue: a waiter re-parking under a
+// different key (deployment changed its class while the new class is
+// full) must leave the old key's FIFO — a stale entry there would eat
+// that key's wakes forever — and hand on any capacity its departure
+// exposed.
+func TestCrossKeyParkVacatesPriorQueue(t *testing.T) {
+	p := New[string, string](map[string]int{"boot": 1, "destroy": 1})
+	grant(t, p, "boot", "a", t0)
+	parked(t, p, "boot", "b", t0)
+	parked(t, p, "boot", "c", t0)
+	grant(t, p, "destroy", "z", t0) // destroy is full
+
+	// While boot's token is held, b re-parks under destroy: no capacity
+	// exposed, no kick — but b must vacate boot's queue.
+	granted, held, _, kicks := p.Acquire("destroy", "b", false, t0)
+	if granted || held || len(kicks) != 0 {
+		t.Fatalf("cross-key park = %v %v kicks=%v", granted, held, kicks)
+	}
+	if kick, ok := p.Release("boot"); !ok || kick != "c" {
+		t.Fatalf("boot release kick = %q %v, want c (b left the queue)", kick, ok)
+	}
+	if u := p.Snapshot()["boot"]; u.Waiting != 1 {
+		t.Fatalf("boot usage = %+v, want only c waiting", u)
+	}
+	if u := p.Snapshot()["destroy"]; u.Waiting != 1 {
+		t.Fatalf("destroy usage = %+v, want b waiting", u)
+	}
+
+	// Variant: the departure itself exposes free capacity — the
+	// cross-key park must return the hand-off kick.
+	p2 := New[string, string](map[string]int{"boot": 1, "destroy": 1})
+	grant(t, p2, "boot", "a", t0)
+	parked(t, p2, "boot", "b", t0)
+	parked(t, p2, "boot", "c", t0)
+	grant(t, p2, "destroy", "z", t0)
+	if kick, ok := p2.Release("boot"); !ok || kick != "b" {
+		t.Fatalf("boot release kick = %q %v", kick, ok)
+	}
+	// b, woken as boot's head, re-parks under destroy instead: boot's
+	// free token must be handed to c by the park itself.
+	granted, _, _, kicks = p2.Acquire("destroy", "b", false, t0)
+	if granted {
+		t.Fatal("destroy is full; b should park")
+	}
+	if len(kicks) != 1 || kicks[0] != "c" {
+		t.Fatalf("cross-key park kicks = %v, want the boot hand-off [c]", kicks)
+	}
+	grant(t, p2, "boot", "c", t0)
+}
+
+// TestReleaseUnheldPanics: underflow is a caller bug and must fail fast.
+func TestReleaseUnheldPanics(t *testing.T) {
+	assertPanics := func(name string, fn func()) {
+		t.Helper()
+		defer func() {
+			if recover() == nil {
+				t.Errorf("%s did not panic", name)
+			}
+		}()
+		fn()
+	}
+	p := newTestPool(1)
+	assertPanics("release of never-used key", func() { p.Release("boot") })
+	grant(t, p, "boot", "a", t0)
+	p.Release("boot")
+	assertPanics("double release", func() { p.Release("boot") })
 }

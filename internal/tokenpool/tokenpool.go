@@ -1,7 +1,12 @@
-// Package tokenpool provides a keyed FIFO-fair counting semaphore with
-// declining waiters — the mechanism behind the engine's concurrency
-// classes. It holds only mechanism: who may bypass the gate, and what a
-// wake means, is caller policy.
+// Package tokenpool provides a keyed counting semaphore with FIFO wake
+// order among parked waiters and declining waiters — the mechanism
+// behind the engine's concurrency classes. It holds only mechanism: who
+// may bypass the gate, and what a wake means, is caller policy.
+//
+// Fairness is wake-order fairness, not strict no-barging: parked waiters
+// are woken oldest-first, but a new arrival that finds free capacity
+// acquires immediately, even while a woken waiter has not yet
+// reacquired.
 //
 // The pool never dispatches wakes itself. Operations that can expose
 // free capacity return the next waiter to wake, and the caller must
@@ -68,10 +73,11 @@ func New[K comparable, W comparable](capacity map[K]int) *Pool[K, W] {
 // grant, and stays zero on token-less proceeds so a bypass never reports
 // a phantom grant.
 //
-// kicks names every waiter the caller must wake: an outcome that removes
-// w's park can expose free capacity on w's prior key, and a grant with
-// capacity still free cascades the wake down k's queue — a cross-key
-// grant can owe both at once.
+// kicks names every waiter the caller must wake: an outcome that moves
+// or removes w's park can expose free capacity on w's prior key — a
+// cross-key park included — and a grant with capacity still free
+// cascades the wake down k's queue; a cross-key grant can owe both at
+// once.
 func (p *Pool[K, W]) Acquire(k K, w W, bypass bool, now time.Time) (granted, held bool, waited time.Duration, kicks []W) {
 	p.mu.Lock()
 	prior, wasParked := p.parked[w]
@@ -127,6 +133,17 @@ func (p *Pool[K, W]) Acquire(k K, w W, bypass bool, now time.Time) (granted, hel
 		}
 		return true, true, waited, kicks
 	}
+	// Parking under a different key vacates the prior key's FIFO slot —
+	// a stale entry there would eat that key's wakes forever — handing
+	// on any capacity the departure exposed.
+	if wasParked && prior.key != k {
+		if pc := p.classes[prior.key]; pc != nil {
+			pc.waiters = slices.DeleteFunc(pc.waiters, func(x W) bool { return x == w })
+			if x, ok := nextWaiter(pc); ok {
+				kicks = append(kicks, x)
+			}
+		}
+	}
 	if !slices.Contains(c.waiters, w) {
 		c.waiters = append(c.waiters, w)
 	}
@@ -136,19 +153,26 @@ func (p *Pool[K, W]) Acquire(k K, w W, bypass bool, now time.Time) (granted, hel
 	}
 	p.parked[w] = park[K]{key: k, since: since}
 	p.mu.Unlock()
-	return false, false, 0, nil
+	return false, false, 0, kicks
 }
 
 // Release returns a token of k and names the head waiter to wake, if
 // any; the caller must deliver the kick. The woken waiter keeps its FIFO
 // slot until it actually acquires: if it declines (bypassing or cleared
 // meanwhile), its unpark hands the wake to the next in line.
+//
+// Releasing a token that was never held is a caller bug and panics,
+// following the sync.WaitGroup precedent: silent underflow would corrupt
+// grants and kicks much later and far away.
 func (p *Pool[K, W]) Release(k K) (kick W, ok bool) {
 	p.mu.Lock()
-	if c := p.classes[k]; c != nil {
-		c.inUse--
-		kick, ok = nextWaiter(c)
+	c := p.classes[k]
+	if c == nil || c.inUse <= 0 {
+		p.mu.Unlock()
+		panic("tokenpool: Release of a token that was never acquired")
 	}
+	c.inUse--
+	kick, ok = nextWaiter(c)
 	p.mu.Unlock()
 	return kick, ok
 }

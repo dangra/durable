@@ -433,10 +433,10 @@ const file_machines_v1_machines_proto_rawDesc = "" +
 	"\n" +
 	"SelectHost\x12\x17\n" +
 	"\ahost_id\x18\x01 \x01(\tR\x06hostId:\x14\x8a\xa8\x19\x10\n" +
-	"\x0eselect-host/v1\"U\n" +
+	"\x0eselect-host/v1\"h\n" +
 	"\x0fReserveCapacity\x12%\n" +
-	"\x0ereservation_id\x18\x01 \x01(\tR\rreservationId:\x1b\x8a\xa8\x19\x17\n" +
-	"\x13reserve-capacity/v1\x10\x01\"G\n" +
+	"\x0ereservation_id\x18\x01 \x01(\tR\rreservationId:.\x8a\xa8\x19*\n" +
+	"\x13reserve-capacity/v1\x10\x01\"\x11host-capacity-api\"G\n" +
 	"\rCreateMachine\x12\x1d\n" +
 	"\n" +
 	"machine_id\x18\x01 \x01(\tR\tmachineId:\x17\x8a\xa8\x19\x13\n" +

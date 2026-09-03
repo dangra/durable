@@ -20,6 +20,12 @@ message StepOptions {
   // Whether the Step is retired: structurally present, but no new forward
   // operation may begin for it.
   bool retired = 3;
+
+  // Optional named concurrency class. Operations of steps sharing a class
+  // are bounded by the capacity the engine configures for it
+  // (WithConcurrencyClass); a declared class without configured capacity
+  // is unlimited. Overrides the pipeline-level default.
+  string concurrency_class = 4;
 }
 
 // PipelineOptions declares a protobuf marker message as a durable Pipeline.
@@ -41,6 +47,10 @@ message PipelineOptions {
   // the whole group for a resource. Without a group, a pipeline excludes
   // only with itself (the default per-pipeline slot).
   string exclusion_group = 5;
+
+  // Optional default concurrency class for all of this pipeline's steps;
+  // a step's own concurrency_class overrides it.
+  string concurrency_class = 6;
 }
 
 extend google.protobuf.MessageOptions {

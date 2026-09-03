@@ -1739,3 +1739,201 @@ func TestCancelCutsThroughAwait(t *testing.T) {
 		t.Fatalf("Wait = %+v, %v; want canceled while target still running", res, err)
 	}
 }
+
+func TestConcurrencyClassLimitsExecution(t *testing.T) {
+	var (
+		concurrent atomic.Int64
+		peak       atomic.Int64
+	)
+	release := make(chan struct{})
+	def := durable.NewDefinition(durable.DefinitionConfig{
+		ID:               "throttled-pipe",
+		ConcurrencyClass: "snapshots",
+		Steps: []durable.StepConfig{
+			stateless("s/v1", func(ctx context.Context, inv *durable.Invocation) error {
+				n := concurrent.Add(1)
+				defer concurrent.Add(-1)
+				for {
+					p := peak.Load()
+					if n <= p || peak.CompareAndSwap(p, n) {
+						break
+					}
+				}
+				select {
+				case <-release:
+					return nil
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}),
+		},
+	})
+	e := durable.NewEngine(durabletest.NewMemStore(), fastRetry,
+		durable.WithConcurrencyClass("snapshots", 1))
+	p, err := def.Bind(e)
+	if err != nil {
+		t.Fatalf("Bind: %v", err)
+	}
+	if err := e.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer e.Stop(context.Background())
+
+	run1, _, err := p.Schedule(context.Background(), "r1", nil)
+	if err != nil {
+		t.Fatalf("Schedule r1: %v", err)
+	}
+	run2, _, err := p.Schedule(context.Background(), "r2", nil)
+	if err != nil {
+		t.Fatalf("Schedule r2: %v", err)
+	}
+
+	// One executes; the other parks as throttled with the class name.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		s1, _ := run1.Status(context.Background())
+		s2, _ := run2.Status(context.Background())
+		throttled, running := 0, 0
+		for _, st := range []durable.Status{s1, s2} {
+			switch st.State {
+			case durable.RunStateThrottled:
+				if st.ThrottledClass != "snapshots" {
+					t.Fatalf("ThrottledClass = %q", st.ThrottledClass)
+				}
+				throttled++
+			case durable.RunStateRunning:
+				running++
+			}
+		}
+		if throttled == 1 && running == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("states = %v/%v, want one running one throttled", s1.State, s2.State)
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	// Releasing lets both complete, never exceeding the capacity.
+	close(release)
+	for _, r := range []durable.Run{run1, run2} {
+		if res, err := r.Wait(context.Background()); err != nil || !res.Succeeded() {
+			t.Fatalf("Wait = %+v, %v", res, err)
+		}
+	}
+	if got := peak.Load(); got != 1 {
+		t.Fatalf("peak concurrent executions = %d, want 1", got)
+	}
+}
+
+func TestUnconfiguredClassIsUnlimited(t *testing.T) {
+	const parallel = 4
+	var (
+		concurrent atomic.Int64
+		peak       atomic.Int64
+	)
+	gate := make(chan struct{})
+	def := durable.NewDefinition(durable.DefinitionConfig{
+		ID:               "unlimited-pipe",
+		ConcurrencyClass: "never-configured",
+		Steps: []durable.StepConfig{
+			stateless("s/v1", func(ctx context.Context, inv *durable.Invocation) error {
+				n := concurrent.Add(1)
+				defer concurrent.Add(-1)
+				for {
+					p := peak.Load()
+					if n <= p || peak.CompareAndSwap(p, n) {
+						break
+					}
+				}
+				select {
+				case <-gate:
+					return nil
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}),
+		},
+	})
+	_, pipes := startEngine(t, durabletest.NewMemStore(), def)
+
+	var runs []durable.Run
+	for i := 0; i < parallel; i++ {
+		r, _, err := pipes[0].Schedule(context.Background(), durable.ResourceID(fmt.Sprintf("r%d", i)), nil)
+		if err != nil {
+			t.Fatalf("Schedule: %v", err)
+		}
+		runs = append(runs, r)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for concurrent.Load() < parallel {
+		if time.Now().After(deadline) {
+			t.Fatalf("concurrent = %d, want %d (class should be unlimited)", concurrent.Load(), parallel)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	close(gate)
+	for _, r := range runs {
+		if res, err := r.Wait(context.Background()); err != nil || !res.Succeeded() {
+			t.Fatalf("Wait = %+v, %v", res, err)
+		}
+	}
+}
+
+func TestCancelBypassesThrottle(t *testing.T) {
+	release := make(chan struct{})
+	defer close(release)
+	def := durable.NewDefinition(durable.DefinitionConfig{
+		ID:               "throttle-cancel",
+		ConcurrencyClass: "narrow",
+		Steps: []durable.StepConfig{
+			stateless("s/v1", func(ctx context.Context, inv *durable.Invocation) error {
+				if inv.CancelRequested() {
+					return nil
+				}
+				select {
+				case <-release:
+					return nil
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}),
+		},
+	})
+	e := durable.NewEngine(durabletest.NewMemStore(), fastRetry,
+		durable.WithConcurrencyClass("narrow", 1))
+	p, _ := def.Bind(e)
+	if err := e.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer e.Stop(context.Background())
+
+	if _, _, err := p.Schedule(context.Background(), "holder", nil); err != nil {
+		t.Fatalf("Schedule holder: %v", err)
+	}
+	parked, _, err := p.Schedule(context.Background(), "parked", nil)
+	if err != nil {
+		t.Fatalf("Schedule parked: %v", err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		st, _ := parked.Status(context.Background())
+		if st.State == durable.RunStateThrottled {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("second run never throttled")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	// Cancellation cuts through the throttle: the parked run resolves
+	// while the token holder still executes.
+	if err := parked.Cancel(context.Background(), "not needed"); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	res, err := parked.Wait(context.Background())
+	if err != nil || !res.Canceled() {
+		t.Fatalf("Wait = %+v, %v; want canceled", res, err)
+	}
+}

@@ -37,6 +37,9 @@ const (
 	// RunStateAwaiting means the Run's in-flight operation is parked via
 	// AwaitRun until another Run terminates.
 	RunStateAwaiting
+	// RunStateThrottled means the Run's next operation is parked waiting
+	// for capacity in its concurrency class.
+	RunStateThrottled
 	// RunStateInvalid means the current application deployment cannot
 	// safely continue the nonterminal Run. It is an operational runtime
 	// condition, not a terminal business outcome; a corrected deployment
@@ -57,6 +60,8 @@ func (s RunState) String() string {
 		return "scheduled"
 	case RunStateAwaiting:
 		return "awaiting"
+	case RunStateThrottled:
+		return "throttled"
 	case RunStateInvalid:
 		return "invalid"
 	case RunStateDone:
@@ -142,4 +147,8 @@ type Status struct {
 	// AwaitingRunID is set when State is RunStateAwaiting: the Run whose
 	// termination this Run is parked on.
 	AwaitingRunID RunID
+
+	// ThrottledClass is set when State is RunStateThrottled: the
+	// concurrency class the Run is waiting for capacity in.
+	ThrottledClass string
 }

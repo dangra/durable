@@ -421,6 +421,44 @@ Global concurrency:
 durable.WithConcurrency(32)
 ```
 
+## Concurrency classes
+
+Steps whose operations contend on a shared resource declare a named
+class in the schema; the engine configures how much of that resource the
+deployment has:
+
+```proto
+option (durable.v1.step) = {
+  id: "snapshot/v1"
+  concurrency_class: "vm-snapshots"
+};
+```
+
+```go
+durable.WithConcurrencyClass("vm-snapshots", 2)
+```
+
+A pipeline-level `concurrency_class` sets the default for all of its
+steps; a step's own class overrides it. Declaration is schema-side
+("these steps share a resource"), capacity is deployment-side — a class
+with no configured capacity is unlimited, and the Engine warns at Start.
+
+Class semantics:
+
+- A class bounds **simultaneously executing operations** (forward and
+  unwind alike) of its member steps. Tokens are held only while the
+  handler runs — never across retry waits, parks, or restarts — and are
+  purely in-memory: nothing is persisted.
+- Acquisition never blocks a worker. A Run whose next operation finds
+  its class full parks (`RunStateThrottled`, exposing the class) and is
+  woken FIFO when a token releases.
+- A pending cancellation bypasses the gate so the Run can resolve and
+  unwind.
+
+This is the durable form of the in-transition semaphores flyd hand-rolls
+(e.g. bounding concurrent VM snapshot writes), which would starve a
+bounded worker pool if ported as blocking waits.
+
 ---
 
 ## Immediate continuation

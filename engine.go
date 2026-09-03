@@ -74,6 +74,20 @@ func WithLogger(l *slog.Logger) Option {
 	}
 }
 
+// WithConcurrencyClass sets the capacity of a named concurrency class:
+// at most capacity operations of steps declaring the class execute
+// simultaneously. A class declared in step options but never configured
+// here is unlimited (the Engine warns at Start). Class tokens are
+// execution-scoped and in-memory: they are held only while an operation's
+// handler runs, never across retry waits, parks, or restarts.
+func WithConcurrencyClass(name string, capacity int) Option {
+	return func(e *Engine) {
+		if name != "" && capacity > 0 {
+			e.classCapacity[name] = capacity
+		}
+	}
+}
+
 // RetentionPolicy configures reaping of terminal Runs. Retention is off by
 // default: without WithRetention, terminal Runs accumulate indefinitely.
 type RetentionPolicy struct {
@@ -120,7 +134,11 @@ type Engine struct {
 	retention       RetentionPolicy
 	middleware      []Middleware
 
+	classCapacity map[string]int
+
 	mu            sync.Mutex
+	classes       map[string]*concClass
+	throttled     map[RunID]string
 	pipelines     map[PipelineID]*Definition
 	stepOwner     map[StepID]PipelineID
 	started       bool
@@ -153,6 +171,9 @@ func NewEngine(store Store, opts ...Option) *Engine {
 		waiters:       make(map[RunID][]chan struct{}),
 		attemptCancel: make(map[RunID]context.CancelFunc),
 		wakes:         make(map[RunID]chan struct{}),
+		classCapacity: make(map[string]int),
+		classes:       make(map[string]*concClass),
+		throttled:     make(map[RunID]string),
 	}
 	for _, o := range opts {
 		o(e)
@@ -217,7 +238,88 @@ func (e *Engine) Start(ctx context.Context) error {
 	} else {
 		e.logger.Info("durable: retention disabled; terminal runs accumulate")
 	}
+
+	e.mu.Lock()
+	for _, d := range e.pipelines {
+		for _, sc := range d.steps {
+			if sc.ConcurrencyClass != "" {
+				if _, ok := e.classCapacity[sc.ConcurrencyClass]; !ok {
+					e.logger.Warn("durable: concurrency class has no configured capacity; unlimited",
+						"class", sc.ConcurrencyClass, "step", sc.ID)
+				}
+			}
+		}
+	}
+	e.mu.Unlock()
 	return nil
+}
+
+// concClass is the in-memory token pool of one concurrency class.
+type concClass struct {
+	capacity int
+	inUse    int
+	waiters  []RunID // FIFO
+}
+
+// acquireClass gates an operation on its step's concurrency class.
+// proceed=false parks the Run as throttled (woken FIFO on release). A
+// pending cancellation bypasses the gate so the Run can resolve; bypassed
+// and classless acquisitions hold no token (held=false).
+func (e *Engine) acquireClass(rec *RunRecord, class string) (proceed, held bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	delete(e.throttled, rec.RunID)
+	if class == "" || rec.Cancel != nil {
+		return true, false
+	}
+	cap, limited := e.classCapacity[class]
+	if !limited {
+		return true, false
+	}
+	c := e.classes[class]
+	if c == nil {
+		c = &concClass{capacity: cap}
+		e.classes[class] = c
+	}
+	if c.inUse < c.capacity {
+		c.inUse++
+		return true, true
+	}
+	for _, w := range c.waiters {
+		if w == rec.RunID {
+			e.throttled[rec.RunID] = class
+			return false, false
+		}
+	}
+	c.waiters = append(c.waiters, rec.RunID)
+	e.throttled[rec.RunID] = class
+	return false, false
+}
+
+// releaseClass returns a token and wakes the next throttled Run, if any.
+func (e *Engine) releaseClass(class string) {
+	e.mu.Lock()
+	c := e.classes[class]
+	var next RunID
+	if c != nil {
+		c.inUse--
+		if len(c.waiters) > 0 {
+			next = c.waiters[0]
+			c.waiters = c.waiters[1:]
+		}
+	}
+	e.mu.Unlock()
+	if next != "" {
+		e.dispatch(next, 0)
+	}
+}
+
+// throttledClass reports the class a Run is currently parked on, if any.
+func (e *Engine) throttledClass(id RunID) (string, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	class, ok := e.throttled[id]
+	return class, ok
 }
 
 // retentionLoop sweeps terminal Runs older than the policy on a jittered
@@ -480,7 +582,15 @@ func (e *Engine) processRun(id RunID) (time.Duration, bool) {
 			if delay, wait := e.retryGate(rec); wait {
 				return delay, true
 			}
+			class := def.step(StepID(dec.Step)).ConcurrencyClass
+			proceed, held := e.acquireClass(rec, class)
+			if !proceed {
+				return 0, false
+			}
 			done, delay, again := e.runForward(rec, def, StepID(dec.Step))
+			if held {
+				e.releaseClass(class)
+			}
 			if !done {
 				return delay, again
 			}
@@ -504,7 +614,15 @@ func (e *Engine) processRun(id RunID) (time.Duration, bool) {
 			if delay, wait := e.retryGate(rec); wait {
 				return delay, true
 			}
+			class := def.step(StepID(dec.Step)).ConcurrencyClass
+			proceed, held := e.acquireClass(rec, class)
+			if !proceed {
+				return 0, false
+			}
 			done, delay, again := e.runUnwind(rec, def, StepID(dec.Step))
+			if held {
+				e.releaseClass(class)
+			}
 			if !done {
 				return delay, again
 			}

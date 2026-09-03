@@ -19,6 +19,10 @@ type StepConfig struct {
 	// i.e. successful forward execution commits Step State.
 	HasState bool
 
+	// ConcurrencyClass optionally names the token pool bounding this
+	// step's executing operations; empty inherits the pipeline default.
+	ConcurrencyClass string
+
 	// Run invokes the application forward handler. For a state-producing
 	// Step it returns the State to commit; for a stateless Step it returns
 	// (nil, err).
@@ -40,6 +44,10 @@ type DefinitionConfig struct {
 	// across the whole group. Empty means the pipeline excludes only with
 	// itself.
 	ExclusionGroup string
+
+	// ConcurrencyClass optionally sets the default concurrency class for
+	// all of this pipeline's steps; a step's own class overrides it.
+	ConcurrencyClass string
 
 	// NewInput constructs an empty Input message; nil for an Input-less
 	// pipeline.
@@ -86,6 +94,9 @@ func NewDefinition(cfg DefinitionConfig) *Definition {
 		}
 		if sc.Unwind != (sc.UnwindFunc != nil) {
 			panic(fmt.Sprintf("durable: step %q unwind declaration and adapter disagree", sc.ID))
+		}
+		if sc.ConcurrencyClass == "" {
+			sc.ConcurrencyClass = cfg.ConcurrencyClass
 		}
 		d.steps[sc.ID] = sc
 		d.topo = append(d.topo, ledger.Step{

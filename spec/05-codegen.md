@@ -17,6 +17,7 @@ message StepOptions {
   string id = 1;
   bool unwind = 2;
   bool retired = 3;
+  string concurrency_class = 4;
 }
 
 message PipelineOptions {
@@ -25,6 +26,7 @@ message PipelineOptions {
   string output = 3;
   repeated string steps = 4;
   string exclusion_group = 5;
+  string concurrency_class = 6;
 }
 
 extend google.protobuf.MessageOptions {

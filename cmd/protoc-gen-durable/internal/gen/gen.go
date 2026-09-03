@@ -462,6 +462,9 @@ func emitDefinition(g *protogen.GeneratedFile, pl *pipelineDecl) {
 	if eg := pl.opts.GetExclusionGroup(); eg != "" {
 		g.P("ExclusionGroup: ", strconv(eg), ",")
 	}
+	if cc := pl.opts.GetConcurrencyClass(); cc != "" {
+		g.P("ConcurrencyClass: ", strconv(cc), ",")
+	}
 	if pl.input != nil {
 		g.P("NewInput: func() ", protoMsg, " { return &", g.QualifiedGoIdent(pl.input.GoIdent), "{} },")
 	}
@@ -484,6 +487,9 @@ func emitDefinition(g *protogen.GeneratedFile, pl *pipelineDecl) {
 		}
 		if s.opts.GetRetired() {
 			g.P("Retired: true,")
+		}
+		if cc := s.opts.GetConcurrencyClass(); cc != "" {
+			g.P("ConcurrencyClass: ", strconv(cc), ",")
 		}
 		if s.hasState {
 			g.P("HasState: true,")

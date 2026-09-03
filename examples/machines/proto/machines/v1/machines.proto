@@ -32,6 +32,7 @@ message ReserveCapacity {
   option (durable.v1.step) = {
     id: "reserve-capacity/v1"
     unwind: true
+    concurrency_class: "host-capacity-api"
   };
 
   string reservation_id = 1;

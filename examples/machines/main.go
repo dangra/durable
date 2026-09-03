@@ -15,7 +15,8 @@ import (
 func main() {
 	ctx := context.Background()
 
-	engine := durable.NewEngine(durabletest.NewMemStore())
+	engine := durable.NewEngine(durabletest.NewMemStore(),
+		durable.WithConcurrencyClass("host-capacity-api", 2))
 	provision, err := newProvisionMachine(newCloud()).Bind(engine)
 	if err != nil {
 		log.Fatal(err)

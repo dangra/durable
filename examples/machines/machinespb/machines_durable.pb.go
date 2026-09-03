@@ -286,9 +286,10 @@ func NewProvisionMachine(
 				},
 			},
 			{
-				ID:       "reserve-capacity/v1",
-				Unwind:   true,
-				HasState: true,
+				ID:               "reserve-capacity/v1",
+				Unwind:           true,
+				ConcurrencyClass: "host-capacity-api",
+				HasState:         true,
 				Run: func(ctx context.Context, core *durable.Invocation) (proto.Message, error) {
 					state, err := reserveCapacity.Run(ctx, ReserveCapacityInvocation{core: core})
 					if state == nil {

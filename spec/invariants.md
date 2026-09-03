@@ -185,3 +185,7 @@ Part of the [`durable` specification](README.md). This list is append-only; inva
 91. Waking from a park is at-least-once re-execution; the wake attempt observes the awaited RunID.
 
 92. Awaiting a terminal or nonexistent Run resolves immediately; a park closing an await cycle invalidates the parking Run.
+
+93. Concurrency-class acquisition never blocks a worker; a Run finding its class full parks and is woken FIFO.
+
+94. Class tokens are execution-scoped and in-memory: held only while a handler runs, never across retries, parks, or restarts.

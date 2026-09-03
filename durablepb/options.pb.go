@@ -35,9 +35,14 @@ type StepOptions struct {
 	Unwind bool `protobuf:"varint,2,opt,name=unwind,proto3" json:"unwind,omitempty"`
 	// Whether the Step is retired: structurally present, but no new forward
 	// operation may begin for it.
-	Retired       bool `protobuf:"varint,3,opt,name=retired,proto3" json:"retired,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Retired bool `protobuf:"varint,3,opt,name=retired,proto3" json:"retired,omitempty"`
+	// Optional named concurrency class. Operations of steps sharing a class
+	// are bounded by the capacity the engine configures for it
+	// (WithConcurrencyClass); a declared class without configured capacity
+	// is unlimited. Overrides the pipeline-level default.
+	ConcurrencyClass string `protobuf:"bytes,4,opt,name=concurrency_class,json=concurrencyClass,proto3" json:"concurrency_class,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *StepOptions) Reset() {
@@ -91,6 +96,13 @@ func (x *StepOptions) GetRetired() bool {
 	return false
 }
 
+func (x *StepOptions) GetConcurrencyClass() string {
+	if x != nil {
+		return x.ConcurrencyClass
+	}
+	return ""
+}
+
 // PipelineOptions declares a protobuf marker message as a durable Pipeline.
 type PipelineOptions struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -107,8 +119,11 @@ type PipelineOptions struct {
 	// the whole group for a resource. Without a group, a pipeline excludes
 	// only with itself (the default per-pipeline slot).
 	ExclusionGroup string `protobuf:"bytes,5,opt,name=exclusion_group,json=exclusionGroup,proto3" json:"exclusion_group,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// Optional default concurrency class for all of this pipeline's steps;
+	// a step's own concurrency_class overrides it.
+	ConcurrencyClass string `protobuf:"bytes,6,opt,name=concurrency_class,json=concurrencyClass,proto3" json:"concurrency_class,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *PipelineOptions) Reset() {
@@ -176,6 +191,13 @@ func (x *PipelineOptions) GetExclusionGroup() string {
 	return ""
 }
 
+func (x *PipelineOptions) GetConcurrencyClass() string {
+	if x != nil {
+		return x.ConcurrencyClass
+	}
+	return ""
+}
+
 var file_durable_v1_options_proto_extTypes = []protoimpl.ExtensionInfo{
 	{
 		ExtendedType:  (*descriptorpb.MessageOptions)(nil),
@@ -213,17 +235,19 @@ var File_durable_v1_options_proto protoreflect.FileDescriptor
 const file_durable_v1_options_proto_rawDesc = "" +
 	"\n" +
 	"\x18durable/v1/options.proto\x12\n" +
-	"durable.v1\x1a google/protobuf/descriptor.proto\"O\n" +
+	"durable.v1\x1a google/protobuf/descriptor.proto\"|\n" +
 	"\vStepOptions\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x16\n" +
 	"\x06unwind\x18\x02 \x01(\bR\x06unwind\x12\x18\n" +
-	"\aretired\x18\x03 \x01(\bR\aretired\"\x8e\x01\n" +
+	"\aretired\x18\x03 \x01(\bR\aretired\x12+\n" +
+	"\x11concurrency_class\x18\x04 \x01(\tR\x10concurrencyClass\"\xbb\x01\n" +
 	"\x0fPipelineOptions\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05input\x18\x02 \x01(\tR\x05input\x12\x16\n" +
 	"\x06output\x18\x03 \x01(\tR\x06output\x12\x14\n" +
 	"\x05steps\x18\x04 \x03(\tR\x05steps\x12'\n" +
-	"\x0fexclusion_group\x18\x05 \x01(\tR\x0eexclusionGroup:N\n" +
+	"\x0fexclusion_group\x18\x05 \x01(\tR\x0eexclusionGroup\x12+\n" +
+	"\x11concurrency_class\x18\x06 \x01(\tR\x10concurrencyClass:N\n" +
 	"\x04step\x12\x1f.google.protobuf.MessageOptions\x18\x81\x95\x03 \x01(\v2\x17.durable.v1.StepOptionsR\x04step:Z\n" +
 	"\bpipeline\x12\x1f.google.protobuf.MessageOptions\x18\x82\x95\x03 \x01(\v2\x1b.durable.v1.PipelineOptionsR\bpipelineB/Z-github.com/dangra/durable/durablepb;durablepbb\x06proto3"
 

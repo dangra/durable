@@ -1879,6 +1879,8 @@ func TestUnconfiguredClassIsUnlimited(t *testing.T) {
 func TestCancelBypassesThrottle(t *testing.T) {
 	release := make(chan struct{})
 	defer close(release)
+	holderEntered := make(chan struct{})
+	var enteredOnce sync.Once
 	def := durable.NewDefinition(durable.DefinitionConfig{
 		ID:               "throttle-cancel",
 		ConcurrencyClass: "narrow",
@@ -1886,6 +1888,9 @@ func TestCancelBypassesThrottle(t *testing.T) {
 			stateless("s/v1", func(ctx context.Context, inv *durable.Invocation) error {
 				if inv.CancelRequested() {
 					return nil
+				}
+				if inv.ResourceID() == "holder" {
+					enteredOnce.Do(func() { close(holderEntered) })
 				}
 				select {
 				case <-release:
@@ -1907,6 +1912,10 @@ func TestCancelBypassesThrottle(t *testing.T) {
 	if _, _, err := p.Schedule(context.Background(), "holder", nil); err != nil {
 		t.Fatalf("Schedule holder: %v", err)
 	}
+	// Schedule order does not determine dispatch order: wait until the
+	// holder actually occupies the class token before adding a contender,
+	// or the roles can flip and the poll below waits on the wrong run.
+	<-holderEntered
 	parked, _, err := p.Schedule(context.Background(), "parked", nil)
 	if err != nil {
 		t.Fatalf("Schedule parked: %v", err)

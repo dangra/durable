@@ -377,7 +377,7 @@ func (e *Engine) Stats() EngineStats {
 		ActiveRuns:    len(e.active),
 		AwaitingRuns:  len(e.awaitParked),
 		ThrottledRuns: len(e.throttled),
-		DelayedRuns:   len(e.wakes),
+		DelayedRuns:   e.wakes.Len(),
 		InvalidRuns:   len(e.invalid),
 	}
 	if len(e.classes) > 0 {

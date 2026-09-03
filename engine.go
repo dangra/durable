@@ -17,6 +17,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/dangra/durable/internal/ledger"
+	"github.com/dangra/durable/internal/watchset"
 )
 
 // RetryPolicy configures exponential backoff for ordinary (retryable)
@@ -159,9 +160,13 @@ type Engine struct {
 	active        map[RunID]struct{}
 	repoke        map[RunID]struct{}
 	invalid       map[RunID]*InvalidRunError
-	waiters       map[RunID][]chan struct{}
 	attemptCancel map[RunID]context.CancelFunc
-	wakes         map[RunID]chan struct{}
+
+	// waiters broadcasts a Run's terminal/invalid notification to
+	// Run.Wait callers and await watchers; wakes cuts delayed dispatches
+	// short. Both are internally locked, independent of mu.
+	waiters watchset.Set[RunID]
+	wakes   watchset.Signals[RunID]
 
 	baseCtx context.Context
 	cancel  context.CancelFunc
@@ -184,9 +189,7 @@ func NewEngine(store Store, opts ...Option) *Engine {
 		active:        make(map[RunID]struct{}),
 		repoke:        make(map[RunID]struct{}),
 		invalid:       make(map[RunID]*InvalidRunError),
-		waiters:       make(map[RunID][]chan struct{}),
 		attemptCancel: make(map[RunID]context.CancelFunc),
-		wakes:         make(map[RunID]chan struct{}),
 		classCapacity: make(map[string]int),
 		classes:       make(map[string]*concClass),
 		throttled:     make(map[RunID]throttlePark),
@@ -544,16 +547,16 @@ func (e *Engine) dispatch(id RunID, delay time.Duration) {
 
 	e.wg.Go(func() {
 		if delay > 0 {
-			wake := e.armWake(id)
+			wake := e.wakes.Arm(id)
 			select {
 			case <-e.clock.After(delay):
 			case <-wake:
 			case <-e.baseCtx.Done():
-				e.disarmWake(id)
+				e.wakes.Disarm(id)
 				e.clearActive(id)
 				return
 			}
-			e.disarmWake(id)
+			e.wakes.Disarm(id)
 		}
 		select {
 		case e.sem <- struct{}{}:
@@ -573,36 +576,6 @@ func (e *Engine) dispatch(id RunID, delay time.Duration) {
 			e.dispatch(id, redispatchIn)
 		}
 	})
-}
-
-// armWake registers a wake channel a delayed dispatch waits on, so a
-// cancellation (or other urgent signal) can cut a retry or start delay
-// short. At most one dispatch waits per Run.
-func (e *Engine) armWake(id RunID) chan struct{} {
-	ch := make(chan struct{}, 1)
-	e.mu.Lock()
-	e.wakes[id] = ch
-	e.mu.Unlock()
-	return ch
-}
-
-func (e *Engine) disarmWake(id RunID) {
-	e.mu.Lock()
-	delete(e.wakes, id)
-	e.mu.Unlock()
-}
-
-// wakeRun cuts short a delayed dispatch wait for the Run, if any.
-func (e *Engine) wakeRun(id RunID) {
-	e.mu.Lock()
-	ch := e.wakes[id]
-	e.mu.Unlock()
-	if ch != nil {
-		select {
-		case ch <- struct{}{}:
-		default:
-		}
-	}
 }
 
 // attemptContext derives the per-attempt handler context and registers its
@@ -667,7 +640,7 @@ func (e *Engine) processRun(id RunID) (time.Duration, bool) {
 			return time.Second, true
 		}
 		if rec.Terminal() {
-			e.notify(id)
+			e.waiters.Notify(id)
 			return 0, false
 		}
 
@@ -838,7 +811,7 @@ func (e *Engine) completeRun(rec *RunRecord) {
 		"run", string(rec.RunID), "outcome", rec.Outcome.String(),
 		"elapsed", rec.UpdatedAt.Sub(rec.CreatedAt))
 	e.emitRunTerminal(rec)
-	e.notify(rec.RunID)
+	e.waiters.Notify(rec.RunID)
 }
 
 // attemptResolved is the single seam through which a resolved, retried,
@@ -924,23 +897,23 @@ func (e *Engine) awaitGate(rec *RunRecord) bool {
 	}
 	// Register before checking terminality so a completion between the
 	// check and the registration cannot be missed.
-	ch := e.waiterChan(target)
+	ch, cancelWatch := e.waiters.Watch(target)
 	trec, err := e.store.GetRun(e.baseCtx, target)
 	switch {
 	case errors.Is(err, ErrRunNotFound):
 		// Resolve immediately: the target never existed or was reaped.
-		e.removeWaiter(target, ch)
+		cancelWatch()
 		e.resolveAwaitPark(rec, target, true)
 		return false
 	case err != nil:
-		e.removeWaiter(target, ch)
+		cancelWatch()
 		if e.baseCtx.Err() == nil {
 			e.logger.Error("durable: await target read failed", "run", rec.RunID, "target", target, "error", err)
 		}
 		e.resolveAwaitPark(rec, target, false)
 		return false
 	case trec.Terminal():
-		e.removeWaiter(target, ch)
+		cancelWatch()
 		e.resolveAwaitPark(rec, target, true)
 		return false
 	}
@@ -962,6 +935,7 @@ func (e *Engine) awaitGate(rec *RunRecord) bool {
 		case <-ch:
 			e.dispatch(parked, 0)
 		case <-e.baseCtx.Done():
+			cancelWatch()
 		}
 	})
 	return true
@@ -1428,49 +1402,13 @@ func (e *Engine) markInvalid(rec *RunRecord, stepID StepID, reason string) {
 	e.emitRunInvalid(RunFailureEvent{
 		PipelineID: rec.PipelineID, ResourceID: rec.ResourceID, RunID: rec.RunID,
 		StepID: stepID, Reason: reason})
-	e.notify(rec.RunID)
+	e.waiters.Notify(rec.RunID)
 }
 
 func (e *Engine) invalidFor(id RunID) *InvalidRunError {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.invalid[id]
-}
-
-// waiterChan registers a channel closed at the next terminal/invalid
-// notification for the Run.
-func (e *Engine) waiterChan(id RunID) chan struct{} {
-	ch := make(chan struct{})
-	e.mu.Lock()
-	e.waiters[id] = append(e.waiters[id], ch)
-	e.mu.Unlock()
-	return ch
-}
-
-// removeWaiter unregisters a waiter channel that will not be waited on.
-func (e *Engine) removeWaiter(id RunID, ch chan struct{}) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	chs := e.waiters[id]
-	for i, c := range chs {
-		if c == ch {
-			e.waiters[id] = append(chs[:i], chs[i+1:]...)
-			break
-		}
-	}
-	if len(e.waiters[id]) == 0 {
-		delete(e.waiters, id)
-	}
-}
-
-func (e *Engine) notify(id RunID) {
-	e.mu.Lock()
-	chs := e.waiters[id]
-	delete(e.waiters, id)
-	e.mu.Unlock()
-	for _, ch := range chs {
-		close(ch)
-	}
 }
 
 func factsOf(rec *RunRecord) ledger.Facts {

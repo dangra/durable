@@ -35,24 +35,29 @@ func (r Run) Wait(ctx context.Context) (Result, error) {
 		if ie := e.invalidFor(r.id); ie != nil {
 			return Result{}, ie
 		}
-		ch := e.waiterChan(r.id)
+		ch, cancel := e.waiters.Watch(r.id)
 		// Re-check after registering so a notification between the read
 		// and the registration is not missed.
 		rec, err = e.store.GetRun(ctx, r.id)
 		if err != nil {
+			cancel()
 			return Result{}, err
 		}
 		if rec.Terminal() {
+			cancel()
 			return resultOf(rec), nil
 		}
 		if ie := e.invalidFor(r.id); ie != nil {
+			cancel()
 			return Result{}, ie
 		}
 		select {
 		case <-ch:
 		case <-ctx.Done():
+			cancel()
 			return Result{}, ctx.Err()
 		case <-base.Done():
+			cancel()
 			return Result{}, base.Err()
 		}
 	}
@@ -84,7 +89,7 @@ func (r Run) Cancel(ctx context.Context, cause string) error {
 		e.logger.Debug("durable: cancel requested", "run", string(r.id), "cause", cause)
 	}
 	e.preemptAttempt(r.id)
-	e.wakeRun(r.id)
+	e.wakes.Fire(r.id)
 	e.dispatch(r.id, 0)
 	return nil
 }

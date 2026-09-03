@@ -14,14 +14,6 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-env:
-  # Tool versions pinned for reproducibility. PROTOC_GEN_GO_VERSION must
-  # match go.mod's google.golang.org/protobuf and the version stamped in
-  # the committed generated files, or the drift check fails spuriously.
-  PROTOC_GEN_GO_VERSION: v1.36.12
-  STATICCHECK_VERSION: v0.8.1
-  GOVULNCHECK_VERSION: v1.7.0
-
 jobs:
   test:
     name: Build & test
@@ -64,8 +56,10 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+      # Tool versions come from go.mod tool directives (single source of
+      # truth, bumped by dependabot's gomod updates).
       - name: Staticcheck
-        run: go run honnef.co/go/tools/cmd/staticcheck@${STATICCHECK_VERSION} ./...
+        run: go tool staticcheck ./...
 
   govulncheck:
     name: Vulnerability scan
@@ -79,7 +73,7 @@ jobs:
         with:
           go-version-file: go.mod
       - name: govulncheck
-        run: go run golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION} ./...
+        run: go tool govulncheck ./...
 
   proto:
     name: Protobuf lint, breaking & drift
@@ -107,9 +101,10 @@ jobs:
       - name: Breaking changes against base branch
         if: github.event_name == 'pull_request'
         run: buf breaking --against ".git#branch=origin/${{ github.base_ref }}"
+      # buf.gen.yaml invokes protoc-gen-go via 'go tool', so its version is
+      # locked to go.mod's protobuf runtime — nothing to install or match.
       - name: Generated code drift
         run: |
-          go install google.golang.org/protobuf/cmd/protoc-gen-go@${PROTOC_GEN_GO_VERSION}
           buf generate
           if ! git diff --exit-code; then
             echo "::error::generated code is out of date; run 'buf generate' and commit the result"

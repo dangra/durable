@@ -108,6 +108,6 @@ buf lint && buf generate   # regenerate durablepb and example code
 go test ./...
 ```
 
-`buf generate` runs `protoc-gen-go` and `protoc-gen-durable` (via `go run`,
-no install needed). `protoc-gen-go` must be on `PATH`
-(`go install google.golang.org/protobuf/cmd/protoc-gen-go@latest`).
+`buf generate` runs `protoc-gen-go` (via `go tool`, version-locked to
+go.mod's protobuf runtime) and `protoc-gen-durable` (via `go run`) — no
+plugin installs needed.

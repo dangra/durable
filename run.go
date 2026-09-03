@@ -76,8 +76,12 @@ func (r Run) Cancel(ctx context.Context, cause string) error {
 	if !e.isStarted() {
 		return ErrEngineNotStarted
 	}
-	if _, err := e.store.RequestCancel(ctx, r.id, CancelRequest{Cause: cause, At: e.clock.Now()}); err != nil {
+	accepted, err := e.store.RequestCancel(ctx, r.id, CancelRequest{Cause: cause, At: e.clock.Now()})
+	if err != nil {
 		return err
+	}
+	if accepted && e.debugLog() {
+		e.logger.Debug("durable: cancel requested", "run", string(r.id), "cause", cause)
 	}
 	e.preemptAttempt(r.id)
 	e.wakeRun(r.id)

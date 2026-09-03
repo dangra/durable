@@ -1,7 +1,9 @@
 // Command perfcompare gates the performance regression suite: it parses
-// two `go test -bench` outputs (base and head), takes the median of each
-// metric across -count repetitions, and applies per-metric-class
-// thresholds — tight and two-sided for deterministic counters, loose for
+// two `go test -bench` outputs (base and head), collapses each metric's
+// -count repetitions to one estimate — the median for (near-)deterministic
+// counters, the best sample for wall-clock figures, since runner
+// interference only ever adds time — and applies per-metric-class
+// thresholds: tight and two-sided for deterministic counters, loose for
 // wall-clock figures. It prints a markdown table (suitable for a GitHub
 // job summary) and exits non-zero when any gated metric regresses, when
 // gated coverage present in base is missing from head, or when either
@@ -31,6 +33,7 @@ type class struct {
 	lowerIsBad  bool    // metric where a decrease is a regression
 	twoSided    bool    // deterministic metric where any move is a regression
 	informative bool    // never gates
+	wallClock   bool    // compare best-of-count samples, not the median
 }
 
 func classify(unit string) class {
@@ -47,11 +50,15 @@ func classify(unit string) class {
 	// Allocation counters: near-deterministic, small timing wiggle.
 	case "B/op", "allocs/op":
 		return class{threshold: 0.10}
-	// Wall clock: noisy on shared runners, gate loosely.
+	// Wall clock: noisy on shared runners, gate loosely — and on the
+	// best sample of each side, not the median. Interference (a
+	// contended VM, a slow disk) only ever adds time, so the minimum is
+	// the least-noisy observation of true cost; medians of -count 3 have
+	// been observed 7-15x apart on identical code across CI runs.
 	case "ns/op", "p50-ms", "p99-ms", "start-ms", "wake-p50-ms":
-		return class{threshold: 0.25}
+		return class{threshold: 0.25, wallClock: true}
 	case "runs/sec", "unwinds/sec", "cycles/sec":
-		return class{threshold: 0.25, lowerIsBad: true}
+		return class{threshold: 0.25, lowerIsBad: true, wallClock: true}
 	// wake-max-ms (a population max — one scheduler stall away from
 	// doubling) and anything unrecognized: report, never gate.
 	default:
@@ -112,6 +119,22 @@ func median(vs []float64) float64 {
 	s := append([]float64(nil), vs...)
 	sort.Float64s(s)
 	return s[len(s)/2]
+}
+
+// estimate collapses one metric's samples per its class: wall-clock
+// metrics take the best sample (min, or max when lower is bad), all
+// others the median.
+func estimate(vs []float64, c class) float64 {
+	if !c.wallClock {
+		return median(vs)
+	}
+	best := vs[0]
+	for _, v := range vs[1:] {
+		if (v < best) != c.lowerIsBad {
+			best = v
+		}
+	}
+	return best
 }
 
 func sortedKeys[V any](m map[string]V) []string {
@@ -198,13 +221,14 @@ func main() {
 	fmt.Println("|---|---|---|---|---|---|")
 	for _, b := range sortedKeys(head) {
 		for _, u := range sortedKeys(head[b]) {
-			h := median(head[b][u])
+			c := classify(u)
+			h := estimate(head[b][u], c)
 			bs, ok := base[b][u]
 			if !ok {
 				fmt.Printf("| %s | %s | — | %.4g | — | new |\n", b, u, h)
 				continue
 			}
-			o := median(bs)
+			o := estimate(bs, c)
 			var delta float64
 			switch {
 			case o != 0:
@@ -213,7 +237,6 @@ func main() {
 				// 0 → nonzero must not slip through as delta 0.
 				delta = math.Inf(1)
 			}
-			c := classify(u)
 			verdict := "ok"
 			switch {
 			case c.informative:

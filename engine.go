@@ -66,7 +66,18 @@ func WithClock(c Clock) Option {
 	}
 }
 
-// WithLogger sets the structured logger for operational diagnostics.
+// WithLogger sets the structured logger for engine lifecycle events and
+// operational diagnostics; the default is slog.Default().
+//
+// The Engine logs per-attempt progress (scheduled, retrying, succeeded,
+// awaiting, throttled) at Debug; once-per-run milestones (terminal
+// outcome, unwind start, cancellation accepted) at Info; permanent unwind
+// failures at Warn; and anomalies (handler panics, store errors, invalid
+// runs) at Error. Lifecycle lines carry the canonical keys pipeline,
+// resource, and run; operation-scoped lines add step, phase, and attempt;
+// failure causes appear under error. Anomaly diagnostics carry at least
+// run. Invocation.Logger pre-attaches the same canonical keys for handler
+// code.
 func WithLogger(l *slog.Logger) Option {
 	return func(e *Engine) {
 		if l != nil {
@@ -224,6 +235,9 @@ func (e *Engine) Start(ctx context.Context) error {
 	recs, err := e.store.ListNonterminal(ctx)
 	if err != nil {
 		return fmt.Errorf("durable: discovering nonterminal runs: %w", err)
+	}
+	if len(recs) > 0 {
+		e.logger.Info("durable: recovering nonterminal runs", "count", len(recs))
 	}
 	for _, rec := range recs {
 		delay := time.Duration(0)
@@ -582,6 +596,10 @@ func (e *Engine) processRun(id RunID) (time.Duration, bool) {
 			class := def.step(StepID(dec.Step)).ConcurrencyClass
 			proceed, held := e.acquireClass(rec, class)
 			if !proceed {
+				if e.debugLog() {
+					e.logger.Debug("durable: run throttled",
+						"run", string(rec.RunID), "step", dec.Step, "class", class)
+				}
 				return 0, false
 			}
 			done, delay, again := e.runForward(rec, def, StepID(dec.Step))
@@ -614,6 +632,10 @@ func (e *Engine) processRun(id RunID) (time.Duration, bool) {
 			class := def.step(StepID(dec.Step)).ConcurrencyClass
 			proceed, held := e.acquireClass(rec, class)
 			if !proceed {
+				if e.debugLog() {
+					e.logger.Debug("durable: run throttled",
+						"run", string(rec.RunID), "step", dec.Step, "class", class)
+				}
 				return 0, false
 			}
 			done, delay, again := e.runUnwind(rec, def, StepID(dec.Step))
@@ -631,6 +653,7 @@ func (e *Engine) processRun(id RunID) (time.Duration, bool) {
 			if !e.apply(rec, Transition{Cursor: idleCursor(rec), Outcome: rec.Outcome}) {
 				return time.Second, true
 			}
+			e.logRunComplete(rec)
 			e.notify(id)
 			return 0, false
 		}
@@ -658,7 +681,22 @@ func (e *Engine) applyCancel(rec *RunRecord) bool {
 		Kind:    FailureKindCanceled}
 	rec.Phase = PhaseUnwind
 	rec.NextAttemptAt = time.Time{}
-	return e.apply(rec, Transition{Cursor: idleCursor(rec), RootFailure: rec.RootFailure})
+	if !e.apply(rec, Transition{Cursor: idleCursor(rec), RootFailure: rec.RootFailure}) {
+		return false
+	}
+	e.logger.Info("durable: cancellation accepted; unwinding",
+		"pipeline", string(rec.PipelineID), "resource", string(rec.ResourceID),
+		"run", string(rec.RunID), "cause", cause)
+	return true
+}
+
+// logRunComplete records the once-per-run terminal milestone; rec must
+// already carry the committed outcome and final UpdatedAt.
+func (e *Engine) logRunComplete(rec *RunRecord) {
+	e.logger.Info("durable: run complete",
+		"pipeline", string(rec.PipelineID), "resource", string(rec.ResourceID),
+		"run", string(rec.RunID), "outcome", rec.Outcome.String(),
+		"elapsed", rec.UpdatedAt.Sub(rec.CreatedAt))
 }
 
 // recordLastError captures an ordinary-error attempt on the record; it
@@ -743,6 +781,11 @@ func (e *Engine) parkAwait(rec *RunRecord, stepID StepID, attempts uint64, targe
 		e.markInvalid(rec, stepID, fmt.Sprintf("await cycle: awaiting run %s would deadlock back to this run", target))
 		return false, 0, false
 	}
+	if e.debugLog() {
+		e.logger.Debug("durable: run awaiting",
+			"pipeline", string(rec.PipelineID), "resource", string(rec.ResourceID),
+			"run", string(rec.RunID), "step", string(stepID), "target", string(target))
+	}
 	return true, 0, false
 }
 
@@ -798,6 +841,7 @@ func (e *Engine) runForward(rec *RunRecord, def *Definition, stepID StepID) (don
 
 	inv := e.invocation(rec, def, stepID, sr.ForwardAttempts, PhaseForward)
 	inv.awaitedRunID = awaited
+	opStart := e.clock.Now()
 	state, err := e.invokeForward(sc, inv)
 
 	if v := inv.takeViolation(); v != nil {
@@ -832,6 +876,12 @@ func (e *Engine) runForward(rec *RunRecord, def *Definition, stepID StepID) (don
 		if !e.apply(rec, Transition{Cursor: idleCursor(rec), Steps: []StepWrite{{StepID: stepID, Record: *sr}}}) {
 			return false, time.Second, true
 		}
+		if e.debugLog() {
+			e.logger.Debug("durable: operation succeeded",
+				"pipeline", string(rec.PipelineID), "resource", string(rec.ResourceID),
+				"run", string(rec.RunID), "step", string(stepID), "phase", PhaseForward.String(),
+				"attempt", sr.ForwardAttempts, "elapsed", now.Sub(opStart))
+		}
 		return true, 0, false
 
 	case permanent:
@@ -849,6 +899,10 @@ func (e *Engine) runForward(rec *RunRecord, def *Definition, stepID StepID) (don
 		if !e.apply(rec, Transition{Cursor: idleCursor(rec), Steps: []StepWrite{{StepID: stepID, Record: *sr}}, RootFailure: rec.RootFailure}) {
 			return false, time.Second, true
 		}
+		e.logger.Info("durable: run failed; unwinding",
+			"pipeline", string(rec.PipelineID), "resource", string(rec.ResourceID),
+			"run", string(rec.RunID), "step", string(stepID), "attempt", sr.ForwardAttempts,
+			"error", pe.err, "kind", rec.RootFailure.Kind.String(), "reason", rec.RootFailure.Reason)
 		return true, 0, false
 
 	default:
@@ -857,6 +911,12 @@ func (e *Engine) runForward(rec *RunRecord, def *Definition, stepID StepID) (don
 		recordLastError(rec, err, now)
 		if !e.apply(rec, Transition{Cursor: activeCursor(rec, stepID, sr.ForwardAttempts)}) {
 			return false, time.Second, true
+		}
+		if e.debugLog() {
+			e.logger.Debug("durable: operation failed; will retry",
+				"pipeline", string(rec.PipelineID), "resource", string(rec.ResourceID),
+				"run", string(rec.RunID), "step", string(stepID), "phase", PhaseForward.String(),
+				"attempt", sr.ForwardAttempts, "error", err, "next_attempt_at", rec.NextAttemptAt)
 		}
 		return false, d, true
 	}
@@ -878,6 +938,7 @@ func (e *Engine) runUnwind(rec *RunRecord, def *Definition, stepID StepID) (done
 
 	inv := e.invocation(rec, def, stepID, sr.UnwindAttempts, PhaseUnwind)
 	inv.awaitedRunID = awaited
+	opStart := e.clock.Now()
 	failure := Failure{
 		UnwindFailures: append([]UnwindFailure(nil), rec.UnwindFailures...),
 	}
@@ -903,6 +964,12 @@ func (e *Engine) runUnwind(rec *RunRecord, def *Definition, stepID StepID) (done
 		if !e.apply(rec, Transition{Cursor: idleCursor(rec), Steps: []StepWrite{{StepID: stepID, Record: *sr}}}) {
 			return false, time.Second, true
 		}
+		if e.debugLog() {
+			e.logger.Debug("durable: operation succeeded",
+				"pipeline", string(rec.PipelineID), "resource", string(rec.ResourceID),
+				"run", string(rec.RunID), "step", string(stepID), "phase", PhaseUnwind.String(),
+				"attempt", sr.UnwindAttempts, "elapsed", now.Sub(opStart))
+		}
 		return true, 0, false
 
 	case permanent:
@@ -920,6 +987,12 @@ func (e *Engine) runUnwind(rec *RunRecord, def *Definition, stepID StepID) (done
 		if !e.apply(rec, Transition{Cursor: idleCursor(rec), Steps: []StepWrite{{StepID: stepID, Record: *sr}}, UnwindFailure: &uf}) {
 			return false, time.Second, true
 		}
+		// Warn, not Info: a permanently failed unwind means compensation
+		// did not happen — external resources may be leaked.
+		e.logger.Warn("durable: unwind step failed permanently",
+			"pipeline", string(rec.PipelineID), "resource", string(rec.ResourceID),
+			"run", string(rec.RunID), "step", string(stepID), "attempt", sr.UnwindAttempts,
+			"error", pe.err, "kind", uf.Kind.String(), "reason", uf.Reason)
 		return true, 0, false
 
 	default:
@@ -928,6 +1001,12 @@ func (e *Engine) runUnwind(rec *RunRecord, def *Definition, stepID StepID) (done
 		recordLastError(rec, err, now)
 		if !e.apply(rec, Transition{Cursor: activeCursor(rec, stepID, sr.UnwindAttempts)}) {
 			return false, time.Second, true
+		}
+		if e.debugLog() {
+			e.logger.Debug("durable: operation failed; will retry",
+				"pipeline", string(rec.PipelineID), "resource", string(rec.ResourceID),
+				"run", string(rec.RunID), "step", string(stepID), "phase", PhaseUnwind.String(),
+				"attempt", sr.UnwindAttempts, "error", err, "next_attempt_at", rec.NextAttemptAt)
 		}
 		return false, d, true
 	}
@@ -968,6 +1047,7 @@ func (e *Engine) reduceAndComplete(rec *RunRecord, def *Definition) bool {
 	if !e.apply(rec, Transition{Cursor: idleCursor(rec), Output: rec.Output, Outcome: rec.Outcome}) {
 		return false
 	}
+	e.logRunComplete(rec)
 	e.notify(rec.RunID)
 	return true
 }
@@ -984,7 +1064,14 @@ func (e *Engine) invocation(rec *RunRecord, def *Definition, stepID StepID, atte
 		newInput:        def.cfg.NewInput,
 		states:          committedStates(rec),
 		cancelRequested: rec.Cancel != nil,
+		baseLogger:      e.logger,
 	}
+}
+
+// debugLog reports whether the logger records Debug. Per-attempt log sites
+// guard on it so a disabled level costs no argument boxing in hot paths.
+func (e *Engine) debugLog() bool {
+	return e.logger.Enabled(context.Background(), slog.LevelDebug)
 }
 
 func committedStates(rec *RunRecord) map[StepID][]byte {

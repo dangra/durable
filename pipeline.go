@@ -102,6 +102,15 @@ func (p *Pipeline) Schedule(ctx context.Context, resource ResourceID, input prot
 		return Run{}, false, err
 	}
 	if created {
+		if e.debugLog() {
+			args := []any{
+				"pipeline", string(rec.PipelineID), "resource", string(resource),
+				"run", string(rec.RunID)}
+			if !rec.NextAttemptAt.IsZero() {
+				args = append(args, "start_at", rec.NextAttemptAt)
+			}
+			e.logger.Debug("durable: run scheduled", args...)
+		}
 		e.dispatch(rec.RunID, 0)
 		return Run{id: rec.RunID, engine: e}, true, nil
 	}

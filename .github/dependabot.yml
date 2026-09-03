@@ -4,6 +4,21 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      # Runtime dependencies of the library: patch updates only. go.mod
+      # requires are the minimum-version floor MVS imposes on every
+      # consumer, so minor/major bumps are deliberate human decisions
+      # (govulncheck going red is the escalation trigger). Extend this
+      # list when adding a runtime dependency. Tool-directive deps
+      # (staticcheck, govulncheck) intentionally stay full-range; note
+      # protobuf is also the code generator, which therefore follows the
+      # runtime patch-only policy.
+      - dependency-name: go.etcd.io/bbolt
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: github.com/oklog/ulid/v2
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: google.golang.org/protobuf
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
   # Keeps the SHA-pinned actions in ci.yml current.
   - package-ecosystem: github-actions
     directory: /

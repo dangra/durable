@@ -86,14 +86,24 @@ func stepKey(id durable.RunID, step durable.StepID) []byte {
 	return []byte(string(id) + "\x00" + string(step))
 }
 
-func (s *Store) CreateRun(_ context.Context, rec *durable.RunRecord) (*durable.RunRecord, bool, error) {
-	var existing *durable.RunRecord
-	created := false
-	commit := s.db.Update
+// groupCommit picks the adaptive commit strategy for one write call: a
+// lone caller commits (and fsyncs) immediately via Update, while
+// concurrent callers coalesce into shared batch transactions. done must
+// be deferred by the caller; it ends the call's participation in the
+// concurrency count.
+func (s *Store) groupCommit() (commit func(func(*bolt.Tx) error) error, done func()) {
+	commit = s.db.Update
 	if s.pending.Add(1) > 1 {
 		commit = s.db.Batch
 	}
-	defer s.pending.Add(-1)
+	return commit, func() { s.pending.Add(-1) }
+}
+
+func (s *Store) CreateRun(_ context.Context, rec *durable.RunRecord) (*durable.RunRecord, bool, error) {
+	var existing *durable.RunRecord
+	created := false
+	commit, done := s.groupCommit()
+	defer done()
 	err := commit(func(tx *bolt.Tx) error {
 		key := slotKey(rec)
 		if activeID := tx.Bucket(slotsBucket).Get(key); activeID != nil {
@@ -172,11 +182,8 @@ func putRun(tx *bolt.Tx, rec *durable.RunRecord) error {
 }
 
 func (s *Store) ApplyTransition(_ context.Context, id durable.RunID, t durable.Transition) error {
-	commit := s.db.Update
-	if s.pending.Add(1) > 1 {
-		commit = s.db.Batch
-	}
-	defer s.pending.Add(-1)
+	commit, done := s.groupCommit()
+	defer done()
 	return commit(func(tx *bolt.Tx) error {
 		metaBytes := tx.Bucket(metaBucket).Get([]byte(id))
 		if metaBytes == nil {

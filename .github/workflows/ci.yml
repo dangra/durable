@@ -138,18 +138,28 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-      - name: Run suite (head)
+      - name: Run suite (head only, master push)
+        if: github.event_name == 'push'
         run: go test -run xxx -bench . -benchtime 1x -count 3 -benchmem ./perf/ | tee /tmp/perf-head.txt
-      - name: Run suite (base)
+      # Head and base alternate in adjacent time slices so both sides
+      # sample the same runner weather (CPU contention, disk-throttling
+      # phases): sequential whole-suite blocks have repeatedly produced
+      # 2-7x wall-clock splits on identical code when the runner degraded
+      # during exactly one of the blocks.
+      - name: Run suites (interleaved with base)
         if: github.event_name == 'pull_request'
         run: |
           base=$(git merge-base "origin/${{ github.base_ref }}" HEAD)
           git worktree add /tmp/base-tree "$base"
-          if [ -d /tmp/base-tree/perf ]; then
-            (cd /tmp/base-tree && go test -run xxx -bench . -benchtime 1x -count 3 -benchmem ./perf/ | tee /tmp/perf-base.txt)
-          else
-            echo "no perf suite on base commit; skipping comparison"
+          if [ ! -d /tmp/base-tree/perf ]; then
+            echo "no perf suite on base commit; head-only run"
+            go test -run xxx -bench . -benchtime 1x -count 3 -benchmem ./perf/ | tee /tmp/perf-head.txt
+            exit 0
           fi
+          for i in 1 2 3; do
+            go test -run xxx -bench . -benchtime 1x -count 1 -benchmem ./perf/ | tee -a /tmp/perf-head.txt
+            (cd /tmp/base-tree && go test -run xxx -bench . -benchtime 1x -count 1 -benchmem ./perf/) | tee -a /tmp/perf-base.txt
+          done
       - name: Gate against base
         if: github.event_name == 'pull_request'
         run: |
@@ -158,9 +168,11 @@ jobs:
             exit 0
           fi
           # transitions/* gate two-sided at 0.1% (exactly deterministic),
-          # disk bytes and allocations at 10%, wall clock at 25%; the
-          # thresholds live in internal/perfcompare, which also fails on
-          # recorded test failures and on gated metrics missing from head.
+          # disk bytes (best sample) and allocations at 10%, wall clock
+          # at 25% on paired per-slice head/base ratios (50% best-sample
+          # fallback when pairing is unavailable); the thresholds live in
+          # internal/perfcompare, which also fails on recorded test
+          # failures and on gated metrics missing from head.
           go run ./internal/perfcompare /tmp/perf-base.txt /tmp/perf-head.txt | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Report (master)
         if: github.event_name == 'push'

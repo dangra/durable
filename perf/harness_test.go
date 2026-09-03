@@ -7,10 +7,10 @@
 // near-deterministic byte and allocation metrics (diskB/* on the best
 // sample, B/op and allocs/op on the median, gated at 10%). Every scenario
 // runs with the observer installed, so observer-path overhead is itself
-// gated. Wall-clock metrics (p50-ms, p99-ms, runs/sec, ns/op) are a
-// smoke alarm gated at 50% on the best of the -count samples, since
-// shared-runner noise only adds time; the internal/perfcompare tool
-// applies the per-metric-class thresholds.
+// gated. Wall-clock metrics (p50-ms, p99-ms, runs/sec, ns/op) gate at
+// 25% on paired per-slice head/base ratios under CI's interleaved runs
+// (50% best-sample smoke alarm when pairing is unavailable); the
+// internal/perfcompare tool applies the per-metric-class thresholds.
 //
 // Every scenario is write-deterministic: retries are bounded by attempt
 // number, never by timing, so the logical write counts are identical
@@ -67,15 +67,20 @@ type env struct {
 // tolerance. Installing it in every scenario also makes observer-path
 // overhead part of every gated metric: a regression in the emit path
 // shows up in the wall-clock and allocation gates.
+//
+// Write-ness comes from StoreOpEvent.Write, which the engine's store
+// decorator declares method-by-method — a write method added to the
+// Store interface later is counted here without touching this file.
 func countingObserver(writes *atomic.Int64) durable.Observer {
 	return durable.Observer{
 		StoreOp: func(ev durable.StoreOpEvent) {
-			switch ev.Op {
-			case "CreateRun", "ApplyTransition", "RequestCancel":
+			// ReapTerminal is the one write op excluded by name: reaps
+			// count one logical delete per run via RunsReaped below,
+			// not one per batch call.
+			if ev.Write && ev.Op != "ReapTerminal" {
 				writes.Add(1)
 			}
 		},
-		// One logical delete per reaped run.
 		RunsReaped: func(count int) { writes.Add(int64(count)) },
 	}
 }

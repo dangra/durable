@@ -297,25 +297,47 @@ type throttlePark struct {
 // proceed=false parks the Run as throttled (woken FIFO on release). A
 // pending cancellation bypasses the gate so the Run can resolve; bypassed
 // and classless acquisitions hold no token (held=false). waited is how
-// long the Run had been parked when it proceeds (zero if it never was).
+// long the Run had been parked before this token grant (zero when it
+// never parked and on token-less proceeds, so a bypassed cancellation
+// never reports a phantom grant).
+//
+// FIFO membership is owned here (and by clearClassWait), never by
+// releaseClass: a woken Run keeps its queue slot until it actually takes
+// a token, is canceled, or turns invalid — and every path that declines
+// a wake passes it on to the next waiter, so a free token can never
+// strand the queue.
 func (e *Engine) acquireClass(rec *RunRecord, class string) (proceed, held bool, waited time.Duration) {
 	now := e.clock.Now()
+	var kick RunID
 	e.mu.Lock()
-	defer e.mu.Unlock()
 	prior, wasParked := e.throttled[rec.RunID]
-	if wasParked {
-		waited = now.Sub(prior.since)
+
+	// unpark removes this Run's park state (FIFO slot included) and, if
+	// its class now has spare capacity, names the next waiter to wake —
+	// a declined wake (cancel bypass, class change) is handed on.
+	unpark := func() {
+		if !wasParked {
+			return
+		}
+		delete(e.throttled, rec.RunID)
+		if c := e.classes[prior.class]; c != nil {
+			c.waiters = slices.DeleteFunc(c.waiters, func(w RunID) bool { return w == rec.RunID })
+			kick = nextWaiterLocked(c)
+		}
 	}
-	// Fully unpark, waiters-FIFO entry included: a bypass (cancellation)
-	// or a different class must not leave a stale entry behind to eat a
-	// future wake or inflate Stats. The park path below re-registers.
-	e.clearClassWaitLocked(rec.RunID)
+
 	if class == "" || rec.Cancel != nil {
-		return true, false, waited
+		unpark()
+		e.mu.Unlock()
+		e.kickWaiter(kick)
+		return true, false, 0
 	}
 	cap, limited := e.classCapacity[class]
 	if !limited {
-		return true, false, waited
+		unpark()
+		e.mu.Unlock()
+		e.kickWaiter(kick)
+		return true, false, 0
 	}
 	c := e.classes[class]
 	if c == nil {
@@ -323,55 +345,86 @@ func (e *Engine) acquireClass(rec *RunRecord, class string) (proceed, held bool,
 		e.classes[class] = c
 	}
 	if c.inUse < c.capacity {
+		unpark()
 		c.inUse++
+		// Cascade: with capacity still free and others queued (two
+		// releases before the head ran), the head alone was woken —
+		// wake the next in line too.
+		kick = nextWaiterLocked(c)
+		e.mu.Unlock()
+		e.kickWaiter(kick)
+		if wasParked {
+			waited = now.Sub(prior.since)
+		}
 		return true, true, waited
+	}
+	if !slices.Contains(c.waiters, rec.RunID) {
+		c.waiters = append(c.waiters, rec.RunID)
 	}
 	since := now
 	if wasParked {
 		since = prior.since // keep the original park time across re-checks
 	}
-	c.waiters = append(c.waiters, rec.RunID)
 	e.throttled[rec.RunID] = throttlePark{class: class, since: since}
+	e.mu.Unlock()
 	return false, false, 0
 }
 
+// nextWaiterLocked names the head waiter to wake when the class has free
+// capacity. Callers hold e.mu.
+func nextWaiterLocked(c *concClass) RunID {
+	if c != nil && c.inUse < c.capacity && len(c.waiters) > 0 {
+		return c.waiters[0]
+	}
+	return ""
+}
+
+// kickWaiter dispatches a waiter named by nextWaiterLocked. Callers must
+// not hold e.mu.
+func (e *Engine) kickWaiter(id RunID) {
+	if id != "" {
+		e.dispatch(id, 0)
+	}
+}
+
 // clearClassWaitLocked removes every trace of a Run's concurrency-class
-// park: the throttled entry and its waiters-FIFO slot. Callers hold e.mu.
-func (e *Engine) clearClassWaitLocked(id RunID) {
+// park — the throttled entry and its waiters-FIFO slot — and returns the
+// next waiter to wake if the departure exposed free capacity. Callers
+// hold e.mu and must pass the result to kickWaiter after unlocking.
+func (e *Engine) clearClassWaitLocked(id RunID) (kick RunID) {
 	park, ok := e.throttled[id]
 	if !ok {
-		return
+		return ""
 	}
 	delete(e.throttled, id)
 	if c := e.classes[park.class]; c != nil {
 		c.waiters = slices.DeleteFunc(c.waiters, func(w RunID) bool { return w == id })
+		kick = nextWaiterLocked(c)
 	}
+	return kick
 }
 
 // clearClassWait is clearClassWaitLocked for paths that resolve a Run
 // without passing through acquireClass (cancellation, invalidity).
 func (e *Engine) clearClassWait(id RunID) {
 	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.clearClassWaitLocked(id)
+	kick := e.clearClassWaitLocked(id)
+	e.mu.Unlock()
+	e.kickWaiter(kick)
 }
 
-// releaseClass returns a token and wakes the next throttled Run, if any.
+// releaseClass returns a token and wakes the head waiter, if any. The
+// waiter keeps its FIFO slot until it actually acquires: if it declines
+// (canceled meanwhile), its unpark hands the wake to the next in line.
 func (e *Engine) releaseClass(class string) {
 	e.mu.Lock()
-	c := e.classes[class]
 	var next RunID
-	if c != nil {
+	if c := e.classes[class]; c != nil {
 		c.inUse--
-		if len(c.waiters) > 0 {
-			next = c.waiters[0]
-			c.waiters = c.waiters[1:]
-		}
+		next = nextWaiterLocked(c)
 	}
 	e.mu.Unlock()
-	if next != "" {
-		e.dispatch(next, 0)
-	}
+	e.kickWaiter(next)
 }
 
 // throttledClass reports the class a Run is currently parked on, if any.
@@ -408,16 +461,20 @@ func (e *Engine) sweepRetention() {
 			if e.baseCtx.Err() == nil {
 				e.logger.Error("durable: retention sweep failed", "error", err)
 			}
-			return
+			break // batches already emitted below stay reported
 		}
-		total += n
+		// Emit per batch: a later batch erroring must not lose the
+		// event for runs this batch already durably deleted.
+		if n > 0 {
+			total += n
+			e.emitRunsReaped(n)
+		}
 		if n < batch {
 			break
 		}
 	}
 	if total > 0 {
 		e.logger.Info("durable: reaped terminal runs", "count", total, "terminal_before", cutoff)
-		e.emitRunsReaped(total)
 	}
 }
 
@@ -727,9 +784,7 @@ func (e *Engine) processRun(id RunID) (time.Duration, bool) {
 			if !e.apply(rec, Transition{Cursor: idleCursor(rec), Outcome: rec.Outcome}) {
 				return time.Second, true
 			}
-			e.logRunComplete(rec)
-			e.emitRunTerminal(rec)
-			e.notify(id)
+			e.completeRun(rec)
 			return 0, false
 		}
 	}
@@ -772,13 +827,63 @@ func (e *Engine) applyCancel(rec *RunRecord) bool {
 	return true
 }
 
-// logRunComplete records the once-per-run terminal milestone; rec must
-// already carry the committed outcome and final UpdatedAt.
-func (e *Engine) logRunComplete(rec *RunRecord) {
+// completeRun records a Run's terminal commit on both observability
+// planes — the level-policy log line and the RunTerminal observer event
+// — and releases its waiters. Every terminal path goes through this one
+// seam; rec must already carry the committed outcome and final
+// UpdatedAt.
+func (e *Engine) completeRun(rec *RunRecord) {
 	e.logger.Info("durable: run complete",
 		"pipeline", string(rec.PipelineID), "resource", string(rec.ResourceID),
 		"run", string(rec.RunID), "outcome", rec.Outcome.String(),
 		"elapsed", rec.UpdatedAt.Sub(rec.CreatedAt))
+	e.emitRunTerminal(rec)
+	e.notify(rec.RunID)
+}
+
+// attemptResolved is the single seam through which a resolved, retried,
+// or permanently failed operation attempt reaches both observability
+// planes: the log line and the AttemptDone event are produced from the
+// same facts, so a future resolution path cannot serve one and drift on
+// the other. For AttemptFailed, attribution comes off the record — the
+// RootFailure forward, the newest UnwindFailure during unwind.
+func (e *Engine) attemptResolved(rec *RunRecord, stepID StepID, phase Phase, attempt uint64, elapsed time.Duration, result AttemptResult, err error, retryIn time.Duration, panicked bool) {
+	switch result {
+	case AttemptSucceeded:
+		if e.debugLog() {
+			e.logger.Debug("durable: operation succeeded",
+				"pipeline", string(rec.PipelineID), "resource", string(rec.ResourceID),
+				"run", string(rec.RunID), "step", string(stepID), "phase", phase.String(),
+				"attempt", attempt, "elapsed", elapsed)
+		}
+	case AttemptRetrying:
+		if e.debugLog() {
+			e.logger.Debug("durable: operation failed; will retry",
+				"pipeline", string(rec.PipelineID), "resource", string(rec.ResourceID),
+				"run", string(rec.RunID), "step", string(stepID), "phase", phase.String(),
+				"attempt", attempt, "error", err, "next_attempt_at", rec.NextAttemptAt)
+		}
+	case AttemptFailed:
+		if phase == PhaseForward {
+			e.logger.Info("durable: run failed; unwinding",
+				"pipeline", string(rec.PipelineID), "resource", string(rec.ResourceID),
+				"run", string(rec.RunID), "step", string(stepID), "attempt", attempt,
+				"error", err, "kind", rec.RootFailure.Kind.String(), "reason", rec.RootFailure.Reason)
+		} else {
+			uf := rec.UnwindFailures[len(rec.UnwindFailures)-1]
+			// Warn, not Info: a permanently failed unwind means
+			// compensation did not happen — external resources may be
+			// leaked.
+			e.logger.Warn("durable: unwind step failed permanently",
+				"pipeline", string(rec.PipelineID), "resource", string(rec.ResourceID),
+				"run", string(rec.RunID), "step", string(stepID), "attempt", attempt,
+				"error", err, "kind", uf.Kind.String(), "reason", uf.Reason)
+		}
+	}
+	e.emitAttemptDone(AttemptEvent{
+		PipelineID: rec.PipelineID, ResourceID: rec.ResourceID, RunID: rec.RunID,
+		StepID: stepID, Phase: phase, Attempt: attempt,
+		Duration: elapsed, Result: result, Err: err, RetryIn: retryIn, Panicked: panicked})
 }
 
 // recordLastError captures an ordinary-error attempt on the record; it
@@ -825,46 +930,57 @@ func (e *Engine) awaitGate(rec *RunRecord) bool {
 	case errors.Is(err, ErrRunNotFound):
 		// Resolve immediately: the target never existed or was reaped.
 		e.removeWaiter(target, ch)
+		e.resolveAwaitPark(rec, target, true)
 		return false
 	case err != nil:
 		e.removeWaiter(target, ch)
 		if e.baseCtx.Err() == nil {
 			e.logger.Error("durable: await target read failed", "run", rec.RunID, "target", target, "error", err)
 		}
+		e.resolveAwaitPark(rec, target, false)
 		return false
 	case trec.Terminal():
 		e.removeWaiter(target, ch)
+		e.resolveAwaitPark(rec, target, true)
 		return false
 	}
 	parked := rec.RunID
-	since := e.clock.Now()
 	e.mu.Lock()
-	e.awaitParked[parked] = since
+	// Preserve an existing park time: a spurious wake (the target marked
+	// invalid, notify firing without terminality) re-parks here, and the
+	// Run has been logically awaiting since its first park.
+	if _, already := e.awaitParked[parked]; !already {
+		e.awaitParked[parked] = e.clock.Now()
+	}
 	e.mu.Unlock()
-	pipeline, resource := rec.PipelineID, rec.ResourceID
+	// The watcher only pokes: whether the wake is real — the target
+	// actually terminal or gone — is decided by the re-run of this gate,
+	// which also emits WaiterWoken. notify also fires for invalid runs,
+	// and that wake must neither emit nor reset the park.
 	e.wg.Go(func() {
 		select {
 		case <-ch:
-			woke := e.clock.Now()
-			e.mu.Lock()
-			_, present := e.awaitParked[parked]
-			delete(e.awaitParked, parked)
-			e.mu.Unlock()
-			// A cancellation bypass may have already unparked the Run;
-			// only a still-current park is a wake worth reporting.
-			if present {
-				e.emitWaiterWoken(WakeEvent{
-					PipelineID: pipeline, ResourceID: resource,
-					RunID: parked, Target: target, Duration: woke.Sub(since)})
-			}
 			e.dispatch(parked, 0)
 		case <-e.baseCtx.Done():
-			e.mu.Lock()
-			delete(e.awaitParked, parked)
-			e.mu.Unlock()
 		}
 	})
 	return true
+}
+
+// resolveAwaitPark closes out a Run's AwaitRun park, if one is recorded:
+// the park entry is dropped, and a genuine resolution (the target
+// terminal or missing, not a store read error) emits WaiterWoken with
+// the full first-park-to-resolution duration.
+func (e *Engine) resolveAwaitPark(rec *RunRecord, target RunID, resolved bool) {
+	e.mu.Lock()
+	since, present := e.awaitParked[rec.RunID]
+	delete(e.awaitParked, rec.RunID)
+	e.mu.Unlock()
+	if present && resolved {
+		e.emitWaiterWoken(WakeEvent{
+			PipelineID: rec.PipelineID, ResourceID: rec.ResourceID,
+			RunID: rec.RunID, Target: target, Duration: e.clock.Now().Sub(since)})
+	}
 }
 
 // parkAwait records an AwaitRun resolution: the operation stays
@@ -990,16 +1106,7 @@ func (e *Engine) runForward(rec *RunRecord, def *Definition, stepID StepID) (don
 		if !e.apply(rec, Transition{Cursor: idleCursor(rec), Steps: []StepWrite{{StepID: stepID, Record: *sr}}}) {
 			return false, time.Second, true
 		}
-		if e.debugLog() {
-			e.logger.Debug("durable: operation succeeded",
-				"pipeline", string(rec.PipelineID), "resource", string(rec.ResourceID),
-				"run", string(rec.RunID), "step", string(stepID), "phase", PhaseForward.String(),
-				"attempt", sr.ForwardAttempts, "elapsed", now.Sub(opStart))
-		}
-		e.emitAttemptDone(AttemptEvent{
-			PipelineID: rec.PipelineID, ResourceID: rec.ResourceID, RunID: rec.RunID,
-			StepID: stepID, Phase: PhaseForward, Attempt: sr.ForwardAttempts,
-			Duration: now.Sub(opStart), Result: AttemptSucceeded})
+		e.attemptResolved(rec, stepID, PhaseForward, sr.ForwardAttempts, now.Sub(opStart), AttemptSucceeded, nil, 0, false)
 		return true, 0, false
 
 	case permanent:
@@ -1017,14 +1124,7 @@ func (e *Engine) runForward(rec *RunRecord, def *Definition, stepID StepID) (don
 		if !e.apply(rec, Transition{Cursor: idleCursor(rec), Steps: []StepWrite{{StepID: stepID, Record: *sr}}, RootFailure: rec.RootFailure}) {
 			return false, time.Second, true
 		}
-		e.logger.Info("durable: run failed; unwinding",
-			"pipeline", string(rec.PipelineID), "resource", string(rec.ResourceID),
-			"run", string(rec.RunID), "step", string(stepID), "attempt", sr.ForwardAttempts,
-			"error", pe.err, "kind", rec.RootFailure.Kind.String(), "reason", rec.RootFailure.Reason)
-		e.emitAttemptDone(AttemptEvent{
-			PipelineID: rec.PipelineID, ResourceID: rec.ResourceID, RunID: rec.RunID,
-			StepID: stepID, Phase: PhaseForward, Attempt: sr.ForwardAttempts,
-			Duration: now.Sub(opStart), Result: AttemptFailed, Err: pe.err})
+		e.attemptResolved(rec, stepID, PhaseForward, sr.ForwardAttempts, now.Sub(opStart), AttemptFailed, pe.err, 0, false)
 		e.emitRunUnwinding(RunFailureEvent{
 			PipelineID: rec.PipelineID, ResourceID: rec.ResourceID, RunID: rec.RunID,
 			StepID: stepID, Kind: rec.RootFailure.Kind, Reason: rec.RootFailure.Reason,
@@ -1038,17 +1138,7 @@ func (e *Engine) runForward(rec *RunRecord, def *Definition, stepID StepID) (don
 		if !e.apply(rec, Transition{Cursor: activeCursor(rec, stepID, sr.ForwardAttempts)}) {
 			return false, time.Second, true
 		}
-		if e.debugLog() {
-			e.logger.Debug("durable: operation failed; will retry",
-				"pipeline", string(rec.PipelineID), "resource", string(rec.ResourceID),
-				"run", string(rec.RunID), "step", string(stepID), "phase", PhaseForward.String(),
-				"attempt", sr.ForwardAttempts, "error", err, "next_attempt_at", rec.NextAttemptAt)
-		}
-		e.emitAttemptDone(AttemptEvent{
-			PipelineID: rec.PipelineID, ResourceID: rec.ResourceID, RunID: rec.RunID,
-			StepID: stepID, Phase: PhaseForward, Attempt: sr.ForwardAttempts,
-			Duration: now.Sub(opStart), Result: AttemptRetrying, Err: err,
-			RetryIn: d, Panicked: panicked})
+		e.attemptResolved(rec, stepID, PhaseForward, sr.ForwardAttempts, now.Sub(opStart), AttemptRetrying, err, d, panicked)
 		return false, d, true
 	}
 }
@@ -1095,16 +1185,7 @@ func (e *Engine) runUnwind(rec *RunRecord, def *Definition, stepID StepID) (done
 		if !e.apply(rec, Transition{Cursor: idleCursor(rec), Steps: []StepWrite{{StepID: stepID, Record: *sr}}}) {
 			return false, time.Second, true
 		}
-		if e.debugLog() {
-			e.logger.Debug("durable: operation succeeded",
-				"pipeline", string(rec.PipelineID), "resource", string(rec.ResourceID),
-				"run", string(rec.RunID), "step", string(stepID), "phase", PhaseUnwind.String(),
-				"attempt", sr.UnwindAttempts, "elapsed", now.Sub(opStart))
-		}
-		e.emitAttemptDone(AttemptEvent{
-			PipelineID: rec.PipelineID, ResourceID: rec.ResourceID, RunID: rec.RunID,
-			StepID: stepID, Phase: PhaseUnwind, Attempt: sr.UnwindAttempts,
-			Duration: now.Sub(opStart), Result: AttemptSucceeded})
+		e.attemptResolved(rec, stepID, PhaseUnwind, sr.UnwindAttempts, now.Sub(opStart), AttemptSucceeded, nil, 0, false)
 		return true, 0, false
 
 	case permanent:
@@ -1122,16 +1203,7 @@ func (e *Engine) runUnwind(rec *RunRecord, def *Definition, stepID StepID) (done
 		if !e.apply(rec, Transition{Cursor: idleCursor(rec), Steps: []StepWrite{{StepID: stepID, Record: *sr}}, UnwindFailure: &uf}) {
 			return false, time.Second, true
 		}
-		// Warn, not Info: a permanently failed unwind means compensation
-		// did not happen — external resources may be leaked.
-		e.logger.Warn("durable: unwind step failed permanently",
-			"pipeline", string(rec.PipelineID), "resource", string(rec.ResourceID),
-			"run", string(rec.RunID), "step", string(stepID), "attempt", sr.UnwindAttempts,
-			"error", pe.err, "kind", uf.Kind.String(), "reason", uf.Reason)
-		e.emitAttemptDone(AttemptEvent{
-			PipelineID: rec.PipelineID, ResourceID: rec.ResourceID, RunID: rec.RunID,
-			StepID: stepID, Phase: PhaseUnwind, Attempt: sr.UnwindAttempts,
-			Duration: now.Sub(opStart), Result: AttemptFailed, Err: pe.err})
+		e.attemptResolved(rec, stepID, PhaseUnwind, sr.UnwindAttempts, now.Sub(opStart), AttemptFailed, pe.err, 0, false)
 		return true, 0, false
 
 	default:
@@ -1141,17 +1213,7 @@ func (e *Engine) runUnwind(rec *RunRecord, def *Definition, stepID StepID) (done
 		if !e.apply(rec, Transition{Cursor: activeCursor(rec, stepID, sr.UnwindAttempts)}) {
 			return false, time.Second, true
 		}
-		if e.debugLog() {
-			e.logger.Debug("durable: operation failed; will retry",
-				"pipeline", string(rec.PipelineID), "resource", string(rec.ResourceID),
-				"run", string(rec.RunID), "step", string(stepID), "phase", PhaseUnwind.String(),
-				"attempt", sr.UnwindAttempts, "error", err, "next_attempt_at", rec.NextAttemptAt)
-		}
-		e.emitAttemptDone(AttemptEvent{
-			PipelineID: rec.PipelineID, ResourceID: rec.ResourceID, RunID: rec.RunID,
-			StepID: stepID, Phase: PhaseUnwind, Attempt: sr.UnwindAttempts,
-			Duration: now.Sub(opStart), Result: AttemptRetrying, Err: err,
-			RetryIn: d, Panicked: panicked})
+		e.attemptResolved(rec, stepID, PhaseUnwind, sr.UnwindAttempts, now.Sub(opStart), AttemptRetrying, err, d, panicked)
 		return false, d, true
 	}
 }
@@ -1191,9 +1253,7 @@ func (e *Engine) reduceAndComplete(rec *RunRecord, def *Definition) bool {
 	if !e.apply(rec, Transition{Cursor: idleCursor(rec), Output: rec.Output, Outcome: rec.Outcome}) {
 		return false
 	}
-	e.logRunComplete(rec)
-	e.emitRunTerminal(rec)
-	e.notify(rec.RunID)
+	e.completeRun(rec)
 	return true
 }
 
@@ -1347,9 +1407,17 @@ func (e *Engine) backoff(attempts uint64) time.Duration {
 func (e *Engine) markInvalid(rec *RunRecord, stepID StepID, reason string) {
 	ie := &InvalidRunError{RunID: rec.RunID, PipelineID: rec.PipelineID, Reason: reason}
 	e.mu.Lock()
+	// Idempotent per (run, reason): re-dispatches of an already-invalid
+	// Run (a Cancel, a repoke) re-derive the same conclusion every pass
+	// and must not re-log or re-fire RunInvalid.
+	if prev, ok := e.invalid[rec.RunID]; ok && prev.Reason == reason {
+		e.mu.Unlock()
+		return
+	}
 	e.invalid[rec.RunID] = ie
-	e.clearClassWaitLocked(rec.RunID)
+	kick := e.clearClassWaitLocked(rec.RunID)
 	e.mu.Unlock()
+	e.kickWaiter(kick)
 	e.logger.Error("durable: run invalid for current deployment",
 		"run", rec.RunID,
 		"pipeline", rec.PipelineID,

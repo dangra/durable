@@ -1,10 +1,12 @@
 // Command perfcompare gates the performance regression suite: it parses
-// two `go test -bench` outputs (base and head), collapses each metric's
-// -count repetitions to one estimate — the median for deterministic
-// counters, the best sample for wall-clock and disk-byte figures, since
-// runner interference only ever adds time and un-batched bytes — and
-// applies per-metric-class thresholds: tight and two-sided for
-// deterministic counters, loose for wall-clock figures. It prints a markdown table (suitable for a GitHub
+// two `go test -bench` outputs (base and head) and applies
+// per-metric-class thresholds: tight and two-sided for deterministic
+// counters; best-sample estimates for disk-byte figures (runner
+// interference only ever adds un-batched bytes); and for wall-clock
+// figures the median per-slice head/base ratio when both sides carry
+// the same sample count (CI interleaves the suites so paired slices
+// share runner weather), falling back to loose best-sample estimates
+// otherwise. It prints a markdown table (suitable for a GitHub
 // job summary) and exits non-zero when any gated metric regresses, when
 // gated coverage present in base is missing from head, or when either
 // input recorded a test failure, panic, or build failure.
@@ -29,11 +31,18 @@ import (
 
 // class describes how a metric unit is judged.
 type class struct {
-	threshold   float64 // fractional regression allowed
+	threshold   float64 // fractional regression allowed on the estimates
 	lowerIsBad  bool    // metric where a decrease is a regression
 	twoSided    bool    // deterministic metric where any move is a regression
 	informative bool    // never gates
-	bestOf      bool    // compare best-of-count samples, not the median
+	bestOf      bool    // estimate with best-of-count samples, not the median
+	// pairedThreshold, when nonzero and both sides carry the same number
+	// of samples, gates on the median per-slice head/base ratio instead:
+	// CI interleaves the suites so slice i of each side ran in adjacent
+	// time windows and shared the runner weather, which the ratio
+	// cancels — supporting a much tighter threshold than the unpaired
+	// estimates.
+	pairedThreshold float64
 }
 
 func classify(unit string) class {
@@ -52,16 +61,16 @@ func classify(unit string) class {
 	// Allocation counters: near-deterministic, small timing wiggle.
 	case "B/op", "allocs/op":
 		return class{threshold: 0.10}
-	// Wall clock: a smoke alarm for order-of-magnitude regressions, not
-	// a precision gate — shared-runner weather has produced >40% splits
-	// on identical code even with best-of sampling and interleaved
-	// head/base runs, so anything tighter than 50% gates on noise. The
-	// best sample of each side is compared: interference (a contended
-	// VM, a slow disk) only ever adds time.
+	// Wall clock: paired per-slice ratios (see pairedThreshold) gate at
+	// 25%; when pairing is unavailable the best-of estimates are a smoke
+	// alarm at 50% — shared-runner weather has produced >40% unpaired
+	// splits on identical code, so anything tighter gates on noise
+	// there. Best-of because interference (a contended VM, a slow disk)
+	// only ever adds time.
 	case "ns/op", "p50-ms", "p99-ms", "start-ms", "wake-p50-ms":
-		return class{threshold: 0.50, bestOf: true}
+		return class{threshold: 0.50, pairedThreshold: 0.25, bestOf: true}
 	case "runs/sec", "unwinds/sec", "cycles/sec":
-		return class{threshold: 0.50, lowerIsBad: true, bestOf: true}
+		return class{threshold: 0.50, pairedThreshold: 0.25, lowerIsBad: true, bestOf: true}
 	// wake-max-ms (a population max — one scheduler stall away from
 	// doubling) and anything unrecognized: report, never gate.
 	default:
@@ -138,6 +147,24 @@ func estimate(vs []float64, c class) float64 {
 		}
 	}
 	return best
+}
+
+// pairedDelta is the median of per-slice head/base ratios, minus one.
+// Slice i of each side ran in an adjacent time window under CI's
+// interleaving, so the ratio cancels runner weather the slices shared.
+func pairedDelta(hs, bs []float64) float64 {
+	ratios := make([]float64, 0, len(hs))
+	for i := range hs {
+		switch {
+		case bs[i] != 0:
+			ratios = append(ratios, hs[i]/bs[i]-1)
+		case hs[i] != 0:
+			ratios = append(ratios, math.Inf(1))
+		default:
+			ratios = append(ratios, 0)
+		}
+	}
+	return median(ratios)
 }
 
 func sortedKeys[V any](m map[string]V) []string {
@@ -225,7 +252,8 @@ func main() {
 	for _, b := range sortedKeys(head) {
 		for _, u := range sortedKeys(head[b]) {
 			c := classify(u)
-			h := estimate(head[b][u], c)
+			hs := head[b][u]
+			h := estimate(hs, c)
 			bs, ok := base[b][u]
 			if !ok {
 				fmt.Printf("| %s | %s | — | %.4g | — | new |\n", b, u, h)
@@ -240,16 +268,20 @@ func main() {
 				// 0 → nonzero must not slip through as delta 0.
 				delta = math.Inf(1)
 			}
+			threshold := c.threshold
+			if c.pairedThreshold > 0 && len(hs) == len(bs) && len(hs) > 1 {
+				delta, threshold = pairedDelta(hs, bs), c.pairedThreshold
+			}
 			verdict := "ok"
 			switch {
 			case c.informative:
 				verdict = "info"
-			case c.twoSided && math.Abs(delta) > c.threshold:
-				verdict = fmt.Sprintf("**REGRESSION** (>±%g%%)", c.threshold*100)
+			case c.twoSided && math.Abs(delta) > threshold:
+				verdict = fmt.Sprintf("**REGRESSION** (>±%g%%)", threshold*100)
 				regressions++
-			case !c.lowerIsBad && delta > c.threshold,
-				c.lowerIsBad && -delta > c.threshold:
-				verdict = fmt.Sprintf("**REGRESSION** (>%g%%)", c.threshold*100)
+			case !c.lowerIsBad && delta > threshold,
+				c.lowerIsBad && -delta > threshold:
+				verdict = fmt.Sprintf("**REGRESSION** (>%g%%)", threshold*100)
 				regressions++
 			}
 			deltaStr := fmt.Sprintf("%+.1f%%", delta*100)

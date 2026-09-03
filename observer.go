@@ -34,11 +34,14 @@ type Observer struct {
 	RunTerminal func(RunTerminalEvent)
 	// RunInvalid fires when the current deployment marks a Run invalid.
 	RunInvalid func(RunFailureEvent)
-	// WaiterWoken fires when a Run parked via AwaitRun wakes because its
-	// awaited Run reached terminality.
+	// WaiterWoken fires when a Run parked via AwaitRun resolves its park
+	// because the awaited Run reached terminality or was found missing;
+	// Duration spans first park to resolution. A cancellation bypass or
+	// a spurious poke (the target turning invalid) emits nothing.
 	WaiterWoken func(WakeEvent)
-	// ClassWait fires when a Run throttled on a concurrency class
-	// finally proceeds, reporting how long it waited for a token.
+	// ClassWait fires when a Run throttled on a concurrency class is
+	// granted a token, reporting how long it waited for it. A canceled
+	// Run that bypasses the gate without a token emits nothing.
 	ClassWait func(ClassWaitEvent)
 	// RunsReaped fires after each retention sweep that deleted anything.
 	RunsReaped func(count int)
@@ -161,9 +164,14 @@ type ClassWaitEvent struct {
 	Duration   time.Duration
 }
 
-// StoreOpEvent reports one Store call: Op is the method name.
+// StoreOpEvent reports one Store call: Op is the method name, and Write
+// marks methods that durably write. Write is declared by the engine's
+// store decorator method-by-method, so a Store method added later cannot
+// reach observers unclassified — the decorator will not compile without
+// an implementation stating it.
 type StoreOpEvent struct {
 	Op       string
+	Write    bool
 	Duration time.Duration
 	Err      error
 }
@@ -271,63 +279,63 @@ type observedStore struct {
 	engine *Engine
 }
 
-func (s *observedStore) op(name string, start time.Time, err error) {
-	s.engine.emitStoreOp(StoreOpEvent{Op: name, Duration: s.engine.clock.Now().Sub(start), Err: err})
+func (s *observedStore) op(name string, write bool, start time.Time, err error) {
+	s.engine.emitStoreOp(StoreOpEvent{Op: name, Write: write, Duration: s.engine.clock.Now().Sub(start), Err: err})
 }
 
 func (s *observedStore) CreateRun(ctx context.Context, rec *RunRecord) (*RunRecord, bool, error) {
 	start := s.engine.clock.Now()
 	existing, created, err := s.inner.CreateRun(ctx, rec)
-	s.op("CreateRun", start, err)
+	s.op("CreateRun", true, start, err)
 	return existing, created, err
 }
 
 func (s *observedStore) GetRun(ctx context.Context, id RunID) (*RunRecord, error) {
 	start := s.engine.clock.Now()
 	rec, err := s.inner.GetRun(ctx, id)
-	s.op("GetRun", start, err)
+	s.op("GetRun", false, start, err)
 	return rec, err
 }
 
 func (s *observedStore) ApplyTransition(ctx context.Context, id RunID, t Transition) error {
 	start := s.engine.clock.Now()
 	err := s.inner.ApplyTransition(ctx, id, t)
-	s.op("ApplyTransition", start, err)
+	s.op("ApplyTransition", true, start, err)
 	return err
 }
 
 func (s *observedStore) RequestCancel(ctx context.Context, id RunID, req CancelRequest) (bool, error) {
 	start := s.engine.clock.Now()
 	accepted, err := s.inner.RequestCancel(ctx, id, req)
-	s.op("RequestCancel", start, err)
+	s.op("RequestCancel", true, start, err)
 	return accepted, err
 }
 
 func (s *observedStore) ReapTerminal(ctx context.Context, before time.Time, limit int) (int, error) {
 	start := s.engine.clock.Now()
 	n, err := s.inner.ReapTerminal(ctx, before, limit)
-	s.op("ReapTerminal", start, err)
+	s.op("ReapTerminal", true, start, err)
 	return n, err
 }
 
 func (s *observedStore) ListNonterminal(ctx context.Context) ([]*RunRecord, error) {
 	start := s.engine.clock.Now()
 	recs, err := s.inner.ListNonterminal(ctx)
-	s.op("ListNonterminal", start, err)
+	s.op("ListNonterminal", false, start, err)
 	return recs, err
 }
 
 func (s *observedStore) ListRuns(ctx context.Context, pipeline PipelineID, resource ResourceID) ([]*RunRecord, error) {
 	start := s.engine.clock.Now()
 	recs, err := s.inner.ListRuns(ctx, pipeline, resource)
-	s.op("ListRuns", start, err)
+	s.op("ListRuns", false, start, err)
 	return recs, err
 }
 
 func (s *observedStore) Close() error {
 	start := s.engine.clock.Now()
 	err := s.inner.Close()
-	s.op("Close", start, err)
+	s.op("Close", false, start, err)
 	return err
 }
 

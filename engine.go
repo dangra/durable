@@ -157,6 +157,7 @@ type Engine struct {
 	stepOwner     map[StepID]PipelineID
 	started       bool
 	active        map[RunID]struct{}
+	repoke        map[RunID]struct{}
 	invalid       map[RunID]*InvalidRunError
 	waiters       map[RunID][]chan struct{}
 	attemptCancel map[RunID]context.CancelFunc
@@ -181,6 +182,7 @@ func NewEngine(store Store, opts ...Option) *Engine {
 		pipelines:     make(map[PipelineID]*Definition),
 		stepOwner:     make(map[StepID]PipelineID),
 		active:        make(map[RunID]struct{}),
+		repoke:        make(map[RunID]struct{}),
 		invalid:       make(map[RunID]*InvalidRunError),
 		waiters:       make(map[RunID][]chan struct{}),
 		attemptCancel: make(map[RunID]context.CancelFunc),
@@ -469,10 +471,14 @@ func hasUnresolvedOp(rec *RunRecord) bool {
 }
 
 // dispatch schedules processing of a Run after delay. At most one worker
-// exists per Run at a time.
+// exists per Run at a time; a dispatch suppressed by that guard is
+// recorded as a re-poke and honored when the current worker exits, so a
+// wake (a class-token release, a cancellation) arriving in the window
+// between a worker's last decision and its exit is never lost.
 func (e *Engine) dispatch(id RunID, delay time.Duration) {
 	e.mu.Lock()
 	if _, dup := e.active[id]; dup {
+		e.repoke[id] = struct{}{}
 		e.mu.Unlock()
 		return
 	}
@@ -500,7 +506,12 @@ func (e *Engine) dispatch(id RunID, delay time.Duration) {
 		}
 		redispatchIn, again := e.processRun(id)
 		<-e.sem
-		e.clearActive(id)
+		// A suppressed dispatch is urgent (a token release, a
+		// cancellation): redispatch immediately even over a retry wait —
+		// the next reconciliation re-derives any remaining delay.
+		if e.clearActive(id) {
+			redispatchIn, again = 0, true
+		}
 		if again && e.baseCtx.Err() == nil {
 			e.dispatch(id, redispatchIn)
 		}
@@ -563,10 +574,15 @@ func (e *Engine) preemptAttempt(id RunID) {
 	}
 }
 
-func (e *Engine) clearActive(id RunID) {
+// clearActive releases the Run's worker slot and reports whether a
+// dispatch was suppressed while it was held (the caller owes a re-poke).
+func (e *Engine) clearActive(id RunID) (repoke bool) {
 	e.mu.Lock()
 	delete(e.active, id)
+	_, repoke = e.repoke[id]
+	delete(e.repoke, id)
 	e.mu.Unlock()
+	return repoke
 }
 
 func (e *Engine) isActive(id RunID) bool {

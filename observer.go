@@ -374,10 +374,12 @@ func (e *Engine) Stats() EngineStats {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	st := EngineStats{
-		ActiveRuns:   len(e.active),
 		AwaitingRuns: len(e.awaitParked),
-		DelayedRuns:  e.wakes.Len(),
 		InvalidRuns:  len(e.invalid),
+	}
+	if e.disp != nil {
+		st.ActiveRuns = e.disp.Active()
+		st.DelayedRuns = e.disp.Delayed()
 	}
 	if usage := e.pool.Snapshot(); len(usage) > 0 {
 		st.Classes = make(map[string]ClassStats, len(usage))

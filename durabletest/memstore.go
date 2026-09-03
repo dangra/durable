@@ -5,6 +5,7 @@ package durabletest
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/dangra/durable"
 )
@@ -91,6 +92,22 @@ func (s *MemStore) ApplyTransition(_ context.Context, id durable.RunID, t durabl
 		rec.Output = append([]byte(nil), t.Output...)
 	}
 	return nil
+}
+
+func (s *MemStore) ReapTerminal(_ context.Context, before time.Time, limit int) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	deleted := 0
+	for id, rec := range s.runs {
+		if deleted >= limit {
+			break
+		}
+		if rec.Terminal() && rec.UpdatedAt.Before(before) {
+			delete(s.runs, id)
+			deleted++
+		}
+	}
+	return deleted, nil
 }
 
 func (s *MemStore) RequestCancel(_ context.Context, id durable.RunID, req durable.CancelRequest) (bool, error) {

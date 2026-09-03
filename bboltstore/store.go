@@ -305,6 +305,54 @@ func (s *Store) GetRun(_ context.Context, id durable.RunID) (*durable.RunRecord,
 	return rec, err
 }
 
+func (s *Store) ReapTerminal(_ context.Context, before time.Time, limit int) (int, error) {
+	deleted := 0
+	err := s.db.Update(func(tx *bolt.Tx) error {
+		// The terminal bucket's keys are exactly the terminal run ids;
+		// terminality time is the cursor's UpdatedAt, stamped by the
+		// terminal transition.
+		var victims [][]byte
+		c := tx.Bucket(terminalBucket).Cursor()
+		for k, _ := c.First(); k != nil && len(victims) < limit; k, _ = c.Next() {
+			cb := tx.Bucket(cursorBucket).Get(k)
+			if cb == nil {
+				continue
+			}
+			cur, err := storagepb.UnmarshalCursor(cb)
+			if err != nil {
+				return err
+			}
+			if cur.UpdatedAt.Before(before) {
+				victims = append(victims, bytes.Clone(k))
+			}
+		}
+		for _, id := range victims {
+			prefix := stepKey(durable.RunID(id), "")
+			sc := tx.Bucket(stepsBucket).Cursor()
+			var stepKeys [][]byte
+			for k, _ := sc.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, _ = sc.Next() {
+				stepKeys = append(stepKeys, bytes.Clone(k))
+			}
+			for _, k := range stepKeys {
+				if err := tx.Bucket(stepsBucket).Delete(k); err != nil {
+					return err
+				}
+			}
+			for _, bucket := range [][]byte{failuresBucket, cancelBucket, cursorBucket, terminalBucket, metaBucket} {
+				if err := tx.Bucket(bucket).Delete(id); err != nil {
+					return err
+				}
+			}
+			deleted++
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return deleted, nil
+}
+
 func (s *Store) RequestCancel(_ context.Context, id durable.RunID, req durable.CancelRequest) (bool, error) {
 	accepted := false
 	err := s.db.Update(func(tx *bolt.Tx) error {

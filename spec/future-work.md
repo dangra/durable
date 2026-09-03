@@ -5,11 +5,12 @@ Part of the [`durable` specification](README.md).
 ## Store contract remainder
 
 The transactional store contract is now specified (see 04-engine, Store
-contract): component persistence, atomic transitions, the cursor, and
-slot uniqueness. Remaining:
+contract): component persistence, atomic transitions, the cursor, slot
+uniqueness, and terminal-run retention. Remaining:
 
 - waiters (currently in-process only),
-- retention/archival of terminal runs,
+- a compact post-retention summary tier (terminal Runs currently delete
+  entirely at retention),
 - a SQLite implementation.
 
 ## Historical inspection

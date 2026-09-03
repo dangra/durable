@@ -1370,3 +1370,89 @@ func TestSupersedeReconcile(t *testing.T) {
 		t.Fatalf("unwound = %v, want the stale v1 work", unwound)
 	}
 }
+
+func TestRetentionReapsOnlyOldTerminalRuns(t *testing.T) {
+	fake := durabletest.NewFakeClock(time.Now())
+	store := durabletest.NewMemStore()
+
+	// A nonterminal seeded run belonging to an unregistered pipeline: it
+	// will be invalid under this deployment and must survive any sweep.
+	invalidID := seedRun(t, store, "ghost-pipeline", map[durable.StepID]*durable.StepRecord{
+		"g/v1": {ForwardStatus: durable.OpUnresolved, ForwardAttempts: 1},
+	})
+
+	blocked := make(chan struct{})
+	def := durable.NewDefinition(durable.DefinitionConfig{
+		ID: "retained",
+		Steps: []durable.StepConfig{
+			stateless("s/v1", func(ctx context.Context, inv *durable.Invocation) error {
+				if inv.ResourceID() == "stuck" {
+					select {
+					case <-blocked:
+					case <-ctx.Done():
+					}
+					return ctx.Err()
+				}
+				return nil
+			}),
+		},
+	})
+
+	e := durable.NewEngine(store, fastRetry,
+		durable.WithClock(fake),
+		durable.WithRecoveryBackoff(0),
+		durable.WithRetention(durable.RetentionPolicy{
+			TerminalAfter: time.Hour,
+			Interval:      time.Minute,
+		}),
+	)
+	p, err := def.Bind(e)
+	if err != nil {
+		t.Fatalf("Bind: %v", err)
+	}
+	if err := e.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() {
+		close(blocked)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = e.Stop(ctx)
+	}()
+
+	// One run completes now; one stays nonterminal forever.
+	done, _, err := p.Schedule(context.Background(), "done", nil)
+	if err != nil {
+		t.Fatalf("Schedule: %v", err)
+	}
+	if res, err := done.Wait(context.Background()); err != nil || !res.Succeeded() {
+		t.Fatalf("Wait = %+v, %v", res, err)
+	}
+	stuck, _, err := p.Schedule(context.Background(), "stuck", nil)
+	if err != nil {
+		t.Fatalf("Schedule stuck: %v", err)
+	}
+
+	// Advance the fake clock past the retention window until the sweep
+	// reaps the terminal run.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		fake.Advance(2 * time.Hour)
+		if _, err := store.GetRun(context.Background(), done.ID()); errors.Is(err, durable.ErrRunNotFound) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("terminal run never reaped")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	// Nonterminal runs survive regardless of age — the stuck one and the
+	// invalid one alike.
+	if _, err := store.GetRun(context.Background(), stuck.ID()); err != nil {
+		t.Fatalf("stuck run reaped: %v", err)
+	}
+	if _, err := store.GetRun(context.Background(), invalidID); err != nil {
+		t.Fatalf("invalid run reaped: %v", err)
+	}
+}

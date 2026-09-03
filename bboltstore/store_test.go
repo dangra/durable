@@ -1,12 +1,14 @@
 package bboltstore
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"path/filepath"
 	"testing"
 	"time"
 
+	bolt "go.etcd.io/bbolt"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/dangra/durable"
@@ -253,5 +255,87 @@ func TestExclusionGroupSlot(t *testing.T) {
 	}
 	if _, created, err := s.CreateRun(ctx, recB); err != nil || !created {
 		t.Fatalf("post-terminal group CreateRun = created=%v err=%v", created, err)
+	}
+}
+
+func TestReapTerminal(t *testing.T) {
+	s := open(t, filepath.Join(t.TempDir(), "durable.db"))
+	ctx := context.Background()
+	base := time.Now().UTC()
+	oc := durable.OutcomeSuccess
+
+	mkRun := func(id durable.RunID, resource durable.ResourceID, terminalAt time.Time, terminal bool) {
+		rec := &durable.RunRecord{
+			RunID: id, PipelineID: "p", ResourceID: resource,
+			Phase: durable.PhaseForward, CreatedAt: base,
+		}
+		if _, created, err := s.CreateRun(ctx, rec); err != nil || !created {
+			t.Fatalf("CreateRun %s: created=%v err=%v", id, created, err)
+		}
+		tr := durable.Transition{
+			Cursor: durable.Cursor{Phase: durable.PhaseForward, UpdatedAt: terminalAt},
+			Steps: []durable.StepWrite{{StepID: "a", Record: durable.StepRecord{
+				ForwardStatus: durable.OpSucceeded, ForwardAttempts: 1, State: []byte{1},
+			}}},
+		}
+		if terminal {
+			tr.Cursor.Phase = durable.PhaseDone
+			tr.Outcome = &oc
+		}
+		if err := s.ApplyTransition(ctx, id, tr); err != nil {
+			t.Fatalf("ApplyTransition %s: %v", id, err)
+		}
+	}
+
+	mkRun("old-1", "r1", base.Add(-48*time.Hour), true)
+	mkRun("old-2", "r2", base.Add(-48*time.Hour), true)
+	mkRun("recent", "r3", base.Add(-time.Minute), true)
+	mkRun("alive", "r4", base.Add(-48*time.Hour), false)
+	if _, err := s.RequestCancel(ctx, "alive", durable.CancelRequest{Cause: "x", At: base}); err != nil {
+		t.Fatalf("RequestCancel: %v", err)
+	}
+
+	cutoff := base.Add(-time.Hour)
+
+	// The limit bounds one pass.
+	n, err := s.ReapTerminal(ctx, cutoff, 1)
+	if err != nil || n != 1 {
+		t.Fatalf("ReapTerminal(limit 1) = %d, %v", n, err)
+	}
+	n, err = s.ReapTerminal(ctx, cutoff, 10)
+	if err != nil || n != 1 {
+		t.Fatalf("second ReapTerminal = %d, %v; want the remaining old run", n, err)
+	}
+
+	// Old terminal runs are fully gone; every component is deleted.
+	for _, id := range []durable.RunID{"old-1", "old-2"} {
+		if _, err := s.GetRun(ctx, id); !errors.Is(err, durable.ErrRunNotFound) {
+			t.Fatalf("GetRun(%s) = %v, want ErrRunNotFound", id, err)
+		}
+	}
+	s.db.View(func(tx *bolt.Tx) error {
+		for _, bucket := range [][]byte{metaBucket, cursorBucket, failuresBucket, terminalBucket, cancelBucket} {
+			for _, id := range []string{"old-1", "old-2"} {
+				if tx.Bucket(bucket).Get([]byte(id)) != nil {
+					t.Errorf("bucket %s still holds %s", bucket, id)
+				}
+			}
+		}
+		c := tx.Bucket(stepsBucket).Cursor()
+		for k, _ := c.First(); k != nil; k, _ = c.Next() {
+			if bytes.HasPrefix(k, []byte("old-")) {
+				t.Errorf("steps bucket still holds %s", k)
+			}
+		}
+		return nil
+	})
+
+	// Recent terminal and old nonterminal (with its cancel record) survive.
+	if _, err := s.GetRun(ctx, "recent"); err != nil {
+		t.Fatalf("recent run reaped: %v", err)
+	}
+	alive, err := s.GetRun(ctx, "alive")
+	if err != nil || alive.Cancel == nil {
+		t.Fatalf("alive run = %+v, %v; want intact with cancel", alive, err)
 	}
 }

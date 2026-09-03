@@ -74,6 +74,30 @@ func WithLogger(l *slog.Logger) Option {
 	}
 }
 
+// RetentionPolicy configures reaping of terminal Runs. Retention is off by
+// default: without WithRetention, terminal Runs accumulate indefinitely.
+type RetentionPolicy struct {
+	// TerminalAfter is how long after its terminal commit a Run is kept.
+	// It must be positive to enable retention.
+	TerminalAfter time.Duration
+	// Interval is the jittered sweep cadence; default 10 minutes.
+	Interval time.Duration
+}
+
+// WithRetention enables background reaping of terminal Runs. Only terminal
+// Runs are ever reaped — nonterminal Runs, invalid ones included, are
+// never touched regardless of age. The first sweep runs at Start.
+func WithRetention(p RetentionPolicy) Option {
+	return func(e *Engine) {
+		if p.TerminalAfter > 0 {
+			if p.Interval <= 0 {
+				p.Interval = 10 * time.Minute
+			}
+			e.retention = p
+		}
+	}
+}
+
 // WithRecoveryBackoff delays the first execution of unresolved operations
 // discovered at startup, protecting against crash loops.
 func WithRecoveryBackoff(d time.Duration) Option {
@@ -93,6 +117,7 @@ type Engine struct {
 	retry           RetryPolicy
 	concurrency     int
 	recoveryBackoff time.Duration
+	retention       RetentionPolicy
 	middleware      []Middleware
 
 	mu            sync.Mutex
@@ -185,7 +210,52 @@ func (e *Engine) Start(ctx context.Context) error {
 		}
 		e.dispatch(rec.RunID, delay)
 	}
+
+	if e.retention.TerminalAfter > 0 {
+		e.wg.Add(1)
+		go e.retentionLoop()
+	} else {
+		e.logger.Info("durable: retention disabled; terminal runs accumulate")
+	}
 	return nil
+}
+
+// retentionLoop sweeps terminal Runs older than the policy on a jittered
+// interval, starting immediately.
+func (e *Engine) retentionLoop() {
+	defer e.wg.Done()
+	for {
+		e.sweepRetention()
+		d := e.retention.Interval
+		d = d/2 + d/4 + time.Duration(mrand.Int64N(int64(d/2))) // [0.75d, 1.25d)
+		select {
+		case <-e.clock.After(d):
+		case <-e.baseCtx.Done():
+			return
+		}
+	}
+}
+
+func (e *Engine) sweepRetention() {
+	const batch = 256
+	cutoff := e.clock.Now().Add(-e.retention.TerminalAfter)
+	total := 0
+	for {
+		n, err := e.store.ReapTerminal(e.baseCtx, cutoff, batch)
+		if err != nil {
+			if e.baseCtx.Err() == nil {
+				e.logger.Error("durable: retention sweep failed", "error", err)
+			}
+			return
+		}
+		total += n
+		if n < batch {
+			break
+		}
+	}
+	if total > 0 {
+		e.logger.Info("durable: reaped terminal runs", "count", total, "terminal_before", cutoff)
+	}
 }
 
 // Stop gracefully shuts down: it stops scheduling new operations, cancels

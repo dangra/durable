@@ -575,6 +575,37 @@ else, with no read-modify-write races by construction.
 
 ---
 
+## Retention
+
+Retention is off by default: without configuration, terminal Runs
+accumulate indefinitely (the Engine logs this at Start).
+
+```go
+durable.WithRetention(durable.RetentionPolicy{
+    TerminalAfter: 7 * 24 * time.Hour, // keep terminal Runs this long
+    Interval:      10 * time.Minute,   // jittered sweep cadence (default)
+})
+```
+
+The Engine sweeps on the jittered interval, starting immediately at
+Start, deleting terminal Runs in bounded batches through the Store's
+`ReapTerminal(before, limit)` primitive. Each Run's components are
+removed atomically; "terminal since" is the cursor timestamp stamped by
+the terminality commit.
+
+Only terminal Runs are ever reaped. Nonterminal Runs — invalid ones
+included — are never touched regardless of age (force-releasing an
+unrecoverable Run is the separate abandonment problem, out of v1 scope).
+
+After reaping, lookups of the Run return `ErrRunNotFound`; a reaped Run
+is no longer enumerable. Keeping a compact post-retention summary is a
+possible future extension.
+
+The Clock governs retention timing, so sweeps are deterministic under
+`WithClock`.
+
+---
+
 ## Internal type erasure
 
 The Engine core SHOULD remain non-generic.

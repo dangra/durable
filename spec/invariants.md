@@ -175,3 +175,5 @@ Part of the [`durable` specification](README.md). This list is append-only; inva
 86. Exclusion is enforced atomically at Run creation; conflicts are rejected, never queued.
 
 87. Immutable facts are written once; per-attempt durable writes are bounded by the scheduling cursor, independent of Input and State sizes.
+
+88. Retention reaps only terminal Runs; nonterminal Runs, invalid ones included, are never reaped regardless of age.

@@ -205,6 +205,12 @@ type Store interface {
 	// ErrRunNotFound.
 	ApplyTransition(ctx context.Context, id RunID, t Transition) error
 
+	// ReapTerminal deletes up to limit Runs whose terminal outcome was
+	// committed before the cutoff, returning how many were deleted. It
+	// MUST never touch a nonterminal Run, regardless of age. Each Run's
+	// components are removed atomically.
+	ReapTerminal(ctx context.Context, before time.Time, limit int) (int, error)
+
 	// RequestCancel durably records a cancellation request for the Run.
 	// The first request wins: a later request returns accepted=false with
 	// the stored request unchanged. A missing Run returns ErrRunNotFound;

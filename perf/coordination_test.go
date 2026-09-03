@@ -86,6 +86,12 @@ func BenchmarkSupersedeCycle(b *testing.B) {
 					return
 				}
 				<-enteredCh(res) // stale run holds the slot mid-flight
+				// Each resource signals exactly once; drop the entry so the
+				// map doesn't accumulate across cycles and iterations
+				// (flagged by Copilot review).
+				mu.Lock()
+				delete(entered, res)
+				mu.Unlock()
 
 				_, _, err = v.pipe.Schedule(context.Background(), res, v2)
 				var conflict *durable.ScheduleConflictError

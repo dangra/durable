@@ -17,8 +17,10 @@
 // injects that scheduling trace into the Run's annotations at
 // acceptance; [NewObserver] translates engine lifecycle events into
 // OTel metrics; [RegisterStats] publishes Engine.Stats occupancy as
-// gauges. Traces, metrics, and logs all label with the same durable.*
-// attribute keys declared in this package.
+// gauges; [NewLogHandler] stamps trace_id/span_id onto slog records so
+// handler log lines join their attempt span. Traces, metrics, and logs
+// all label with the same durable.* attribute keys declared in this
+// package.
 package durableotel
 
 import (

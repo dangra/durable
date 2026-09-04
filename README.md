@@ -12,6 +12,9 @@ order. Pipeline definitions may evolve while runs are active — the runtime
 persists immutable execution facts and reconciles them against the current
 definition using monotonic forward and unwind frontiers.
 
+Start with the [guided tour](docs/tour.md) — every feature introduced
+as an operational need, with runnable
+[godoc examples](https://pkg.go.dev/github.com/dangra/durable#pkg-examples).
 The full specification lives in [spec/](spec/README.md).
 
 **Requires Go 1.27+** (the generated `State` API uses generic methods).

@@ -7,7 +7,7 @@ replace github.com/dangra/durable => ../..
 replace github.com/dangra/durable/contrib/durableotel => ../../contrib/durableotel
 
 require (
-	github.com/dangra/durable v0.0.0-00010101000000-000000000000
+	github.com/dangra/durable v0.2.0
 	github.com/dangra/durable/contrib/durableotel v0.0.0-00010101000000-000000000000
 	go.opentelemetry.io/otel/sdk v1.46.0
 	go.opentelemetry.io/otel/trace v1.46.0

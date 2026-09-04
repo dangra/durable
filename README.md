@@ -101,8 +101,9 @@ engine := durable.NewEngine(store,
     durable.WithObserver(obs),
     durable.WithScheduleAnnotator(durableotel.Annotator()))
 
-// anywhere, by any subsystem — propagation rides the ctx:
-run, _, _ := pipe.Schedule(reqCtx, "machine-123", input)
+// anywhere, by any subsystem, with the provision pipeline from above —
+// propagation rides the request's ctx:
+run, _, _ := provision.Schedule(reqCtx, "machine-123", input)
 ```
 
 [examples/tracing-otel](examples/tracing-otel/) demonstrates the

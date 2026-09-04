@@ -248,9 +248,12 @@ type RunMeta struct {
 	PipelineId string                 `protobuf:"bytes,2,opt,name=pipeline_id,json=pipelineId,proto3" json:"pipeline_id,omitempty"`
 	ResourceId string                 `protobuf:"bytes,3,opt,name=resource_id,json=resourceId,proto3" json:"resource_id,omitempty"`
 	// Namespaced slot group ("pipeline/<id>" or "group/<name>").
-	SlotGroup     string                 `protobuf:"bytes,4,opt,name=slot_group,json=slotGroup,proto3" json:"slot_group,omitempty"`
-	Input         []byte                 `protobuf:"bytes,5,opt,name=input,proto3" json:"input,omitempty"`
-	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	SlotGroup string                 `protobuf:"bytes,4,opt,name=slot_group,json=slotGroup,proto3" json:"slot_group,omitempty"`
+	Input     []byte                 `protobuf:"bytes,5,opt,name=input,proto3" json:"input,omitempty"`
+	CreatedAt *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	// Caller-supplied propagation metadata, immutable after acceptance:
+	// trace contexts, tenant tags. Never part of dedup identity.
+	Annotations   map[string]string `protobuf:"bytes,7,rep,name=annotations,proto3" json:"annotations,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -323,6 +326,13 @@ func (x *RunMeta) GetInput() []byte {
 func (x *RunMeta) GetCreatedAt() *timestamppb.Timestamp {
 	if x != nil {
 		return x.CreatedAt
+	}
+	return nil
+}
+
+func (x *RunMeta) GetAnnotations() map[string]string {
+	if x != nil {
+		return x.Annotations
 	}
 	return nil
 }
@@ -768,7 +778,7 @@ var File_durable_storage_v1_storage_proto protoreflect.FileDescriptor
 
 const file_durable_storage_v1_storage_proto_rawDesc = "" +
 	"\n" +
-	" durable/storage/v1/storage.proto\x12\x12durable.storage.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xd2\x01\n" +
+	" durable/storage/v1/storage.proto\x12\x12durable.storage.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xe2\x02\n" +
 	"\aRunMeta\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12\x1f\n" +
 	"\vpipeline_id\x18\x02 \x01(\tR\n" +
@@ -779,7 +789,11 @@ const file_durable_storage_v1_storage_proto_rawDesc = "" +
 	"slot_group\x18\x04 \x01(\tR\tslotGroup\x12\x14\n" +
 	"\x05input\x18\x05 \x01(\fR\x05input\x129\n" +
 	"\n" +
-	"created_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"\x95\x03\n" +
+	"created_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12N\n" +
+	"\vannotations\x18\a \x03(\v2,.durable.storage.v1.RunMeta.AnnotationsEntryR\vannotations\x1a>\n" +
+	"\x10AnnotationsEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x95\x03\n" +
 	"\x06Cursor\x12/\n" +
 	"\x05phase\x18\x01 \x01(\x0e2\x19.durable.storage.v1.PhaseR\x05phase\x12\x17\n" +
 	"\astep_id\x18\x02 \x01(\tR\x06stepId\x12\x1a\n" +
@@ -851,7 +865,7 @@ func file_durable_storage_v1_storage_proto_rawDescGZIP() []byte {
 }
 
 var file_durable_storage_v1_storage_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
-var file_durable_storage_v1_storage_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_durable_storage_v1_storage_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_durable_storage_v1_storage_proto_goTypes = []any{
 	(Phase)(0),                    // 0: durable.storage.v1.Phase
 	(Outcome)(0),                  // 1: durable.storage.v1.Outcome
@@ -864,28 +878,30 @@ var file_durable_storage_v1_storage_proto_goTypes = []any{
 	(*Failures)(nil),              // 8: durable.storage.v1.Failures
 	(*Terminal)(nil),              // 9: durable.storage.v1.Terminal
 	(*CancelRequest)(nil),         // 10: durable.storage.v1.CancelRequest
-	(*timestamppb.Timestamp)(nil), // 11: google.protobuf.Timestamp
+	nil,                           // 11: durable.storage.v1.RunMeta.AnnotationsEntry
+	(*timestamppb.Timestamp)(nil), // 12: google.protobuf.Timestamp
 }
 var file_durable_storage_v1_storage_proto_depIdxs = []int32{
-	11, // 0: durable.storage.v1.RunMeta.created_at:type_name -> google.protobuf.Timestamp
-	0,  // 1: durable.storage.v1.Cursor.phase:type_name -> durable.storage.v1.Phase
-	11, // 2: durable.storage.v1.Cursor.next_attempt_at:type_name -> google.protobuf.Timestamp
-	11, // 3: durable.storage.v1.Cursor.last_error_at:type_name -> google.protobuf.Timestamp
-	11, // 4: durable.storage.v1.Cursor.updated_at:type_name -> google.protobuf.Timestamp
-	2,  // 5: durable.storage.v1.StepRecord.forward_status:type_name -> durable.storage.v1.OpStatus
-	2,  // 6: durable.storage.v1.StepRecord.unwind_status:type_name -> durable.storage.v1.OpStatus
-	0,  // 7: durable.storage.v1.FailureRecord.phase:type_name -> durable.storage.v1.Phase
-	11, // 8: durable.storage.v1.FailureRecord.at:type_name -> google.protobuf.Timestamp
-	3,  // 9: durable.storage.v1.FailureRecord.kind:type_name -> durable.storage.v1.FailureKind
-	7,  // 10: durable.storage.v1.Failures.root:type_name -> durable.storage.v1.FailureRecord
-	7,  // 11: durable.storage.v1.Failures.unwind:type_name -> durable.storage.v1.FailureRecord
-	1,  // 12: durable.storage.v1.Terminal.outcome:type_name -> durable.storage.v1.Outcome
-	11, // 13: durable.storage.v1.CancelRequest.at:type_name -> google.protobuf.Timestamp
-	14, // [14:14] is the sub-list for method output_type
-	14, // [14:14] is the sub-list for method input_type
-	14, // [14:14] is the sub-list for extension type_name
-	14, // [14:14] is the sub-list for extension extendee
-	0,  // [0:14] is the sub-list for field type_name
+	12, // 0: durable.storage.v1.RunMeta.created_at:type_name -> google.protobuf.Timestamp
+	11, // 1: durable.storage.v1.RunMeta.annotations:type_name -> durable.storage.v1.RunMeta.AnnotationsEntry
+	0,  // 2: durable.storage.v1.Cursor.phase:type_name -> durable.storage.v1.Phase
+	12, // 3: durable.storage.v1.Cursor.next_attempt_at:type_name -> google.protobuf.Timestamp
+	12, // 4: durable.storage.v1.Cursor.last_error_at:type_name -> google.protobuf.Timestamp
+	12, // 5: durable.storage.v1.Cursor.updated_at:type_name -> google.protobuf.Timestamp
+	2,  // 6: durable.storage.v1.StepRecord.forward_status:type_name -> durable.storage.v1.OpStatus
+	2,  // 7: durable.storage.v1.StepRecord.unwind_status:type_name -> durable.storage.v1.OpStatus
+	0,  // 8: durable.storage.v1.FailureRecord.phase:type_name -> durable.storage.v1.Phase
+	12, // 9: durable.storage.v1.FailureRecord.at:type_name -> google.protobuf.Timestamp
+	3,  // 10: durable.storage.v1.FailureRecord.kind:type_name -> durable.storage.v1.FailureKind
+	7,  // 11: durable.storage.v1.Failures.root:type_name -> durable.storage.v1.FailureRecord
+	7,  // 12: durable.storage.v1.Failures.unwind:type_name -> durable.storage.v1.FailureRecord
+	1,  // 13: durable.storage.v1.Terminal.outcome:type_name -> durable.storage.v1.Outcome
+	12, // 14: durable.storage.v1.CancelRequest.at:type_name -> google.protobuf.Timestamp
+	15, // [15:15] is the sub-list for method output_type
+	15, // [15:15] is the sub-list for method input_type
+	15, // [15:15] is the sub-list for extension type_name
+	15, // [15:15] is the sub-list for extension extendee
+	0,  // [0:15] is the sub-list for field type_name
 }
 
 func init() { file_durable_storage_v1_storage_proto_init() }
@@ -899,7 +915,7 @@ func file_durable_storage_v1_storage_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_durable_storage_v1_storage_proto_rawDesc), len(file_durable_storage_v1_storage_proto_rawDesc)),
 			NumEnums:      4,
-			NumMessages:   7,
+			NumMessages:   8,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

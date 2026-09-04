@@ -99,6 +99,12 @@ type RunRecord struct {
 	// per-pipeline scope for records without one.
 	Group string
 
+	// Annotations are caller-supplied propagation metadata (trace
+	// contexts, tenant tags), set once at acceptance and immutable for
+	// the life of the Run. They are never part of duplicate-scheduling
+	// identity: the active Run's annotations win on a dedup hit.
+	Annotations map[string]string
+
 	Input []byte
 
 	Phase Phase
@@ -172,6 +178,12 @@ func (r *RunRecord) Clone() *RunRecord {
 	}
 	c.Input = append([]byte(nil), r.Input...)
 	c.Output = append([]byte(nil), r.Output...)
+	if r.Annotations != nil {
+		c.Annotations = make(map[string]string, len(r.Annotations))
+		for k, v := range r.Annotations {
+			c.Annotations[k] = v
+		}
+	}
 	if r.RootFailure != nil {
 		rf := *r.RootFailure
 		c.RootFailure = &rf
@@ -196,11 +208,11 @@ func (r *RunRecord) Clone() *RunRecord {
 // copies (or decode fresh values) so callers never share mutable state with
 // the store.
 //
-// Identifiers reaching a Store are NUL-free valid UTF-8 and free-text
-// fields (messages, reasons, causes) are valid UTF-8 — NewDefinition,
-// Schedule, and the engine's recording sites enforce it — so
-// implementations may use NUL as a key separator and protobuf string
-// fields for text.
+// Identifiers reaching a Store are NUL-free valid UTF-8, and free-text
+// fields (messages, reasons, causes) and annotation keys and values are
+// valid UTF-8 — NewDefinition, Schedule, and the engine's recording
+// sites enforce it — so implementations may use NUL as a key separator
+// and protobuf string fields for text.
 type Store interface {
 	// CreateRun persists rec if no nonterminal Run occupies its
 	// (SlotGroup, ResourceID) slot, returning (nil, true, nil).

@@ -21,6 +21,7 @@ import (
 // slice.
 type canonRecord struct {
 	RunID, PipelineID, ResourceID, Group string
+	Annotations                          map[string]string
 	Input                                []byte
 	Phase                                durable.Phase
 	Steps                                []canonStep
@@ -72,6 +73,7 @@ func canonicalize(rec *durable.RunRecord) *canonRecord {
 		RunID: string(rec.RunID), PipelineID: string(rec.PipelineID),
 		ResourceID: string(rec.ResourceID), Group: rec.SlotGroup(),
 		Input: normBytes(rec.Input), Phase: rec.Phase,
+		Annotations:   rec.Annotations,
 		Output:        normBytes(rec.Output),
 		NextAttemptAt: nanos(rec.NextAttemptAt), LastErrorAt: nanos(rec.LastErrorAt),
 		AwaitingRunID: string(rec.AwaitingRunID),
@@ -172,6 +174,9 @@ func FuzzStoreContract(f *testing.F) {
 				}
 				if arg%3 == 0 {
 					rec.NextAttemptAt = now.Add(time.Hour)
+				}
+				if arg%2 == 0 {
+					rec.Annotations = map[string]string{"traceparent": fmt.Sprintf("00-%02x", arg), "tenant": "t1"}
 				}
 				// RunID freshness is a documented CreateRun precondition:
 				// reusing any existing id — terminal, or live under a

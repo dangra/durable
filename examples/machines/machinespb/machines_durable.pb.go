@@ -46,6 +46,10 @@ func (inv ValidateInvocation) CancelRequested() bool { return inv.core.CancelReq
 // durable.AwaitRun, once it reached terminality.
 func (inv ValidateInvocation) AwaitedRunID() (durable.RunID, bool) { return inv.core.AwaitedRunID() }
 
+// Annotations returns a caller-owned copy of the run's immutable
+// acceptance-time annotations (trace contexts, tenant tags).
+func (inv ValidateInvocation) Annotations() map[string]string { return inv.core.Annotations() }
+
 // Input returns a defensive caller-owned copy of the immutable pipeline input.
 func (inv ValidateInvocation) Input() *ProvisionMachineInput {
 	msg, _ := inv.core.InputMessage().(*ProvisionMachineInput)
@@ -88,6 +92,10 @@ func (inv SelectHostInvocation) CancelRequested() bool { return inv.core.CancelR
 // AwaitedRunID reports the run the previous attempt parked on via
 // durable.AwaitRun, once it reached terminality.
 func (inv SelectHostInvocation) AwaitedRunID() (durable.RunID, bool) { return inv.core.AwaitedRunID() }
+
+// Annotations returns a caller-owned copy of the run's immutable
+// acceptance-time annotations (trace contexts, tenant tags).
+func (inv SelectHostInvocation) Annotations() map[string]string { return inv.core.Annotations() }
 
 // Input returns a defensive caller-owned copy of the immutable pipeline input.
 func (inv SelectHostInvocation) Input() *ProvisionMachineInput {
@@ -135,6 +143,10 @@ func (inv ReserveCapacityInvocation) CancelRequested() bool { return inv.core.Ca
 func (inv ReserveCapacityInvocation) AwaitedRunID() (durable.RunID, bool) {
 	return inv.core.AwaitedRunID()
 }
+
+// Annotations returns a caller-owned copy of the run's immutable
+// acceptance-time annotations (trace contexts, tenant tags).
+func (inv ReserveCapacityInvocation) Annotations() map[string]string { return inv.core.Annotations() }
 
 // Input returns a defensive caller-owned copy of the immutable pipeline input.
 func (inv ReserveCapacityInvocation) Input() *ProvisionMachineInput {
@@ -190,6 +202,10 @@ func (inv CreateMachineInvocation) CancelRequested() bool { return inv.core.Canc
 func (inv CreateMachineInvocation) AwaitedRunID() (durable.RunID, bool) {
 	return inv.core.AwaitedRunID()
 }
+
+// Annotations returns a caller-owned copy of the run's immutable
+// acceptance-time annotations (trace contexts, tenant tags).
+func (inv CreateMachineInvocation) Annotations() map[string]string { return inv.core.Annotations() }
 
 // Input returns a defensive caller-owned copy of the immutable pipeline input.
 func (inv CreateMachineInvocation) Input() *ProvisionMachineInput {
@@ -475,6 +491,10 @@ func (inv ReleaseMachineInvocation) CancelRequested() bool { return inv.core.Can
 func (inv ReleaseMachineInvocation) AwaitedRunID() (durable.RunID, bool) {
 	return inv.core.AwaitedRunID()
 }
+
+// Annotations returns a caller-owned copy of the run's immutable
+// acceptance-time annotations (trace contexts, tenant tags).
+func (inv ReleaseMachineInvocation) Annotations() map[string]string { return inv.core.Annotations() }
 
 // State returns the committed state of the referenced step for this run.
 // ok is false when no committed state exists.

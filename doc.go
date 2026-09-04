@@ -29,6 +29,18 @@
 // for counter- and histogram-style metrics; Engine.Stats returns a
 // point-in-time occupancy snapshot for poll-style gauges. Adapters for
 // specific metrics systems belong in application code — see Observer.
-// Tracing hooks are future work; per-attempt tracing spans can be built
-// today with WithMiddleware.
+//
+// # Tracing
+//
+// A Run outlives the process and trace that scheduled it, so trace
+// context is propagated durably: inject it (for example a W3C
+// traceparent) at Schedule with WithAnnotations, and extract it in a
+// WithMiddleware tracing middleware via Invocation.Annotations, emitting
+// per-attempt spans linked to the originating trace — span links, not a
+// long-lived parent, are the recommended shape for work that may run
+// hours later. The engine itself never depends on a tracing library;
+// examples/tracing-otel — a separate module, keeping the OpenTelemetry
+// SDK out of this module's dependency graph — demonstrates the complete
+// shape against the real OpenTelemetry API over a generated
+// order-fulfillment pipeline.
 package durable

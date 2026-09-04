@@ -76,6 +76,16 @@ jobs:
         run: go test -run xxx -bench . -benchtime 1x ./...
       - name: Example smoke test
         run: go run ./examples/machines
+      # examples/tracing-otel is its own module so the OpenTelemetry SDK
+      # never enters durable's dependency graph; it builds against the
+      # working tree via a replace directive.
+      - name: OpenTelemetry example module
+        working-directory: examples/tracing-otel
+        run: |
+          go mod tidy -diff
+          go vet ./...
+          go test -race -count=1 ./...
+          go run .
 
   staticcheck:
     name: Staticcheck

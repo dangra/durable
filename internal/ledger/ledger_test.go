@@ -261,3 +261,66 @@ func TestNextUnwind(t *testing.T) {
 		})
 	}
 }
+
+// TestDefensiveInvalids covers the fact-corruption branches: states no
+// well-behaved engine produces must reconcile to KindInvalid, never to
+// executable work.
+func TestDefensiveInvalids(t *testing.T) {
+	tests := []struct {
+		name    string
+		forward bool
+		topo    Topology
+		facts   Facts
+	}{
+		{
+			name:    "multiple unresolved forward operations",
+			forward: true,
+			topo:    Topology{step("A"), step("B")},
+			facts:   forward(map[string]OpState{"A": OpUnresolved, "B": OpUnresolved}),
+		},
+		{
+			name:    "corrupt forward state beyond the frontier",
+			forward: true,
+			topo:    Topology{step("A"), step("B")},
+			facts:   forward(map[string]OpState{"A": OpSucceeded, "B": OpState(99)}),
+		},
+		{
+			name: "multiple unresolved unwind operations",
+			topo: Topology{unwindable("A"), unwindable("B")},
+			facts: Facts{
+				Forward: map[string]OpState{"A": OpSucceeded, "B": OpSucceeded},
+				Unwind:  map[string]OpState{"A": OpUnresolved, "B": OpUnresolved},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got Decision
+			if tt.forward {
+				got = NextForward(tt.topo, tt.facts)
+			} else {
+				got = NextUnwind(tt.topo, tt.facts)
+			}
+			if got.Kind != KindInvalid || got.Reason == "" {
+				t.Fatalf("decision = {Kind:%d Reason:%q}, want KindInvalid with a reason", got.Kind, got.Reason)
+			}
+		})
+	}
+}
+
+// TestViolationRederivationFallback pins the total-function guards of
+// the sorted violation re-derivations: called without an actual
+// violation (which the fast scans never do), they still return a
+// well-formed KindInvalid rather than misbehaving.
+func TestViolationRederivationFallback(t *testing.T) {
+	clean := Facts{
+		Forward: map[string]OpState{"A": OpSucceeded},
+		Unwind:  map[string]OpState{"A": OpSucceeded},
+	}
+	if got := forwardViolation(clean); got.Kind != KindInvalid || got.Reason == "" {
+		t.Fatalf("forwardViolation fallback = %+v", got)
+	}
+	if got := unwindViolation(clean); got.Kind != KindInvalid || got.Reason == "" {
+		t.Fatalf("unwindViolation fallback = %+v", got)
+	}
+}

@@ -8,6 +8,8 @@
 // plain strings to keep this package free of dependencies.
 package ledger
 
+import "sort"
+
 // OpState is the resolution state of one logical operation.
 type OpState uint8
 
@@ -73,6 +75,52 @@ func invalid(reason string) Decision {
 	return Decision{Kind: KindInvalid, Reason: reason}
 }
 
+// sortedIDs orders a violation scan: map iteration is randomized, and
+// with multiple violations the chosen invalidity reason must not vary
+// between reconciliations of the same facts — the engine deduplicates
+// RunInvalid by (run, reason). Only cold paths pay for the sort: the
+// hot no-violation scans stay allocation-free.
+func sortedIDs(m map[string]OpState) []string {
+	ids := make([]string, 0, len(m))
+	for id := range m {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+// forwardViolation re-derives a forward-facts violation in sorted order
+// so the reason is deterministic.
+func forwardViolation(f Facts) Decision {
+	unresolved := ""
+	for _, id := range sortedIDs(f.Forward) {
+		switch f.Forward[id] {
+		case OpUnresolved:
+			if unresolved != "" {
+				return invalid("multiple unresolved forward operations: " + unresolved + ", " + id)
+			}
+			unresolved = id
+		case OpFailed:
+			return invalid("forward facts contain a permanent failure for step " + id + " but the run is in the forward phase")
+		}
+	}
+	return invalid("unreachable: forward violation vanished on re-derivation")
+}
+
+// unwindViolation re-derives an unwind-facts violation in sorted order.
+func unwindViolation(f Facts) Decision {
+	seen := ""
+	for _, id := range sortedIDs(f.Unwind) {
+		if f.Unwind[id] == OpUnresolved {
+			if seen != "" {
+				return invalid("multiple unresolved unwind operations: " + seen + ", " + id)
+			}
+			seen = id
+		}
+	}
+	return invalid("unreachable: unwind violation vanished on re-derivation")
+}
+
 // NextForward reconciles the next applicable forward operation.
 //
 // An unresolved forward operation pins the Run: it is always selected, and
@@ -87,11 +135,11 @@ func NextForward(topo Topology, f Facts) Decision {
 		switch st {
 		case OpUnresolved:
 			if unresolved != "" {
-				return invalid("multiple unresolved forward operations: " + unresolved + ", " + id)
+				return forwardViolation(f)
 			}
 			unresolved = id
 		case OpFailed:
-			return invalid("forward facts contain a permanent failure for step " + id + " but the run is in the forward phase")
+			return forwardViolation(f)
 		}
 	}
 	if unresolved != "" {
@@ -136,7 +184,7 @@ func NextUnwind(topo Topology, f Facts) Decision {
 	for id, st := range f.Unwind {
 		if st == OpUnresolved {
 			if seen != "" {
-				return invalid("multiple unresolved unwind operations: " + seen + ", " + id)
+				return unwindViolation(f)
 			}
 			seen = id
 		}

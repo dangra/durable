@@ -386,6 +386,7 @@ demonstrates it end to end.
 ## Where next
 
 - [Godoc examples](https://pkg.go.dev/github.com/dangra/durable#pkg-examples) — runnable versions of this tour's snippets
+- [examples/release-train](../examples/release-train/) — the flagship demo: one release living through a crash, a definition change, awaited children, and a cascading cancellation
 - [examples/machines](../examples/machines/) — a complete generated pipeline
 - [examples/tracing-otel](../examples/tracing-otel/) — the observability story, end to end
 - [The specification](../spec/README.md) — the full rules this tour summarizes

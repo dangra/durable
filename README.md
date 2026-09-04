@@ -83,6 +83,11 @@ if result.Succeeded() {
 }
 ```
 
+For the whole story in one runnable demo — a release surviving a daemon
+crash, a pipeline definition that evolves mid-flight, parent runs
+awaiting children, and a cascading cancellation that rolls everything
+back — run [examples/release-train](examples/release-train/).
+
 ## Observability
 
 The engine logs through `log/slog`, emits typed lifecycle events

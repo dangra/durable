@@ -1,0 +1,106 @@
+// Today's build of the release platform: the deploy pipeline gained a
+// canary-analysis step (compare legacyproto/, yesterday's build without
+// it), and the release-train pipeline orchestrates per-service deploys.
+syntax = "proto3";
+
+package release.v1;
+
+import "durable/v1/options.proto";
+
+option go_package = "github.com/dangra/durable/examples/release-train/releasepb";
+
+// ---- deploy-service: one service rollout ----
+
+message ProvisionEnv {
+  option (durable.v1.step) = {
+    id: "provision-env/v1"
+    unwind: true
+  };
+
+  string env_id = 1;
+}
+
+message RunMigrations {
+  option (durable.v1.step) = {
+    id: "run-migrations/v1"
+    unwind: true
+  };
+
+  string schema_version = 1;
+}
+
+// CanaryAnalysis is the step added while runs were in flight: a run
+// whose forward frontier is run-migrations executes it; a run already
+// past shift-traffic never executes it retroactively.
+message CanaryAnalysis {
+  option (durable.v1.step) = {
+    id: "canary-analysis/v1"
+  };
+
+  uint32 score = 1;
+}
+
+message ShiftTraffic {
+  option (durable.v1.step) = {
+    id: "shift-traffic/v1"
+  };
+
+  string lb_generation = 1;
+}
+
+message DeployServiceInput {
+  string service = 1;
+  string image = 2;
+}
+
+message DeployServiceOutput {
+  string url = 1;
+}
+
+message DeployService {
+  option (durable.v1.pipeline) = {
+    id: "deploy-service"
+    input: ".release.v1.DeployServiceInput"
+    output: ".release.v1.DeployServiceOutput"
+
+    steps: ".release.v1.ProvisionEnv"
+    steps: ".release.v1.RunMigrations"
+    steps: ".release.v1.CanaryAnalysis"
+    steps: ".release.v1.ShiftTraffic"
+  };
+}
+
+// ---- release-train: ship every service of a release ----
+
+message PlanRelease {
+  option (durable.v1.step) = {
+    id: "plan/v1"
+  };
+}
+
+message ShipWeb {
+  option (durable.v1.step) = {
+    id: "ship-web/v1"
+  };
+}
+
+message ShipApi {
+  option (durable.v1.step) = {
+    id: "ship-api/v1"
+  };
+}
+
+message ReleaseTrainInput {
+  string image_tag = 1;
+}
+
+message ReleaseTrain {
+  option (durable.v1.pipeline) = {
+    id: "release-train"
+    input: ".release.v1.ReleaseTrainInput"
+
+    steps: ".release.v1.PlanRelease"
+    steps: ".release.v1.ShipWeb"
+    steps: ".release.v1.ShipApi"
+  };
+}

@@ -142,6 +142,19 @@ func reasonOf(err error) string {
 	return ""
 }
 
+// FailureInfo reports whether a handler's returned error declares
+// permanent failure via Fail and, if so, the attribution it resolves
+// to — the kind and reason that will reach the Run's RootFailure.
+// Middleware wrapping handlers use it to label spans and metrics with
+// the same attribution the engine will commit.
+func FailureInfo(err error) (kind FailureKind, reason string, ok bool) {
+	pe, ok := asPermanent(err)
+	if !ok {
+		return FailureKindSystem, "", false
+	}
+	return pe.failureKind(), pe.failureReason(), true
+}
+
 // asPermanent reports whether err declares permanent failure via Fail.
 func asPermanent(err error) (*permanentError, bool) {
 	if pe, ok := errors.AsType[*permanentError](err); ok {

@@ -10,14 +10,29 @@ import (
 	"github.com/dangra/durable"
 )
 
+// Histogram bucket boundaries, in seconds. The OTel defaults top out
+// around 10s and would collapse durable-scale durations into the
+// overflow bucket.
+var (
+	// attemptBoundaries covers handler executions: milliseconds up to
+	// the 20-minute mark of infrastructure-heavy operations.
+	attemptBoundaries = []float64{.005, .025, .1, .5, 1, 2.5, 5, 10, 30, 60, 150, 300, 600, 1200}
+	// runBoundaries covers Run lifetimes and AwaitRun parks:
+	// acceptance-to-terminal and cross-run waits span hours or days.
+	runBoundaries = []float64{.1, .5, 1, 5, 15, 60, 300, 900, 3600, 14400, 43200, 86400}
+	// storeBoundaries covers Store calls: local writes from
+	// sub-millisecond to a few seconds under contention.
+	storeBoundaries = []float64{.0005, .001, .0025, .005, .01, .025, .05, .1, .25, .5, 1, 2.5}
+)
+
 // NewObserver returns a durable.Observer that translates engine
 // lifecycle events into OpenTelemetry metrics, for installation via
 // durable.WithObserver. Instruments, all under the durable.* namespace
 // with durations in seconds:
 //
 //   - durable.runs.scheduled      counter    {pipeline}
-//   - durable.attempts            counter    {pipeline, step, phase, result}
-//   - durable.attempt.duration    histogram  {pipeline, step, phase, result}
+//   - durable.attempts            counter    {pipeline, step, phase, result, panicked}
+//   - durable.attempt.duration    histogram  {pipeline, step, phase, result, panicked}
 //   - durable.runs.unwinding      counter    {pipeline, failure_kind, reason}
 //   - durable.runs.terminal       counter    {pipeline, outcome; failure_kind, reason on failure}
 //   - durable.run.duration        histogram  {pipeline, outcome}
@@ -29,7 +44,10 @@ import (
 //
 // Every attribute is bounded-cardinality: reasons are the
 // low-cardinality slugs FailureReasoner is documented to carry, and Run
-// and resource identities never label metrics. Counters built from
+// and resource identities never label metrics. Histograms carry
+// explicit bucket boundaries sized to durable workloads — attempt-scale
+// (5ms–20m), run-scale (100ms–24h), and store-call-scale (0.5ms–2.5s) —
+// instead of the OTel defaults that stop near 10s. Counters built from
 // engine events are operational signal, not accounting — see the
 // durable.Observer contract. For point-in-time occupancy gauges, see
 // RegisterStats.
@@ -43,8 +61,9 @@ func NewObserver(opts ...Option) (durable.Observer, error) {
 		errs = append(errs, err)
 		return c
 	}
-	histogram := func(name, desc string) metric.Float64Histogram {
-		h, err := meter.Float64Histogram(name, metric.WithDescription(desc), metric.WithUnit("s"))
+	histogram := func(name, desc string, bounds []float64) metric.Float64Histogram {
+		h, err := meter.Float64Histogram(name, metric.WithDescription(desc), metric.WithUnit("s"),
+			metric.WithExplicitBucketBoundaries(bounds...))
 		errs = append(errs, err)
 		return h
 	}
@@ -52,15 +71,15 @@ func NewObserver(opts ...Option) (durable.Observer, error) {
 	var (
 		scheduled       = counter("durable.runs.scheduled", "Runs accepted by Schedule.", "{run}")
 		attempts        = counter("durable.attempts", "Operation attempts, by resolution.", "{attempt}")
-		attemptDuration = histogram("durable.attempt.duration", "Handler execution time of one attempt.")
+		attemptDuration = histogram("durable.attempt.duration", "Handler execution time of one attempt.", attemptBoundaries)
 		unwinding       = counter("durable.runs.unwinding", "Runs whose RootFailure was established.", "{run}")
 		terminal        = counter("durable.runs.terminal", "Runs committing a terminal outcome.", "{run}")
-		runDuration     = histogram("durable.run.duration", "Run duration, acceptance to terminal.")
+		runDuration     = histogram("durable.run.duration", "Run duration, acceptance to terminal.", runBoundaries)
 		invalidated     = counter("durable.runs.invalidated", "Runs marked invalid for the current deployment.", "{run}")
-		awaitDuration   = histogram("durable.await.duration", "Time parked on AwaitRun, first park to resolution.")
-		classWait       = histogram("durable.class.wait.duration", "Time throttled on a concurrency class before a token.")
+		awaitDuration   = histogram("durable.await.duration", "Time parked on AwaitRun, first park to resolution.", runBoundaries)
+		classWait       = histogram("durable.class.wait.duration", "Time throttled on a concurrency class before a token.", attemptBoundaries)
 		reaped          = counter("durable.runs.reaped", "Terminal Runs deleted by retention sweeps.", "{run}")
-		storeOpDuration = histogram("durable.store.op.duration", "Store call latency.")
+		storeOpDuration = histogram("durable.store.op.duration", "Store call latency.", storeBoundaries)
 	)
 	if err := errors.Join(errs...); err != nil {
 		return durable.Observer{}, err
@@ -80,6 +99,7 @@ func NewObserver(opts ...Option) (durable.Observer, error) {
 				AttrStep.String(string(ev.StepID)),
 				AttrPhase.String(ev.Phase.String()),
 				AttrResult.String(ev.Result.String()),
+				AttrPanicked.Bool(ev.Panicked),
 			)
 			attempts.Add(ctx, 1, metric.WithAttributeSet(set))
 			attemptDuration.Record(ctx, ev.Duration.Seconds(), metric.WithAttributeSet(set))

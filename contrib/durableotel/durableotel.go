@@ -52,6 +52,7 @@ const (
 	AttrReason      attribute.Key = "durable.reason"
 	AttrClass       attribute.Key = "durable.class"
 	AttrAwaitTarget attribute.Key = "durable.await_target"
+	AttrPanicked    attribute.Key = "durable.panicked"
 	AttrStoreOp     attribute.Key = "durable.store.op"
 	AttrStoreWrite  attribute.Key = "durable.store.write"
 	AttrError       attribute.Key = "durable.error"
@@ -61,9 +62,10 @@ const (
 type Option func(*config)
 
 type config struct {
-	tracerProvider trace.TracerProvider
-	meterProvider  metric.MeterProvider
-	propagator     propagation.TextMapPropagator
+	tracerProvider  trace.TracerProvider
+	meterProvider   metric.MeterProvider
+	propagator      propagation.TextMapPropagator
+	spanAnnotations []string
 }
 
 func newConfig(opts []Option) config {
@@ -114,5 +116,21 @@ func WithPropagator(p propagation.TextMapPropagator) Option {
 		if p != nil {
 			c.propagator = p
 		}
+	}
+}
+
+// WithSpanAnnotations selects Run annotation keys Middleware copies
+// onto every attempt span, each under its annotation key verbatim as
+// the attribute name. It surfaces domain identity persisted at Schedule
+// time (a machine ID, a tenant) on every span of the Run:
+//
+//	pipe.Schedule(ctx, res, input, durable.WithAnnotations(
+//		map[string]string{"machine.id": id}))
+//	durableotel.Middleware(durableotel.WithSpanAnnotations("machine.id"))
+//
+// Keys absent from a Run's annotations are skipped.
+func WithSpanAnnotations(keys ...string) Option {
+	return func(c *config) {
+		c.spanAnnotations = append(c.spanAnnotations, keys...)
 	}
 }

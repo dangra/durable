@@ -6,6 +6,7 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
@@ -51,29 +52,41 @@ func WithTraceContext(ctx context.Context, opts ...Option) durable.ScheduleOptio
 //     payment-gateway call, say) nest under the attempt correctly.
 //
 // Span names are "<step> <phase>" (low cardinality); the attempt number
-// and Run identity ride as durable.* attributes. A handler error records
-// on the span and sets Error status — except an AwaitRun resolution,
-// which is a park, not a failure, and becomes a durable.await_target
-// attribute instead.
+// and Run identity ride as durable.* attributes, and WithSpanAnnotations
+// adds selected Run annotations. A handler error records on the span and
+// sets Error status; a permanent failure additionally stamps the
+// durable.failure_kind and durable.reason the engine will commit
+// (FailureInfo). An AwaitRun resolution is a park, not a failure, and
+// becomes a durable.await_target attribute instead. A handler panic is
+// recorded on the span — exception event with stack trace, Error
+// status, durable.panicked — and re-panicked for the engine, which
+// treats it as an ordinary retryable error.
 func Middleware(opts ...Option) durable.Middleware {
 	cfg := newConfig(opts)
 	tracer := cfg.tracerProvider.Tracer(ScopeName)
 	return func(next durable.Handler) durable.Handler {
 		return func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
-			ctx = cfg.propagator.Extract(ctx, propagation.MapCarrier(inv.Annotations()))
+			annotations := inv.Annotations()
+			ctx = cfg.propagator.Extract(ctx, propagation.MapCarrier(annotations))
 			origin := trace.SpanContextFromContext(ctx)
 
+			attrs := []attribute.KeyValue{
+				AttrPipeline.String(string(inv.PipelineID())),
+				AttrResource.String(string(inv.ResourceID())),
+				AttrRunID.String(string(inv.RunID())),
+				AttrStep.String(string(inv.StepID())),
+				AttrPhase.String(inv.Phase().String()),
+				AttrAttempt.Int64(int64(inv.Attempt())),
+			}
+			for _, k := range cfg.spanAnnotations {
+				if v, ok := annotations[k]; ok {
+					attrs = append(attrs, attribute.String(k, v))
+				}
+			}
 			startOpts := []trace.SpanStartOption{
 				trace.WithSpanKind(trace.SpanKindConsumer),
 				trace.WithNewRoot(),
-				trace.WithAttributes(
-					AttrPipeline.String(string(inv.PipelineID())),
-					AttrResource.String(string(inv.ResourceID())),
-					AttrRunID.String(string(inv.RunID())),
-					AttrStep.String(string(inv.StepID())),
-					AttrPhase.String(inv.Phase().String()),
-					AttrAttempt.Int64(int64(inv.Attempt())),
-				),
+				trace.WithAttributes(attrs...),
 			}
 			if origin.IsValid() {
 				startOpts = append(startOpts, trace.WithLinks(trace.Link{SpanContext: origin}))
@@ -81,6 +94,18 @@ func Middleware(opts ...Option) durable.Middleware {
 			ctx, span := tracer.Start(ctx,
 				fmt.Sprintf("%s %s", inv.StepID(), inv.Phase()), startOpts...)
 			defer span.End()
+			defer func() {
+				// The engine's own recover sits outside the middleware
+				// chain, so without this the span would end silently OK
+				// on the worst failure mode. Record, then hand the panic
+				// back to the engine untouched.
+				if p := recover(); p != nil {
+					span.SetAttributes(AttrPanicked.Bool(true))
+					span.RecordError(fmt.Errorf("handler panic: %v", p), trace.WithStackTrace(true))
+					span.SetStatus(codes.Error, "handler panic")
+					panic(p)
+				}
+			}()
 
 			out, err := next(ctx, inv)
 			if err != nil {
@@ -89,6 +114,12 @@ func Middleware(opts ...Option) durable.Middleware {
 				} else {
 					span.RecordError(err)
 					span.SetStatus(codes.Error, err.Error())
+					if kind, reason, ok := durable.FailureInfo(err); ok {
+						span.SetAttributes(AttrFailureKind.String(kind.String()))
+						if reason != "" {
+							span.SetAttributes(AttrReason.String(reason))
+						}
+					}
 				}
 			}
 			return out, err

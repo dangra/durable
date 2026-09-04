@@ -119,7 +119,8 @@ func main() {
 
 	fmt.Println()
 	fmt.Println("outcome:")
-	fmt.Printf("  train: canceled=%v\n", trainResult.Canceled())
+	fmt.Printf("  train: canceled=%v announced=%v (a frozen train never reaches announce/v1)\n",
+		trainResult.Canceled(), w.announced)
 	fmt.Printf("  web:   traffic=%s canary=%d (migrations idempotently re-run %d time(s))\n",
 		w.traffic["web"], w.canaried["web"], w.skips)
 	fmt.Printf("  api:   canceled=%v rolled_back=%v env_torn_down=%v\n",

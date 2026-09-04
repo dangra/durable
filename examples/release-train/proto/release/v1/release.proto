@@ -80,6 +80,15 @@ message ShipApi {
   option (durable.v1.step) = {id: "ship-api/v1"};
 }
 
+// Announce wraps the release: publish the changelog and notify. In the
+// demo it never executes — the train is frozen first, and a canceled
+// run selects no new forward work.
+message Announce {
+  option (durable.v1.step) = {id: "announce/v1"};
+
+  string changelog_url = 1;
+}
+
 message ReleaseTrainInput {
   string image_tag = 1;
 }
@@ -92,5 +101,6 @@ message ReleaseTrain {
     steps: ".release.v1.PlanRelease"
     steps: ".release.v1.ShipWeb"
     steps: ".release.v1.ShipApi"
+    steps: ".release.v1.Announce"
   };
 }

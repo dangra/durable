@@ -20,6 +20,7 @@ type world struct {
 	traffic    map[string]string // service -> live lb generation
 	canaried   map[string]uint32 // service -> canary score
 	skips      int               // idempotent migration re-executions
+	announced  bool              // release announcement published
 
 	webDeployID durable.RunID
 	apiDeployID durable.RunID

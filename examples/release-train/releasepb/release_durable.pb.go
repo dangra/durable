@@ -498,6 +498,9 @@ var ShipWebStep = durable.NewStepRef("ship-web/v1")
 // It is not accepted by State lookup.
 var ShipApiStep = durable.NewStepRef("ship-api/v1")
 
+// AnnounceStep is the typed reference to the state-producing step "announce/v1".
+var AnnounceStep = durable.NewStateStepRef("announce/v1", func() *Announce { return &Announce{} })
+
 // PlanReleaseInvocation is passed to PlanReleaseHandler methods.
 type PlanReleaseInvocation struct {
 	core *durable.Invocation
@@ -641,6 +644,55 @@ type ShipApiFunc func(ctx context.Context, inv ShipApiInvocation) error
 
 func (f ShipApiFunc) Run(ctx context.Context, inv ShipApiInvocation) error { return f(ctx, inv) }
 
+// AnnounceInvocation is passed to AnnounceHandler methods.
+type AnnounceInvocation struct {
+	core *durable.Invocation
+}
+
+func (inv AnnounceInvocation) PipelineID() durable.PipelineID { return inv.core.PipelineID() }
+func (inv AnnounceInvocation) ResourceID() durable.ResourceID { return inv.core.ResourceID() }
+func (inv AnnounceInvocation) RunID() durable.RunID           { return inv.core.RunID() }
+func (inv AnnounceInvocation) StepID() durable.StepID         { return inv.core.StepID() }
+func (inv AnnounceInvocation) Attempt() uint64                { return inv.core.Attempt() }
+func (inv AnnounceInvocation) Phase() durable.Phase           { return inv.core.Phase() }
+
+// CancelRequested reports whether a cancellation request was pending when
+// this attempt was reserved.
+func (inv AnnounceInvocation) CancelRequested() bool { return inv.core.CancelRequested() }
+
+// AwaitedRunID reports the run the previous attempt parked on via
+// durable.AwaitRun, once it reached terminality.
+func (inv AnnounceInvocation) AwaitedRunID() (durable.RunID, bool) { return inv.core.AwaitedRunID() }
+
+// Annotations returns a caller-owned copy of the run's immutable
+// acceptance-time annotations (trace contexts, tenant tags).
+func (inv AnnounceInvocation) Annotations() map[string]string { return inv.core.Annotations() }
+
+// Input returns a defensive caller-owned copy of the immutable pipeline input.
+func (inv AnnounceInvocation) Input() *ReleaseTrainInput {
+	msg, _ := inv.core.InputMessage().(*ReleaseTrainInput)
+	return msg
+}
+
+// State returns the committed state of the referenced step for this run.
+// ok is false when no committed state exists.
+func (inv AnnounceInvocation) State[T proto.Message](step durable.StateStepRef[T]) (T, bool) {
+	return durable.LookupState(inv.core, step)
+}
+
+// AnnounceHandler implements step "announce/v1".
+type AnnounceHandler interface {
+	Run(context.Context, AnnounceInvocation) (*Announce, error)
+}
+
+// AnnounceFunc adapts a function to AnnounceHandler, in the style of
+// http.HandlerFunc.
+type AnnounceFunc func(ctx context.Context, inv AnnounceInvocation) (*Announce, error)
+
+func (f AnnounceFunc) Run(ctx context.Context, inv AnnounceInvocation) (*Announce, error) {
+	return f(ctx, inv)
+}
+
 var releaseTrainViews sync.Map
 
 func (x *ReleaseTrain) durableView() *durable.ReduceView {
@@ -674,6 +726,7 @@ func NewReleaseTrain(
 	planRelease PlanReleaseHandler,
 	shipWeb ShipWebHandler,
 	shipApi ShipApiHandler,
+	announce AnnounceHandler,
 ) *ReleaseTrainDefinition {
 	return &ReleaseTrainDefinition{def: durable.NewDefinition(durable.DefinitionConfig{
 		ID:       "release-train",
@@ -695,6 +748,17 @@ func NewReleaseTrain(
 				ID: "ship-api/v1",
 				Run: func(ctx context.Context, core *durable.Invocation) (proto.Message, error) {
 					return nil, shipApi.Run(ctx, ShipApiInvocation{core: core})
+				},
+			},
+			{
+				ID:       "announce/v1",
+				HasState: true,
+				Run: func(ctx context.Context, core *durable.Invocation) (proto.Message, error) {
+					state, err := announce.Run(ctx, AnnounceInvocation{core: core})
+					if state == nil {
+						return nil, err
+					}
+					return state, err
 				},
 			},
 		},

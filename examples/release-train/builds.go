@@ -48,6 +48,7 @@ func yesterdaysBuild(ctx context.Context, store durable.Store, w *world) (*durab
 	}
 	train, err := releasepb.NewReleaseTrain(
 		releasepb.PlanReleaseFunc(s.plan), releasepb.ShipWebFunc(s.shipWeb), releasepb.ShipApiFunc(s.shipApi),
+		releasepb.AnnounceFunc(s.announce),
 	).Bind(engine)
 	if err != nil {
 		return nil, nil, err
@@ -82,6 +83,7 @@ func todaysBuild(ctx context.Context, store durable.Store, w *world) (*durable.E
 	}
 	train, err := releasepb.NewReleaseTrain(
 		releasepb.PlanReleaseFunc(s.plan), releasepb.ShipWebFunc(s.shipWeb), releasepb.ShipApiFunc(s.shipApi),
+		releasepb.AnnounceFunc(s.announce),
 	).Bind(engine)
 	if err != nil {
 		return nil, nil, nil, err

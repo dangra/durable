@@ -445,6 +445,53 @@ func (*ShipApi) Descriptor() ([]byte, []int) {
 	return file_release_v1_release_proto_rawDescGZIP(), []int{9}
 }
 
+// Announce wraps the release: publish the changelog and notify. In the
+// demo it never executes — the train is frozen first, and a canceled
+// run selects no new forward work.
+type Announce struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ChangelogUrl  string                 `protobuf:"bytes,1,opt,name=changelog_url,json=changelogUrl,proto3" json:"changelog_url,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Announce) Reset() {
+	*x = Announce{}
+	mi := &file_release_v1_release_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Announce) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Announce) ProtoMessage() {}
+
+func (x *Announce) ProtoReflect() protoreflect.Message {
+	mi := &file_release_v1_release_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Announce.ProtoReflect.Descriptor instead.
+func (*Announce) Descriptor() ([]byte, []int) {
+	return file_release_v1_release_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *Announce) GetChangelogUrl() string {
+	if x != nil {
+		return x.ChangelogUrl
+	}
+	return ""
+}
+
 type ReleaseTrainInput struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	ImageTag      string                 `protobuf:"bytes,1,opt,name=image_tag,json=imageTag,proto3" json:"image_tag,omitempty"`
@@ -454,7 +501,7 @@ type ReleaseTrainInput struct {
 
 func (x *ReleaseTrainInput) Reset() {
 	*x = ReleaseTrainInput{}
-	mi := &file_release_v1_release_proto_msgTypes[10]
+	mi := &file_release_v1_release_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -466,7 +513,7 @@ func (x *ReleaseTrainInput) String() string {
 func (*ReleaseTrainInput) ProtoMessage() {}
 
 func (x *ReleaseTrainInput) ProtoReflect() protoreflect.Message {
-	mi := &file_release_v1_release_proto_msgTypes[10]
+	mi := &file_release_v1_release_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -479,7 +526,7 @@ func (x *ReleaseTrainInput) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReleaseTrainInput.ProtoReflect.Descriptor instead.
 func (*ReleaseTrainInput) Descriptor() ([]byte, []int) {
-	return file_release_v1_release_proto_rawDescGZIP(), []int{10}
+	return file_release_v1_release_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *ReleaseTrainInput) GetImageTag() string {
@@ -497,7 +544,7 @@ type ReleaseTrain struct {
 
 func (x *ReleaseTrain) Reset() {
 	*x = ReleaseTrain{}
-	mi := &file_release_v1_release_proto_msgTypes[11]
+	mi := &file_release_v1_release_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -509,7 +556,7 @@ func (x *ReleaseTrain) String() string {
 func (*ReleaseTrain) ProtoMessage() {}
 
 func (x *ReleaseTrain) ProtoReflect() protoreflect.Message {
-	mi := &file_release_v1_release_proto_msgTypes[11]
+	mi := &file_release_v1_release_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -522,7 +569,7 @@ func (x *ReleaseTrain) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReleaseTrain.ProtoReflect.Descriptor instead.
 func (*ReleaseTrain) Descriptor() ([]byte, []int) {
-	return file_release_v1_release_proto_rawDescGZIP(), []int{11}
+	return file_release_v1_release_proto_rawDescGZIP(), []int{12}
 }
 
 var File_release_v1_release_proto protoreflect.FileDescriptor
@@ -555,11 +602,14 @@ const file_release_v1_release_proto_rawDesc = "" +
 	"\aShipWeb:\x11\x8a\xa8\x19\r\n" +
 	"\vship-web/v1\"\x1c\n" +
 	"\aShipApi:\x11\x8a\xa8\x19\r\n" +
-	"\vship-api/v1\"0\n" +
+	"\vship-api/v1\"B\n" +
+	"\bAnnounce\x12#\n" +
+	"\rchangelog_url\x18\x01 \x01(\tR\fchangelogUrl:\x11\x8a\xa8\x19\r\n" +
+	"\vannounce/v1\"0\n" +
 	"\x11ReleaseTrainInput\x12\x1b\n" +
-	"\timage_tag\x18\x01 \x01(\tR\bimageTag\"\x85\x01\n" +
-	"\fReleaseTrain:u\x92\xa8\x19q\n" +
-	"\rrelease-train\x12\x1d.release.v1.ReleaseTrainInput\"\x17.release.v1.PlanRelease\"\x13.release.v1.ShipWeb\"\x13.release.v1.ShipApiB<Z:github.com/dangra/durable/examples/release-train/releasepbb\x06proto3"
+	"\timage_tag\x18\x01 \x01(\tR\bimageTag\"\x9d\x01\n" +
+	"\fReleaseTrain:\x8c\x01\x92\xa8\x19\x87\x01\n" +
+	"\rrelease-train\x12\x1d.release.v1.ReleaseTrainInput\"\x17.release.v1.PlanRelease\"\x13.release.v1.ShipWeb\"\x13.release.v1.ShipApi\"\x14.release.v1.AnnounceB<Z:github.com/dangra/durable/examples/release-train/releasepbb\x06proto3"
 
 var (
 	file_release_v1_release_proto_rawDescOnce sync.Once
@@ -573,7 +623,7 @@ func file_release_v1_release_proto_rawDescGZIP() []byte {
 	return file_release_v1_release_proto_rawDescData
 }
 
-var file_release_v1_release_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
+var file_release_v1_release_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
 var file_release_v1_release_proto_goTypes = []any{
 	(*ProvisionEnv)(nil),        // 0: release.v1.ProvisionEnv
 	(*RunMigrations)(nil),       // 1: release.v1.RunMigrations
@@ -585,8 +635,9 @@ var file_release_v1_release_proto_goTypes = []any{
 	(*PlanRelease)(nil),         // 7: release.v1.PlanRelease
 	(*ShipWeb)(nil),             // 8: release.v1.ShipWeb
 	(*ShipApi)(nil),             // 9: release.v1.ShipApi
-	(*ReleaseTrainInput)(nil),   // 10: release.v1.ReleaseTrainInput
-	(*ReleaseTrain)(nil),        // 11: release.v1.ReleaseTrain
+	(*Announce)(nil),            // 10: release.v1.Announce
+	(*ReleaseTrainInput)(nil),   // 11: release.v1.ReleaseTrainInput
+	(*ReleaseTrain)(nil),        // 12: release.v1.ReleaseTrain
 }
 var file_release_v1_release_proto_depIdxs = []int32{
 	0, // [0:0] is the sub-list for method output_type
@@ -607,7 +658,7 @@ func file_release_v1_release_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_release_v1_release_proto_rawDesc), len(file_release_v1_release_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   12,
+			NumMessages:   13,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

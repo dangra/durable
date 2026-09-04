@@ -20,7 +20,7 @@ scheduling a `deploy-service` child run and parking on it with
 flowchart TB
     subgraph train["release-train (parent run)"]
         direction TB
-        P[plan/v1] --> SW[ship-web/v1] --> SA[ship-api/v1]
+        P[plan/v1] --> SW[ship-web/v1] --> SA[ship-api/v1] --> AN[announce/v1]
     end
 
     subgraph deploy["deploy-service (one child run per service)"]
@@ -93,6 +93,7 @@ sequenceDiagram
 | evolution | `[web] canary analysis: score 98 — a step added while this run was in flight` |
 | composition | `[train] web deploy scheduled; parking until it lands` |
 | cancellation | `[train] release frozen — canceling api deploy` → `[api] migrations rolled back (unwind)` |
+| cancellation stops forward work | `announced=false` in the outcome — the frozen train never reaches `announce/v1` |
 
 ## The cast
 

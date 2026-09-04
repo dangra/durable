@@ -71,3 +71,15 @@ func (s *shipper) shipWeb(ctx context.Context, inv releasepb.ShipWebInvocation) 
 func (s *shipper) shipApi(ctx context.Context, inv releasepb.ShipApiInvocation) error {
 	return s.ship(ctx, inv, "api", &s.w.apiDeployID)
 }
+
+// announce wraps the release once every service shipped. In the demo it
+// never runs: the train is frozen during ship-api, and a canceled run
+// selects no new forward work — the wrap-up simply never happens.
+func (s *shipper) announce(ctx context.Context, inv releasepb.AnnounceInvocation) (*releasepb.Announce, error) {
+	url := "https://releases.example.com/" + inv.Input().GetImageTag()
+	s.w.mu.Lock()
+	s.w.announced = true
+	s.w.mu.Unlock()
+	s.w.logf("[train] release %s announced: %s", inv.Input().GetImageTag(), url)
+	return &releasepb.Announce{ChangelogUrl: url}, nil
+}

@@ -50,4 +50,9 @@ func TestStory(t *testing.T) {
 	if _, ok := w.traffic["api"]; ok {
 		t.Error("api traffic was shifted; the freeze must land before shift-traffic")
 	}
+	// A canceled run selects no new forward work: the wrap-up announce
+	// step, after the frozen ship-api, must never execute.
+	if w.announced {
+		t.Error("release was announced; a frozen train must never reach announce/v1")
+	}
 }

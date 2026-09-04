@@ -39,9 +39,8 @@
 // per-attempt spans linked to the originating trace — span links, not a
 // long-lived parent, are the recommended shape for work that may run
 // hours later. The engine itself never depends on a tracing library;
-// examples/tracing demonstrates the complete shape dependency-free, and
-// examples/tracing-otel (a separate module, keeping the OpenTelemetry
-// SDK out of this module's dependency graph) shows the same pattern
-// against the real OpenTelemetry API over a generated order-fulfillment
-// pipeline.
+// examples/tracing-otel — a separate module, keeping the OpenTelemetry
+// SDK out of this module's dependency graph — demonstrates the complete
+// shape against the real OpenTelemetry API over a generated
+// order-fulfillment pipeline.
 package durable

@@ -2,10 +2,14 @@ module github.com/dangra/durable/contrib/durableotel
 
 go 1.27.0
 
+// In-tree development and CI build against the working-tree core; the
+// directive is ignored when this module is consumed via go get, where
+// the required release version below applies. Tag this module only when
+// every core API it uses is in that release.
 replace github.com/dangra/durable => ../..
 
 require (
-	github.com/dangra/durable v0.0.0-00010101000000-000000000000
+	github.com/dangra/durable v0.2.0
 	go.opentelemetry.io/otel v1.46.0
 	go.opentelemetry.io/otel/metric v1.46.0
 	go.opentelemetry.io/otel/sdk v1.46.0

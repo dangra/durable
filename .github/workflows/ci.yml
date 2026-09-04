@@ -70,6 +70,8 @@ jobs:
           go test -fuzz=FuzzReconcile -fuzztime=10s ./internal/ledger/
           go test -fuzz=FuzzOps -fuzztime=10s ./internal/tokenpool/
           go test -fuzz=FuzzOps -fuzztime=10s ./internal/watchset/
+          go test -fuzz=FuzzRoundTrip -fuzztime=10s ./internal/storagepb/
+          go test -run xxx -fuzz=FuzzStoreContract -fuzztime=10s ./bboltstore/
       - name: Benchmarks compile and run once
         run: go test -run xxx -bench . -benchtime 1x ./...
       - name: Example smoke test
@@ -177,9 +179,18 @@ jobs:
             go test -run xxx -bench . -benchtime 1x -count 3 -benchmem ./perf/ | tee /tmp/perf-head.txt
             exit 0
           fi
-          for i in 1 2 3; do
-            go test -run xxx -bench . -benchtime 1x -count 1 -benchmem ./perf/ | tee -a /tmp/perf-head.txt
-            (cd /tmp/base-tree && go test -run xxx -bench . -benchtime 1x -count 1 -benchmem ./perf/) | tee -a /tmp/perf-base.txt
+          # Five slices so the paired median needs three noisy slices to
+          # mislead (three slices needed only two), alternating which
+          # side runs first so bursty stalls have no systematic side to
+          # land on.
+          for i in 1 2 3 4 5; do
+            if [ $((i % 2)) -eq 1 ]; then
+              go test -run xxx -bench . -benchtime 1x -count 1 -benchmem ./perf/ | tee -a /tmp/perf-head.txt
+              (cd /tmp/base-tree && go test -run xxx -bench . -benchtime 1x -count 1 -benchmem ./perf/) | tee -a /tmp/perf-base.txt
+            else
+              (cd /tmp/base-tree && go test -run xxx -bench . -benchtime 1x -count 1 -benchmem ./perf/) | tee -a /tmp/perf-base.txt
+              go test -run xxx -bench . -benchtime 1x -count 1 -benchmem ./perf/ | tee -a /tmp/perf-head.txt
+            fi
           done
       - name: Gate against base
         if: github.event_name == 'pull_request'
@@ -190,10 +201,10 @@ jobs:
           fi
           # transitions/* gate two-sided at 0.1% (exactly deterministic),
           # disk bytes (best sample) and allocations at 10%, wall clock
-          # at 25% on paired per-slice head/base ratios (50% best-sample
-          # fallback when pairing is unavailable); the thresholds live in
-          # internal/perfcompare, which also fails on recorded test
-          # failures and on gated metrics missing from head.
+          # as a 2x smoke alarm on paired per-slice ratios; the
+          # thresholds live in internal/perfcompare, which also fails on
+          # recorded test failures and on gated metrics missing from
+          # head.
           go run ./internal/perfcompare /tmp/perf-base.txt /tmp/perf-head.txt | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Report (master)
         if: github.event_name == 'push'

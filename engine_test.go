@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/wrapperspb"
@@ -16,6 +18,7 @@ import (
 	"github.com/oklog/ulid/v2"
 
 	"github.com/dangra/durable"
+	"github.com/dangra/durable/bboltstore"
 	"github.com/dangra/durable/durabletest"
 )
 
@@ -1990,4 +1993,58 @@ func TestBindAfterStartRejected(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+// TestInvalidUTF8ErrorsDoNotWedge pins the sanitization contract found
+// by the storage fuzzer: handler errors, failure reasons, and cancel
+// causes may contain invalid UTF-8, which protobuf string fields reject
+// — recorded raw, the durable transition could never marshal and the
+// Run would wedge in a store-retry loop. The engine must sanitize and
+// carry on, through both the retry and the permanent-failure paths.
+func TestInvalidUTF8ErrorsDoNotWedge(t *testing.T) {
+	raw := "raw \xff\xfe bytes"
+	def := durable.NewDefinition(durable.DefinitionConfig{
+		ID: "utf8",
+		Steps: []durable.StepConfig{
+			stateless("flaky/v1", func(ctx context.Context, inv *durable.Invocation) error {
+				if inv.Attempt() == 1 {
+					return errors.New(raw) // ordinary error -> LastError
+				}
+				return nil
+			}),
+			stateless("explode/v1", func(ctx context.Context, inv *durable.Invocation) error {
+				return durable.Fail(errors.New(raw), durable.WithReason(raw))
+			}),
+		},
+	})
+	// The bbolt store is the one that actually marshals to proto.
+	store, err := bboltstore.Open(filepath.Join(t.TempDir(), "utf8.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	_, pipes := startEngine(t, store, def)
+
+	run, _, err := pipes[0].Schedule(context.Background(), "res-1", nil)
+	if err != nil {
+		t.Fatalf("Schedule: %v", err)
+	}
+	res, err := run.Wait(context.Background())
+	if err != nil {
+		t.Fatalf("Wait: %v (a wedged marshal would hang, not return)", err)
+	}
+	if res.Outcome != durable.OutcomeFailure || res.RootFailure == nil {
+		t.Fatalf("result = %+v", res)
+	}
+	if !utf8.ValidString(res.RootFailure.Message) || !utf8.ValidString(res.RootFailure.Reason) {
+		t.Fatalf("unsanitized failure text: %+v", res.RootFailure)
+	}
+
+	// Invalid UTF-8 identifiers are rejected upfront instead.
+	if _, _, err := pipes[0].Schedule(context.Background(), durable.ResourceID("res\xff"), nil); err == nil {
+		t.Fatal("Schedule accepted an invalid-UTF-8 resource id")
+	}
+	if _, _, err := pipes[0].Schedule(context.Background(), durable.ResourceID("res\x00x"), nil); err == nil {
+		t.Fatal("Schedule accepted a NUL resource id")
+	}
 }

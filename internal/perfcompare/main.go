@@ -61,16 +61,20 @@ func classify(unit string) class {
 	// Allocation counters: near-deterministic, small timing wiggle.
 	case "B/op", "allocs/op":
 		return class{threshold: 0.10}
-	// Wall clock: paired per-slice ratios (see pairedThreshold) gate at
-	// 25%; when pairing is unavailable the best-of estimates are a smoke
-	// alarm at 50% — shared-runner weather has produced >40% unpaired
-	// splits on identical code, so anything tighter gates on noise
-	// there. Best-of because interference (a contended VM, a slow disk)
-	// only ever adds time.
+	// Wall clock: a 2x smoke alarm, deliberately loose. Six gate
+	// failures at tighter settings (25% and 50%, unpaired and paired,
+	// interleaved and not) were all shared-runner noise — paired
+	// medians of identical code have measured +43% — while every real
+	// regression class this suite targets lands in the deterministic
+	// counters above. Wall clock exists to catch order-of-magnitude
+	// blowups with no counter movement (a hot pure-CPU loop), and 2x
+	// does that while sitting above the measured noise ceiling.
+	// Best-of/paired estimators are kept: interference only adds time,
+	// and paired slices cancel shared weather.
 	case "ns/op", "p50-ms", "p99-ms", "start-ms", "wake-p50-ms":
-		return class{threshold: 0.50, pairedThreshold: 0.25, bestOf: true}
+		return class{threshold: 1.00, pairedThreshold: 1.00, bestOf: true}
 	case "runs/sec", "unwinds/sec", "cycles/sec":
-		return class{threshold: 0.50, pairedThreshold: 0.25, lowerIsBad: true, bestOf: true}
+		return class{threshold: 0.50, pairedThreshold: 0.50, lowerIsBad: true, bestOf: true}
 	// wake-max-ms (a population max — one scheduler stall away from
 	// doubling) and anything unrecognized: report, never gate.
 	default:

@@ -195,9 +195,18 @@ func (r *RunRecord) Clone() *RunRecord {
 // Implementations must treat records as opaque values: return defensive
 // copies (or decode fresh values) so callers never share mutable state with
 // the store.
+//
+// Identifiers reaching a Store are NUL-free valid UTF-8 and free-text
+// fields (messages, reasons, causes) are valid UTF-8 — NewDefinition,
+// Schedule, and the engine's recording sites enforce it — so
+// implementations may use NUL as a key separator and protobuf string
+// fields for text.
 type Store interface {
 	// CreateRun persists rec if no nonterminal Run occupies its
 	// (SlotGroup, ResourceID) slot, returning (nil, true, nil).
+	// rec.RunID must be fresh: the engine's ULID generation guarantees
+	// it, and behavior on reusing the id of an existing (even terminal)
+	// Run is undefined.
 	// If a nonterminal Run occupies the slot — possibly belonging to a
 	// different pipeline in the same exclusion group — it returns that
 	// record with created=false and does not persist rec.

@@ -74,6 +74,12 @@ func NewDefinition(cfg DefinitionConfig) *Definition {
 	if cfg.ID == "" {
 		panic("durable: definition has empty PipelineID")
 	}
+	if invalidID(string(cfg.ID)) {
+		panic(fmt.Sprintf("durable: pipeline id %q must be NUL-free valid UTF-8", cfg.ID))
+	}
+	if invalidID(cfg.ExclusionGroup) {
+		panic(fmt.Sprintf("durable: pipeline %q: exclusion group %q must be NUL-free valid UTF-8", cfg.ID, cfg.ExclusionGroup))
+	}
 	if len(cfg.Steps) == 0 {
 		panic(fmt.Sprintf("durable: pipeline %q has no steps", cfg.ID))
 	}
@@ -85,6 +91,9 @@ func NewDefinition(cfg DefinitionConfig) *Definition {
 		sc := &cfg.Steps[i]
 		if sc.ID == "" {
 			panic(fmt.Sprintf("durable: pipeline %q has a step with empty StepID", cfg.ID))
+		}
+		if invalidID(string(sc.ID)) {
+			panic(fmt.Sprintf("durable: pipeline %q: step %q: identifiers must be NUL-free valid UTF-8", cfg.ID, sc.ID))
 		}
 		if _, dup := d.steps[sc.ID]; dup {
 			panic(fmt.Sprintf("durable: pipeline %q declares step %q twice", cfg.ID, sc.ID))

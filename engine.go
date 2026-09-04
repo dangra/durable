@@ -595,7 +595,7 @@ func forwardStarted(rec *RunRecord, stepID StepID) bool {
 // applyCancel establishes the cancellation RootFailure and transitions the
 // Run to unwind.
 func (e *Engine) applyCancel(rec *RunRecord) bool {
-	cause := rec.Cancel.Cause
+	cause := sanitizeText(rec.Cancel.Cause)
 	if cause == "" {
 		cause = "canceled"
 	}
@@ -682,10 +682,12 @@ func (e *Engine) attemptResolved(rec *RunRecord, stepID StepID, phase Phase, att
 }
 
 // recordLastError captures an ordinary-error attempt on the record; it
-// rides the same durable write as NextAttemptAt.
+// rides the same durable write as NextAttemptAt. Text is sanitized: an
+// invalid-UTF-8 error message must not fail the marshal inside the
+// durable transition.
 func recordLastError(rec *RunRecord, err error, now time.Time) {
-	rec.LastError = err.Error()
-	rec.LastReason = reasonOf(err)
+	rec.LastError = sanitizeText(err.Error())
+	rec.LastReason = sanitizeText(reasonOf(err))
 	rec.LastErrorAt = now
 }
 
@@ -911,10 +913,10 @@ func (e *Engine) runForward(rec *RunRecord, def *Definition, stepID StepID) (don
 			StepID:  stepID,
 			Phase:   PhaseForward,
 			Attempt: sr.ForwardAttempts,
-			Message: pe.err.Error(),
+			Message: sanitizeText(pe.err.Error()),
 			At:      now,
 			Kind:    pe.failureKind(),
-			Reason:  pe.failureReason()}
+			Reason:  sanitizeText(pe.failureReason())}
 		rec.Phase = PhaseUnwind
 		clearLastError(rec)
 		if !e.apply(rec, Transition{Cursor: idleCursor(rec), Steps: []StepWrite{{StepID: stepID, Record: *sr}}, RootFailure: rec.RootFailure}) {
@@ -990,10 +992,10 @@ func (e *Engine) runUnwind(rec *RunRecord, def *Definition, stepID StepID) (done
 			StepID:  stepID,
 			Phase:   PhaseUnwind,
 			Attempt: sr.UnwindAttempts,
-			Message: pe.err.Error(),
+			Message: sanitizeText(pe.err.Error()),
 			At:      now,
 			Kind:    pe.failureKind(),
-			Reason:  pe.failureReason()})
+			Reason:  sanitizeText(pe.failureReason())})
 		clearLastError(rec)
 		uf := rec.UnwindFailures[len(rec.UnwindFailures)-1]
 		if !e.apply(rec, Transition{Cursor: idleCursor(rec), Steps: []StepWrite{{StepID: stepID, Record: *sr}}, UnwindFailure: &uf}) {

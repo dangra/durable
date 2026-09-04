@@ -78,6 +78,9 @@ func Open(path string) (*Store, error) {
 	return &Store{db: db}, nil
 }
 
+// slotKey joins the slot pair with NUL, which the Store contract
+// guarantees appears in no identifier — otherwise distinct
+// (group, resource) pairs could alias one key.
 func slotKey(rec *durable.RunRecord) []byte {
 	return []byte(rec.SlotGroup() + "\x00" + string(rec.ResourceID))
 }

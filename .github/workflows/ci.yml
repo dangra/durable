@@ -70,6 +70,8 @@ jobs:
           go test -fuzz=FuzzReconcile -fuzztime=10s ./internal/ledger/
           go test -fuzz=FuzzOps -fuzztime=10s ./internal/tokenpool/
           go test -fuzz=FuzzOps -fuzztime=10s ./internal/watchset/
+          go test -fuzz=FuzzRoundTrip -fuzztime=10s ./internal/storagepb/
+          go test -run xxx -fuzz=FuzzStoreContract -fuzztime=10s ./bboltstore/
       - name: Benchmarks compile and run once
         run: go test -run xxx -bench . -benchtime 1x ./...
       - name: Example smoke test

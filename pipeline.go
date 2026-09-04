@@ -63,6 +63,9 @@ func (p *Pipeline) Schedule(ctx context.Context, resource ResourceID, input prot
 	if !e.isStarted() {
 		return Run{}, false, ErrEngineNotStarted
 	}
+	if invalidID(string(resource)) {
+		return Run{}, false, fmt.Errorf("durable: resource id must be NUL-free valid UTF-8")
+	}
 	var inputBytes []byte
 	switch {
 	case p.def.cfg.NewInput != nil:

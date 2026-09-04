@@ -81,7 +81,7 @@ func (r Run) Cancel(ctx context.Context, cause string) error {
 	if !e.isStarted() {
 		return ErrEngineNotStarted
 	}
-	accepted, err := e.store.RequestCancel(ctx, r.id, CancelRequest{Cause: cause, At: e.clock.Now()})
+	accepted, err := e.store.RequestCancel(ctx, r.id, CancelRequest{Cause: sanitizeText(cause), At: e.clock.Now()})
 	if err != nil {
 		return err
 	}

@@ -14,9 +14,7 @@ go run ./examples/release-train
 
 Two pipelines, composed: a `release-train` parent ships each service by
 scheduling a `deploy-service` child run and parking on it with
-`AwaitRun` (no worker or token is held while parked). The deploy
-pipeline exists in two builds — same pipeline id, different topology —
-because that is the point:
+`AwaitRun` (no worker or token is held while parked):
 
 ```mermaid
 flowchart TB
@@ -25,31 +23,25 @@ flowchart TB
         P[plan/v1] --> SW[ship-web/v1] --> SA[ship-api/v1]
     end
 
-    subgraph deployV1["deploy-service — yesterday's build (legacyproto/)"]
+    subgraph deploy["deploy-service (one child run per service)"]
         direction LR
-        A1[provision-env/v1] --> B1[run-migrations/v1] --> D1[shift-traffic/v1]
+        A[provision-env/v1] --> B[run-migrations/v1] --> C[canary-analysis/v1] --> D[shift-traffic/v1]
     end
 
-    subgraph deployV2["deploy-service — today's build (proto/), canary added"]
-        direction LR
-        A2[provision-env/v1] --> B2[run-migrations/v1] --> C2([canary-analysis/v1]) --> D2[shift-traffic/v1]
-    end
-
-    SW -. "schedules + AwaitRun" .-> A1
-    SA -. "schedules + AwaitRun" .-> A2
-
-    style C2 fill:#e8f5e9,stroke:#2e7d32
+    SW -. "schedules + AwaitRun (web)" .-> A
+    SA -. "schedules + AwaitRun (api)" .-> A
 ```
 
 `provision-env` and `run-migrations` declare `unwind: true` — their
 rollbacks (environment teardown, migration rollback) run in reverse
 order when a deploy fails permanently or is canceled.
 
-The two builds live in separate buf modules (`legacyproto/` and
-`proto/`) with the *same* pipeline id, which is also the honest
-framing: yesterday's and today's builds never coexist in a real binary.
-This example carries both only to simulate a daemon restart onto a new
-deployment.
+The deploy pipeline also exists in a second, older build without the
+canary step: `legacyproto/` vs `proto/`, separate buf modules sharing
+one pipeline id, carried in one binary only to simulate a daemon
+restart onto a new deployment (yesterday's and today's builds never
+coexist in a real one). The flow below shows the web deploy crossing
+that definition change mid-run.
 
 ## The flow
 

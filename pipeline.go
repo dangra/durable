@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"time"
+	"unicode/utf8"
 
 	"google.golang.org/protobuf/proto"
 )
@@ -17,6 +18,28 @@ type scheduleOptions struct {
 	// start computes first execution eligibility from the acceptance time;
 	// nil means immediately eligible.
 	start func(now time.Time) time.Time
+	// annotations accumulate across options; later keys win.
+	annotations map[string]string
+}
+
+// WithAnnotations attaches caller-supplied propagation metadata to the
+// Run at acceptance: a W3C traceparent, tenant tags, request ids. The
+// map is copied; repeated options merge with later keys winning.
+// Annotations are immutable for the life of the Run, readable by
+// handlers through Invocation.Annotations and by callers through
+// Run.Annotations, and are never part of duplicate-scheduling identity —
+// on a dedup hit the active Run keeps its own annotations. Keys and
+// values must be valid UTF-8 (the durable representation stores them as
+// protobuf strings); Schedule rejects violations.
+func WithAnnotations(annotations map[string]string) ScheduleOption {
+	return func(o *scheduleOptions) {
+		if o.annotations == nil {
+			o.annotations = make(map[string]string, len(annotations))
+		}
+		for k, v := range annotations {
+			o.annotations[k] = v
+		}
+	}
 }
 
 // StartAt delays the Run's first operation until t. The Run is created and
@@ -85,17 +108,23 @@ func (p *Pipeline) Schedule(ctx context.Context, resource ResourceID, input prot
 	for _, o := range opts {
 		o(&so)
 	}
+	for k, v := range so.annotations {
+		if !utf8.ValidString(k) || !utf8.ValidString(v) {
+			return Run{}, false, fmt.Errorf("durable: annotation %q must have valid UTF-8 key and value", k)
+		}
+	}
 
 	now := e.clock.Now()
 	rec := &RunRecord{
-		RunID:      newRunID(now),
-		PipelineID: p.def.ID(),
-		ResourceID: resource,
-		Group:      p.def.slotGroup(),
-		Input:      inputBytes,
-		Phase:      PhaseForward,
-		CreatedAt:  now,
-		UpdatedAt:  now,
+		RunID:       newRunID(now),
+		PipelineID:  p.def.ID(),
+		ResourceID:  resource,
+		Group:       p.def.slotGroup(),
+		Annotations: so.annotations,
+		Input:       inputBytes,
+		Phase:       PhaseForward,
+		CreatedAt:   now,
+		UpdatedAt:   now,
 	}
 	if so.start != nil {
 		rec.NextAttemptAt = so.start(now)
@@ -116,7 +145,8 @@ func (p *Pipeline) Schedule(ctx context.Context, resource ResourceID, input prot
 		}
 		e.emitRunScheduled(RunEvent{
 			PipelineID: rec.PipelineID, ResourceID: resource,
-			RunID: rec.RunID, StartAt: rec.NextAttemptAt})
+			RunID: rec.RunID, StartAt: rec.NextAttemptAt,
+			Annotations: rec.Annotations})
 		e.disp.Dispatch(rec.RunID, 0)
 		return Run{id: rec.RunID, engine: e}, true, nil
 	}

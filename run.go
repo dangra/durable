@@ -152,6 +152,23 @@ func (r Run) Status(ctx context.Context) (Status, error) {
 	return st, nil
 }
 
+// Annotations returns a caller-owned copy of the Run's immutable
+// acceptance-time annotations, nil when none were supplied.
+func (r Run) Annotations(ctx context.Context) (map[string]string, error) {
+	rec, err := r.engine.store.GetRun(ctx, r.id)
+	if err != nil {
+		return nil, err
+	}
+	if len(rec.Annotations) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]string, len(rec.Annotations))
+	for k, v := range rec.Annotations {
+		out[k] = v
+	}
+	return out, nil
+}
+
 // InputBytes returns the Run's immutable serialized Pipeline Input (nil
 // for an Input-less pipeline). It is intended for generated code, which
 // wraps it with a typed Input accessor; the typed accessor returns a

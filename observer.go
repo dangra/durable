@@ -59,12 +59,14 @@ func WithObserver(o Observer) Option {
 }
 
 // RunEvent identifies a Run at acceptance. StartAt is nonzero when the
-// Run was scheduled with a delayed start.
+// Run was scheduled with a delayed start. Annotations is shared with
+// every observer of the event and must not be modified.
 type RunEvent struct {
-	PipelineID PipelineID
-	ResourceID ResourceID
-	RunID      RunID
-	StartAt    time.Time
+	PipelineID  PipelineID
+	ResourceID  ResourceID
+	RunID       RunID
+	StartAt     time.Time
+	Annotations map[string]string
 }
 
 // AttemptResult classifies how an operation attempt ended.
@@ -133,15 +135,18 @@ type RunFailureEvent struct {
 
 // RunTerminalEvent reports a Run's terminal commit. Kind and Reason
 // carry RootFailure attribution for OutcomeFailure; Duration is
-// acceptance-to-terminal.
+// acceptance-to-terminal. Annotations is shared with every observer of
+// the event and must not be modified — it carries the acceptance-time
+// metadata (tenant tags) metric adapters label by.
 type RunTerminalEvent struct {
-	PipelineID PipelineID
-	ResourceID ResourceID
-	RunID      RunID
-	Outcome    Outcome
-	Kind       FailureKind
-	Reason     string
-	Duration   time.Duration
+	PipelineID  PipelineID
+	ResourceID  ResourceID
+	RunID       RunID
+	Outcome     Outcome
+	Kind        FailureKind
+	Reason      string
+	Duration    time.Duration
+	Annotations map[string]string
 }
 
 // WakeEvent reports an AwaitRun park resolving: Duration is how long
@@ -214,11 +219,12 @@ func (e *Engine) emitRunTerminal(rec *RunRecord) {
 		return
 	}
 	ev := RunTerminalEvent{
-		PipelineID: rec.PipelineID,
-		ResourceID: rec.ResourceID,
-		RunID:      rec.RunID,
-		Outcome:    *rec.Outcome,
-		Duration:   rec.UpdatedAt.Sub(rec.CreatedAt),
+		PipelineID:  rec.PipelineID,
+		ResourceID:  rec.ResourceID,
+		RunID:       rec.RunID,
+		Outcome:     *rec.Outcome,
+		Duration:    rec.UpdatedAt.Sub(rec.CreatedAt),
+		Annotations: rec.Annotations,
 	}
 	if rec.RootFailure != nil {
 		ev.Kind = rec.RootFailure.Kind

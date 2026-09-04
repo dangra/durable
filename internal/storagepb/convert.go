@@ -36,12 +36,13 @@ func unmarshal(what string, b []byte, m proto.Message) error {
 // MarshalRunMeta encodes the write-once identity fields of rec.
 func MarshalRunMeta(rec *durable.RunRecord) ([]byte, error) {
 	return marshal("run meta", &RunMeta{
-		RunId:      string(rec.RunID),
-		PipelineId: string(rec.PipelineID),
-		ResourceId: string(rec.ResourceID),
-		SlotGroup:  rec.Group,
-		Input:      rec.Input,
-		CreatedAt:  ts(rec.CreatedAt),
+		RunId:       string(rec.RunID),
+		PipelineId:  string(rec.PipelineID),
+		ResourceId:  string(rec.ResourceID),
+		SlotGroup:   rec.Group,
+		Input:       rec.Input,
+		CreatedAt:   ts(rec.CreatedAt),
+		Annotations: rec.Annotations,
 	})
 }
 
@@ -57,6 +58,9 @@ func UnmarshalRunMetaInto(b []byte, rec *durable.RunRecord) error {
 	rec.Group = pb.GetSlotGroup()
 	rec.Input = pb.GetInput()
 	rec.CreatedAt = fromTS(pb.GetCreatedAt())
+	if len(pb.GetAnnotations()) > 0 {
+		rec.Annotations = pb.GetAnnotations()
+	}
 	return nil
 }
 

@@ -55,6 +55,9 @@ message RunMeta {
   string slot_group = 4;
   bytes input = 5;
   google.protobuf.Timestamp created_at = 6;
+  // Caller-supplied propagation metadata, immutable after acceptance:
+  // trace contexts, tenant tags. Never part of dedup identity.
+  map<string, string> annotations = 7;
 }
 
 // Cursor is the per-run scheduling state rewritten on every attempt.

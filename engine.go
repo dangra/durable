@@ -1066,6 +1066,7 @@ func (e *Engine) invocation(rec *RunRecord, def *Definition, stepID StepID, atte
 		input:           rec.Input,
 		newInput:        def.cfg.NewInput,
 		states:          committedStates(rec),
+		annotations:     rec.Annotations,
 		cancelRequested: rec.Cancel != nil,
 		baseLogger:      e.logger,
 	}

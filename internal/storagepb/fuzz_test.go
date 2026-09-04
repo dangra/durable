@@ -134,6 +134,9 @@ func FuzzRoundTrip(f *testing.F) {
 			ResourceID: durable.ResourceID(s1), Group: s2,
 			Input: append([]byte(nil), blob...), CreatedAt: when,
 		}
+		if a%2 == 0 {
+			rec.Annotations = map[string]string{s1: s2}
+		}
 		mb, err := MarshalRunMeta(rec)
 		if err != nil {
 			t.Fatalf("MarshalRunMeta: %v", err)
@@ -144,8 +147,14 @@ func FuzzRoundTrip(f *testing.F) {
 		}
 		if grec.RunID != rec.RunID || grec.PipelineID != rec.PipelineID ||
 			grec.ResourceID != rec.ResourceID || grec.Group != rec.Group ||
-			string(grec.Input) != string(rec.Input) || !sameTime(grec.CreatedAt, rec.CreatedAt) {
+			string(grec.Input) != string(rec.Input) || !sameTime(grec.CreatedAt, rec.CreatedAt) ||
+			len(grec.Annotations) != len(rec.Annotations) {
 			t.Fatalf("run meta round trip: %+v != %+v", grec, rec)
+		}
+		for k, v := range rec.Annotations {
+			if grec.Annotations[k] != v {
+				t.Fatalf("annotation %q round trip: %q != %q", k, grec.Annotations[k], v)
+			}
 		}
 
 		// Arbitrary input: decoding may succeed or error; it must not

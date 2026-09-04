@@ -18,9 +18,10 @@ type Invocation struct {
 	attempt    uint64
 	phase      Phase
 
-	input    []byte
-	newInput func() proto.Message
-	states   map[StepID][]byte
+	input       []byte
+	newInput    func() proto.Message
+	states      map[StepID][]byte
+	annotations map[string]string
 
 	cancelRequested bool
 	awaitedRunID    RunID
@@ -64,6 +65,23 @@ func (inv *Invocation) Logger() *slog.Logger {
 // schedule-then-await step from respawning its child on re-execution.
 func (inv *Invocation) AwaitedRunID() (RunID, bool) {
 	return inv.awaitedRunID, inv.awaitedRunID != ""
+}
+
+// Annotations returns a caller-owned copy of the Run's immutable
+// acceptance-time annotations (trace contexts, tenant tags), nil when
+// none were supplied. A tracing middleware extracts its propagation
+// context here — for example a W3C traceparent injected by the
+// scheduling side via WithAnnotations — and emits per-attempt spans
+// linked to the originating trace.
+func (inv *Invocation) Annotations() map[string]string {
+	if len(inv.annotations) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(inv.annotations))
+	for k, v := range inv.annotations {
+		out[k] = v
+	}
+	return out
 }
 
 // CancelRequested reports whether a cancellation request was pending when

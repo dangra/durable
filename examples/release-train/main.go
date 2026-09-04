@@ -10,8 +10,8 @@
 //     migration attempt; the idempotent handler finds the schema
 //     already applied and skips.
 //  3. EVOLUTION — the restarted daemon runs *today's build*, whose
-//     deploy pipeline gained a canary-analysis step (releaseproto vs
-//     legacyproto). The in-flight web deploy is behind the new step's
+//     deploy pipeline gained a canary-analysis step (proto/ vs
+//     legacyproto/). The in-flight web deploy is behind the new step's
 //     position, so it executes it — a step added while the run was
 //     running.
 //  4. COMPOSITION — the release train parent parks on its child deploys

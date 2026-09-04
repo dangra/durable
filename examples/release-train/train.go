@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 
 	"github.com/dangra/durable"
 	"github.com/dangra/durable/examples/release-train/releasepb"
@@ -39,7 +40,10 @@ func (s *shipper) ship(ctx context.Context, inv shipInvocation, service string, 
 		id := *store
 		s.w.mu.Unlock()
 		if id != "" {
-			if err := s.cancel(ctx, id, "release frozen"); err != nil {
+			// Best-effort: the child may have finished (or been reaped)
+			// between the freeze and this wake; that is not a failure.
+			err := s.cancel(ctx, id, "release frozen")
+			if err != nil && !errors.Is(err, durable.ErrRunTerminal) && !errors.Is(err, durable.ErrRunNotFound) {
 				return err
 			}
 		}

@@ -20,7 +20,9 @@
 // Lifecycle lines carry the canonical keys pipeline, resource, and run;
 // operation-scoped lines add step, phase, and attempt; failure causes
 // appear under error. Handlers log through Invocation.Logger, which
-// pre-attaches the same canonical keys.
+// pre-attaches the same canonical keys; contrib/durableotel's
+// NewLogHandler additionally stamps trace correlation onto records
+// logged with the attempt's context.
 //
 // # Metrics
 //

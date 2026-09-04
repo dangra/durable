@@ -312,6 +312,10 @@ func emitInvocation(g *protogen.GeneratedFile, pl *pipelineDecl, s *stepDecl) {
 	g.P("// durable.AwaitRun, once it reached terminality.")
 	g.P("func (inv ", inv, ") AwaitedRunID() (", g.QualifiedGoIdent(durablePkg.Ident("RunID")), ", bool) { return inv.core.AwaitedRunID() }")
 	g.P()
+	g.P("// Annotations returns a caller-owned copy of the run's immutable")
+	g.P("// acceptance-time annotations (trace contexts, tenant tags).")
+	g.P("func (inv ", inv, ") Annotations() map[string]string { return inv.core.Annotations() }")
+	g.P()
 	if pl.input != nil {
 		g.P("// Input returns a defensive caller-owned copy of the immutable pipeline input.")
 		g.P("func (inv ", inv, ") Input() *", g.QualifiedGoIdent(pl.input.GoIdent), " {")

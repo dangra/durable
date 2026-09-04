@@ -2,6 +2,7 @@ version: v2
 modules:
   - path: proto
   - path: examples/machines/proto
+  - path: examples/tracing-otel/proto
 lint:
   use:
     - STANDARD

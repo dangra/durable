@@ -102,7 +102,8 @@ func TestNewObserverSyntheticEvents(t *testing.T) {
 	attemptAttrs := []attribute.KeyValue{pipeline,
 		durableotel.AttrStep.String("s/v1"),
 		durableotel.AttrPhase.String("forward"),
-		durableotel.AttrResult.String("retrying")}
+		durableotel.AttrResult.String("retrying"),
+		durableotel.AttrPanicked.Bool(false)}
 	if v := counterValue(t, got["durable.attempts"], attemptAttrs...); v != 1 {
 		t.Errorf("attempts = %d, want 1", v)
 	}
@@ -153,6 +154,70 @@ func TestNewObserverSyntheticEvents(t *testing.T) {
 		durableotel.AttrStoreWrite.Bool(false),
 		durableotel.AttrError.Bool(true)); c != 1 {
 		t.Errorf("store.op.duration{read,error} count = %d, want 1", c)
+	}
+}
+
+// TestObserverPanickedLabel pins that a panicked attempt is
+// distinguishable in metrics, the fsm_transition_count{status="panic"}
+// equivalent.
+func TestObserverPanickedLabel(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	defer mp.Shutdown(t.Context())
+	obs, err := durableotel.NewObserver(durableotel.WithMeterProvider(mp))
+	if err != nil {
+		t.Fatalf("NewObserver: %v", err)
+	}
+	obs.AttemptDone(durable.AttemptEvent{
+		PipelineID: "p", StepID: "s/v1", Phase: durable.PhaseForward,
+		Attempt: 1, Result: durable.AttemptRetrying,
+		Err: errors.New("handler panic: boom"), Panicked: true,
+	})
+	got := collect(t, reader)
+	if v := counterValue(t, got["durable.attempts"],
+		durableotel.AttrPipeline.String("p"),
+		durableotel.AttrStep.String("s/v1"),
+		durableotel.AttrPhase.String("forward"),
+		durableotel.AttrResult.String("retrying"),
+		durableotel.AttrPanicked.Bool(true)); v != 1 {
+		t.Errorf("attempts{panicked} = %d, want 1", v)
+	}
+}
+
+// TestHistogramBoundaries pins the explicit bucket boundaries: OTel's
+// defaults stop near 10s and would collapse durable-scale durations
+// into the overflow bucket.
+func TestHistogramBoundaries(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	defer mp.Shutdown(t.Context())
+	obs, err := durableotel.NewObserver(durableotel.WithMeterProvider(mp))
+	if err != nil {
+		t.Fatalf("NewObserver: %v", err)
+	}
+	obs.AttemptDone(durable.AttemptEvent{PipelineID: "p", Duration: 20 * time.Minute, Result: durable.AttemptSucceeded})
+	obs.RunTerminal(durable.RunTerminalEvent{PipelineID: "p", Outcome: durable.OutcomeSuccess, Duration: 20 * time.Hour})
+	obs.WaiterWoken(durable.WakeEvent{PipelineID: "p", Duration: 20 * time.Hour})
+	obs.ClassWait(durable.ClassWaitEvent{PipelineID: "p", Class: "db", Duration: 15 * time.Minute})
+	obs.StoreOp(durable.StoreOpEvent{Op: "GetRun", Duration: time.Millisecond})
+
+	got := collect(t, reader)
+	wantMax := map[string]float64{
+		"durable.attempt.duration":    1200,  // 20m
+		"durable.run.duration":        86400, // 24h
+		"durable.await.duration":      86400,
+		"durable.class.wait.duration": 1200,
+		"durable.store.op.duration":   2.5,
+	}
+	for name, max := range wantMax {
+		h, ok := got[name].Data.(metricdata.Histogram[float64])
+		if !ok || len(h.DataPoints) == 0 {
+			t.Fatalf("%s: no histogram data", name)
+		}
+		bounds := h.DataPoints[0].Bounds
+		if len(bounds) == 0 || bounds[len(bounds)-1] != max {
+			t.Errorf("%s bounds end at %v, want %v", name, bounds[len(bounds)-1:], max)
+		}
 	}
 }
 

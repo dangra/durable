@@ -135,6 +135,17 @@ func TestMiddlewareSpansLinkToOrigin(t *testing.T) {
 		if got := sp.Status().Code == codes.Error; got != wantErrStatus {
 			t.Fatalf("span %q error status = %v, want %v", key, got, wantErrStatus)
 		}
+		// Only the permanent failure carries the engine's attribution;
+		// a retryable error must not claim a failure kind.
+		kind, hasKind := attr(sp, string(durableotel.AttrFailureKind))
+		reason, hasReason := attr(sp, string(durableotel.AttrReason))
+		if key == "explode/v1 forward|1" {
+			if kind != "user" || reason != "invalid-input" {
+				t.Fatalf("permanent-failure span attribution = %q/%q, want user/invalid-input", kind, reason)
+			}
+		} else if hasKind || hasReason {
+			t.Fatalf("span %q claims failure attribution %q/%q", key, kind, reason)
+		}
 		if sp.SpanContext().TraceID() == origin.TraceID() {
 			t.Fatalf("span %q lives in the origin trace; the shape is links, not a parent", key)
 		}
@@ -246,6 +257,108 @@ func TestMiddlewareAwaitIsNotAnError(t *testing.T) {
 	}
 	if parked != 1 {
 		t.Fatalf("park spans = %d, want 1", parked)
+	}
+}
+
+// TestMiddlewarePanicRecordedAndRethrown panics a handler once and
+// asserts the panic attempt's span is not silently OK — Error status,
+// durable.panicked, an exception event with a stack trace — while the
+// engine still sees the panic and retries the attempt to success.
+func TestMiddlewarePanicRecordedAndRethrown(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	defer tp.Shutdown(t.Context())
+
+	def := durable.NewDefinition(durable.DefinitionConfig{
+		ID: "panicky",
+		Steps: []durable.StepConfig{{
+			ID: "boom/v1",
+			Run: func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+				if inv.Attempt() == 1 {
+					panic("kaboom")
+				}
+				return nil, nil
+			},
+		}},
+	})
+	engine := durable.NewEngine(durabletest.NewMemStore(), fastRetry, quietLogger(),
+		durable.WithMiddleware(durableotel.Middleware(durableotel.WithTracerProvider(tp))))
+	pipe, err := def.Bind(engine)
+	if err != nil {
+		t.Fatalf("Bind: %v", err)
+	}
+	if err := engine.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer engine.Stop(t.Context())
+	run, _, err := pipe.Schedule(t.Context(), "res-1", nil)
+	if err != nil {
+		t.Fatalf("Schedule: %v", err)
+	}
+	if res, err := run.Wait(t.Context()); err != nil || res.Outcome != durable.OutcomeSuccess {
+		t.Fatalf("Wait = %v, %v; want success — the panic must reach the engine as a retryable", res, err)
+	}
+
+	panicked := 0
+	for _, sp := range recorder.Ended() {
+		if v, ok := attr(sp, string(durableotel.AttrPanicked)); !ok || v != "true" {
+			continue
+		}
+		panicked++
+		if sp.Status().Code != codes.Error {
+			t.Fatal("panic span not marked Error")
+		}
+		found := false
+		for _, ev := range sp.Events() {
+			if ev.Name != "exception" {
+				continue
+			}
+			for _, kv := range ev.Attributes {
+				if kv.Key == "exception.stacktrace" && kv.Value.AsString() != "" {
+					found = true
+				}
+			}
+		}
+		if !found {
+			t.Fatal("panic span has no exception event with a stack trace")
+		}
+	}
+	if panicked != 1 {
+		t.Fatalf("panicked spans = %d, want 1", panicked)
+	}
+}
+
+// TestWithSpanAnnotations pins that selected Run annotations surface as
+// span attributes on every attempt, and unselected or absent keys do
+// not.
+func TestWithSpanAnnotations(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	defer tp.Shutdown(t.Context())
+
+	runSaga(t,
+		[]durable.ScheduleOption{durable.WithAnnotations(map[string]string{
+			"machine.id": "m-42",
+			"tenant":     "acme",
+		})},
+		durable.WithMiddleware(durableotel.Middleware(
+			durableotel.WithTracerProvider(tp),
+			durableotel.WithSpanAnnotations("machine.id", "absent-key"))))
+
+	spans := recorder.Ended()
+	if len(spans) != 4 {
+		t.Fatalf("spans = %d, want 4", len(spans))
+	}
+	for _, sp := range spans {
+		if v, ok := attr(sp, "machine.id"); !ok || v != "m-42" {
+			t.Fatalf("span %q machine.id = %q, %v; want m-42", sp.Name(), v, ok)
+		}
+		if _, ok := attr(sp, "tenant"); ok {
+			t.Fatalf("span %q carries unselected annotation", sp.Name())
+		}
+		if _, ok := attr(sp, "absent-key"); ok {
+			t.Fatalf("span %q carries an absent annotation", sp.Name())
+		}
 	}
 }
 

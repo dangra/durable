@@ -19,7 +19,7 @@ pipeline exists in two builds — same pipeline id, different topology —
 because that is the point:
 
 ```mermaid
-flowchart LR
+flowchart TB
     subgraph train["release-train (parent run)"]
         direction TB
         P[plan/v1] --> SW[ship-web/v1] --> SA[ship-api/v1]

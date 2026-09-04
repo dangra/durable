@@ -28,7 +28,8 @@
 // outcomes, unwind starts, wake and throttle waits, store operations)
 // for counter- and histogram-style metrics; Engine.Stats returns a
 // point-in-time occupancy snapshot for poll-style gauges. Adapters for
-// specific metrics systems belong in application code — see Observer.
+// specific metrics systems belong outside the engine — see Observer;
+// contrib/durableotel (a separate module) ships the OpenTelemetry one.
 //
 // # Tracing
 //
@@ -39,8 +40,9 @@
 // per-attempt spans linked to the originating trace — span links, not a
 // long-lived parent, are the recommended shape for work that may run
 // hours later. The engine itself never depends on a tracing library;
-// examples/tracing-otel — a separate module, keeping the OpenTelemetry
-// SDK out of this module's dependency graph — demonstrates the complete
-// shape against the real OpenTelemetry API over a generated
+// contrib/durableotel — a separate module, keeping the OpenTelemetry
+// SDK out of this module's dependency graph — implements the complete
+// shape (Middleware to extract, WithTraceContext to inject), and
+// examples/tracing-otel demonstrates it over a generated
 // order-fulfillment pipeline.
 package durable

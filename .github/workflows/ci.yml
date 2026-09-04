@@ -79,6 +79,13 @@ jobs:
       # examples/tracing-otel is its own module so the OpenTelemetry SDK
       # never enters durable's dependency graph; it builds against the
       # working tree via a replace directive.
+      - name: durableotel contrib module
+        working-directory: contrib/durableotel
+        run: |
+          go mod tidy -diff
+          go vet ./...
+          go test -race -count=1 ./...
+
       - name: OpenTelemetry example module
         working-directory: examples/tracing-otel
         run: |

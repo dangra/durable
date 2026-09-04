@@ -34,6 +34,17 @@ func (e *awaitResolution) Error() string {
 	return "durable: awaiting run " + string(e.target)
 }
 
+// AwaitTarget reports whether a handler's returned error is an AwaitRun
+// resolution and, if so, which Run it parks on. Middleware wrapping
+// handlers use it to classify the return correctly: a park is a normal
+// resolution, not a failure to record on spans or error counters.
+func AwaitTarget(err error) (RunID, bool) {
+	if ar, ok := asAwait(err); ok {
+		return ar.target, true
+	}
+	return "", false
+}
+
 // asAwait reports whether err is an AwaitRun resolution.
 func asAwait(err error) (*awaitResolution, bool) {
 	if ar, ok := errors.AsType[*awaitResolution](err); ok {

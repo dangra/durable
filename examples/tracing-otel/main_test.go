@@ -11,7 +11,7 @@ import (
 // carrying a span LINK to the scheduling request's trace and none
 // parented under it.
 func TestAttemptSpansLinkToOrigin(t *testing.T) {
-	recorder, origin, res, err := run()
+	recorder, origin, res, err := run(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -29,9 +29,22 @@ func TestAttemptSpansLinkToOrigin(t *testing.T) {
 		"charge-payment/v1 unwind attempt 1":  true,
 		"reserve-stock/v1 unwind attempt 1":   true,
 	}
-	attempts := 0
+	attempts, childSpans := 0, 0
+	attemptTraces := map[string]bool{} // trace IDs owned by attempt spans
 	for _, sp := range recorder.Ended() {
 		if sp.Name() == "POST /orders" {
+			continue
+		}
+		// The handler-internal span demonstrates relation (4): it must
+		// nest under its attempt — same trace, valid parent — and never
+		// under the origin.
+		if sp.Name() == "charge card" {
+			childSpans++
+			if !sp.Parent().IsValid() || sp.SpanContext().TraceID() == origin.TraceID() {
+				t.Fatalf("handler span not nested under its attempt: parent=%v trace=%v",
+					sp.Parent(), sp.SpanContext().TraceID())
+			}
+			attemptTraces[sp.SpanContext().TraceID().String()] = true
 			continue
 		}
 		attempts++
@@ -56,5 +69,20 @@ func TestAttemptSpansLinkToOrigin(t *testing.T) {
 	}
 	if attempts != len(want) {
 		t.Fatalf("attempt spans = %d, want %d", attempts, len(want))
+	}
+	// Two payment attempts, each with a nested gateway-call span.
+	if childSpans != 2 {
+		t.Fatalf("handler-internal spans = %d, want 2", childSpans)
+	}
+	for tid := range attemptTraces {
+		found := false
+		for _, sp := range recorder.Ended() {
+			if sp.SpanContext().TraceID().String() == tid && sp.Parent().IsValid() == false && sp.Name() != "POST /orders" {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("handler span trace %s has no attempt root", tid)
+		}
 	}
 }

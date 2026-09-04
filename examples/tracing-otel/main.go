@@ -43,19 +43,40 @@ import (
 )
 
 // tracingMiddleware wraps every operation attempt in a span linked to
-// the trace that scheduled the Run. This is the complete integration.
+// the trace that scheduled the Run. This is the complete integration;
+// the context relations are the subtle part:
+//
+//  1. The attempt ctx handed to this middleware descends from the
+//     ENGINE's context, not from the ctx that called Schedule — the
+//     Run outlives that request, and the engine never carries its
+//     values forward. At this point the ctx holds cancellation and
+//     preemption semantics but NO ambient trace: the annotations are
+//     the only bridge back to the scheduling trace.
+//  2. Extract installs the carrier's span context into the returned
+//     ctx as the ambient parent — which is precisely what must NOT
+//     reach tracer.Start unmodified: OTel would parent every attempt
+//     under a request trace that may have ended hours ago, producing
+//     one monster trace across retries, parks, and restarts.
+//  3. WithNewRoot severs that parent relation — each attempt is its
+//     own trace — and WithLinks preserves the correlation instead:
+//     links are the recommended shape for asynchronous work.
+//  4. The ctx returned by tracer.Start carries the new attempt span
+//     into the handler, so spans the handler starts (an instrumented
+//     payment-gateway call, say) nest under the attempt correctly.
 func tracingMiddleware(tracer trace.Tracer) durable.Middleware {
 	prop := propagation.TraceContext{}
 	return func(next durable.Handler) durable.Handler {
 		return func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
-			// Extract into a THROWAWAY context, not the attempt's: the
-			// origin must become a span link below, never a parent.
 			carrier := propagation.MapCarrier(inv.Annotations())
-			origin := trace.SpanContextFromContext(prop.Extract(context.Background(), carrier))
+			ctx = prop.Extract(ctx, carrier) // (2) origin becomes the ambient context...
+			origin := trace.SpanContextFromContext(ctx)
 
-			opts := []trace.SpanStartOption{trace.WithSpanKind(trace.SpanKindConsumer)}
+			opts := []trace.SpanStartOption{
+				trace.WithSpanKind(trace.SpanKindConsumer),
+				trace.WithNewRoot(), // (3) ...which WithNewRoot refuses as a parent...
+			}
 			if origin.IsValid() {
-				opts = append(opts, trace.WithLinks(trace.Link{SpanContext: origin}))
+				opts = append(opts, trace.WithLinks(trace.Link{SpanContext: origin})) // ...keeping it as a link.
 			}
 			ctx, span := tracer.Start(ctx,
 				fmt.Sprintf("%s %s attempt %d", inv.StepID(), inv.Phase(), inv.Attempt()), opts...)
@@ -64,7 +85,7 @@ func tracingMiddleware(tracer trace.Tracer) durable.Middleware {
 				attribute.String("durable.pipeline", string(inv.PipelineID())),
 				attribute.String("durable.run_id", string(inv.RunID())),
 			)
-			out, err := next(ctx, inv)
+			out, err := next(ctx, inv) // (4) the handler sees the attempt span
 			if err != nil {
 				span.RecordError(err)
 			}
@@ -103,9 +124,18 @@ func (h *reserveStock) Unwind(ctx context.Context, inv orderspb.ReserveStockInvo
 	return nil
 }
 
-type chargePayment struct{ w *warehouse }
+type chargePayment struct {
+	w      *warehouse
+	tracer trace.Tracer
+}
 
 func (h *chargePayment) Run(ctx context.Context, inv orderspb.ChargePaymentInvocation) (*orderspb.ChargePayment, error) {
+	// The handler's ctx carries the attempt span the middleware
+	// started, so downstream instrumentation nests under it — this is
+	// what an otelhttp-instrumented gateway call would do implicitly.
+	ctx, gatewayCall := h.tracer.Start(ctx, "charge card")
+	defer gatewayCall.End()
+	_ = ctx
 	if inv.Attempt() == 1 {
 		return nil, errors.New("payment gateway timeout") // retried
 	}
@@ -128,10 +158,10 @@ func (ship) Run(ctx context.Context, inv orderspb.ShipInvocation) (*orderspb.Shi
 		durable.WithUserKind(), durable.WithReason("invalid-address"))
 }
 
-func run() (*tracetest.SpanRecorder, trace.SpanContext, orderspb.FulfillOrderResult, error) {
+func run(ctx context.Context) (*tracetest.SpanRecorder, trace.SpanContext, orderspb.FulfillOrderResult, error) {
 	recorder := tracetest.NewSpanRecorder()
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
-	defer tp.Shutdown(context.Background())
+	defer tp.Shutdown(ctx)
 	tracer := tp.Tracer("examples/tracing-otel")
 
 	engine := durable.NewEngine(durabletest.NewMemStore(),
@@ -140,7 +170,7 @@ func run() (*tracetest.SpanRecorder, trace.SpanContext, orderspb.FulfillOrderRes
 		durable.WithMiddleware(tracingMiddleware(tracer)))
 	w := &warehouse{}
 	pipe, err := orderspb.NewFulfillOrder(
-		&reserveStock{w}, &chargePayment{w}, ship{},
+		&reserveStock{w}, &chargePayment{w: w, tracer: tracer}, ship{},
 		func(o *orderspb.FulfillOrder) *orderspb.FulfillOrderOutput {
 			s, _ := o.State(orderspb.ShipStep)
 			return &orderspb.FulfillOrderOutput{ShipmentId: s.GetShipmentId()}
@@ -149,19 +179,20 @@ func run() (*tracetest.SpanRecorder, trace.SpanContext, orderspb.FulfillOrderRes
 	if err != nil {
 		return nil, trace.SpanContext{}, orderspb.FulfillOrderResult{}, err
 	}
-	if err := engine.Start(context.Background()); err != nil {
+	if err := engine.Start(ctx); err != nil {
 		return nil, trace.SpanContext{}, orderspb.FulfillOrderResult{}, err
 	}
-	defer engine.Stop(context.Background())
+	defer engine.Stop(ctx)
 
 	// The scheduling side: an ordinary request span whose context is
-	// injected durably into the Run.
-	ctx, requestSpan := tracer.Start(context.Background(), "POST /orders")
+	// injected durably into the Run. Schedule's ctx itself never
+	// reaches the handlers — the carrier annotation is the only bridge.
+	reqCtx, requestSpan := tracer.Start(ctx, "POST /orders")
 	carrier := propagation.MapCarrier{}
-	propagation.TraceContext{}.Inject(ctx, carrier)
+	propagation.TraceContext{}.Inject(reqCtx, carrier)
 	origin := requestSpan.SpanContext()
 
-	run, _, err := pipe.Schedule(ctx, "order-7421", &orderspb.FulfillOrderInput{
+	run, _, err := pipe.Schedule(reqCtx, "order-7421", &orderspb.FulfillOrderInput{
 		Sku: "SKU-COFFEE-1KG", Quantity: 2, AmountCents: 3400, ShipTo: "invalid",
 	}, durable.WithAnnotations(carrier))
 	if err != nil {
@@ -169,12 +200,12 @@ func run() (*tracetest.SpanRecorder, trace.SpanContext, orderspb.FulfillOrderRes
 	}
 	requestSpan.End() // the request returns long before the Run finishes
 
-	res, err := run.Wait(context.Background())
+	res, err := run.Wait(ctx)
 	return recorder, origin, res, err
 }
 
 func main() {
-	recorder, origin, res, err := run()
+	recorder, origin, res, err := run(context.Background())
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -184,12 +215,15 @@ func main() {
 		if sp.Name() == "POST /orders" {
 			continue
 		}
-		link := "UNLINKED"
+		relation := "UNLINKED"
 		for _, l := range sp.Links() {
 			if l.SpanContext.TraceID() == origin.TraceID() {
-				link = "link -> " + origin.TraceID().String()
+				relation = "link -> origin " + origin.TraceID().String()[:8]
 			}
 		}
-		fmt.Printf("span %s  %-36s %s\n", sp.SpanContext().SpanID(), sp.Name(), link)
+		if p := sp.Parent(); p.IsValid() {
+			relation = "child of " + p.SpanID().String() // handler span nesting under its attempt
+		}
+		fmt.Printf("span %s  %-36s %s\n", sp.SpanContext().SpanID(), sp.Name(), relation)
 	}
 }

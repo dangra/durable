@@ -146,7 +146,7 @@ func (p *Pipeline) Schedule(ctx context.Context, resource ResourceID, input prot
 		e.emitRunScheduled(RunEvent{
 			PipelineID: rec.PipelineID, ResourceID: resource,
 			RunID: rec.RunID, StartAt: rec.NextAttemptAt,
-			Annotations: rec.Annotations})
+			Annotations: copyAnnotations(rec.Annotations)})
 		e.disp.Dispatch(rec.RunID, 0)
 		return Run{id: rec.RunID, engine: e}, true, nil
 	}

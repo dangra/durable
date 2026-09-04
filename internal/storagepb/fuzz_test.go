@@ -10,9 +10,10 @@ import (
 
 // FuzzRoundTrip exercises the storage converters both ways: every value
 // built from fuzz primitives must survive a marshal/unmarshal round trip
-// unchanged, and every unmarshal fed the arbitrary blob must fail
-// cleanly rather than panic — a store file written by a crashed or newer
-// process must never take the engine down.
+// unchanged, and every unmarshal fed the arbitrary blob must not panic
+// (it may error, or even decode, since random bytes can form a valid
+// encoding) — a store file written by a crashed or newer process must
+// never take the engine down.
 func FuzzRoundTrip(f *testing.F) {
 	f.Add(byte(1), byte(0), "step/v1", "boom", uint64(3), int64(1_700_000_000), []byte{1, 2, 3})
 	f.Add(byte(2), byte(3), "", "", uint64(0), int64(0), []byte{})
@@ -147,10 +148,9 @@ func FuzzRoundTrip(f *testing.F) {
 			t.Fatalf("run meta round trip: %+v != %+v", grec, rec)
 		}
 
-		// Corrupt input: errors are fine, panics are not.
-		if _, err := UnmarshalCursor(blob); err == nil {
-			_ = err
-		}
+		// Arbitrary input: decoding may succeed or error; it must not
+		// panic.
+		_, _ = UnmarshalCursor(blob)
 		_, _ = UnmarshalStepRecord(blob)
 		_, _, _ = UnmarshalFailures(blob)
 		_, _, _ = UnmarshalTerminal(blob)

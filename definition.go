@@ -74,8 +74,11 @@ func NewDefinition(cfg DefinitionConfig) *Definition {
 	if cfg.ID == "" {
 		panic("durable: definition has empty PipelineID")
 	}
-	if invalidID(string(cfg.ID)) || invalidID(cfg.ExclusionGroup) {
-		panic(fmt.Sprintf("durable: pipeline %q: identifiers must be NUL-free valid UTF-8", cfg.ID))
+	if invalidID(string(cfg.ID)) {
+		panic(fmt.Sprintf("durable: pipeline id %q must be NUL-free valid UTF-8", cfg.ID))
+	}
+	if invalidID(cfg.ExclusionGroup) {
+		panic(fmt.Sprintf("durable: pipeline %q: exclusion group %q must be NUL-free valid UTF-8", cfg.ID, cfg.ExclusionGroup))
 	}
 	if len(cfg.Steps) == 0 {
 		panic(fmt.Sprintf("durable: pipeline %q has no steps", cfg.ID))

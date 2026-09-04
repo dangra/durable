@@ -6,7 +6,11 @@
 // figures the median per-slice head/base ratio when both sides carry
 // the same sample count (CI interleaves the suites so paired slices
 // share runner weather), falling back to loose best-sample estimates
-// otherwise. It prints a markdown table (suitable for a GitHub
+// otherwise. Wall-clock alarms additionally require corroboration: they
+// gate only when a deterministic metric of the same benchmark also
+// moved, and are otherwise waived up to a hard blowup ceiling —
+// timing-only movement with flat counters is the shared-runner-noise
+// signature. It prints a markdown table (suitable for a GitHub
 // job summary) and exits non-zero when any gated metric regresses, when
 // gated coverage present in base is missing from head, or when either
 // input recorded a test failure, panic, or build failure.
@@ -45,6 +49,13 @@ type class struct {
 	// cancels — supporting a much tighter threshold than the unpaired
 	// estimates.
 	pairedThreshold float64
+	// wall marks the wall-clock smoke-alarm classes, whose failures gate
+	// only when corroborated by a deterministic metric of the same
+	// benchmark (see gate); uncorroborated failures are waived up to
+	// hardThreshold, beyond which they gate regardless — the
+	// order-of-magnitude pure-CPU blowup the alarm exists for.
+	wall          bool
+	hardThreshold float64
 }
 
 func classify(unit string) class {
@@ -67,20 +78,23 @@ func classify(unit string) class {
 	// Allocation counters: near-deterministic, small timing wiggle.
 	case "B/op", "allocs/op":
 		return class{threshold: 0.10}
-	// Wall clock: a 2x smoke alarm, deliberately loose. Six gate
-	// failures at tighter settings (25% and 50%, unpaired and paired,
-	// interleaved and not) were all shared-runner noise — paired
-	// medians of identical code have measured +43% — while every real
-	// regression class this suite targets lands in the deterministic
-	// counters above. Wall clock exists to catch order-of-magnitude
-	// blowups with no counter movement (a hot pure-CPU loop), and 2x
-	// does that while sitting above the measured noise ceiling.
+	// Wall clock: a 2x smoke alarm, deliberately loose, and gating only
+	// when corroborated. Eight gate failures (six at tighter settings —
+	// 25% and 50%, unpaired and paired, interleaved and not — and two
+	// that cleared even the 2x paired bar, measuring up to 3.3x) were
+	// all shared-runner noise with one telltale signature: the timing
+	// metrics moved together while every deterministic counter sat
+	// flat. So a wall failure gates at 2x only when some deterministic
+	// metric of the same benchmark also moved (see gate); uncorroborated
+	// failures are waived up to a 5x hard ceiling — above all measured
+	// noise — which still catches the order-of-magnitude pure-CPU blowup
+	// with no counter movement that the alarm exists for.
 	// Best-of/paired estimators are kept: interference only adds time,
 	// and paired slices cancel shared weather.
 	case "ns/op", "p50-ms", "p99-ms", "start-ms", "wake-p50-ms":
-		return class{threshold: 1.00, pairedThreshold: 1.00, bestOf: true}
+		return class{threshold: 1.00, pairedThreshold: 1.00, bestOf: true, wall: true, hardThreshold: 4.00}
 	case "runs/sec", "unwinds/sec", "cycles/sec":
-		return class{threshold: 0.50, pairedThreshold: 0.50, lowerIsBad: true, bestOf: true}
+		return class{threshold: 0.50, pairedThreshold: 0.50, lowerIsBad: true, bestOf: true, wall: true, hardThreshold: 0.80}
 	// wake-max-ms (a population max — one scheduler stall away from
 	// doubling) and anything unrecognized: report, never gate.
 	default:
@@ -272,15 +286,75 @@ func writeReport(w io.Writer, head samples, failures []string) {
 	}
 }
 
+// metricDelta computes the gated delta and effective threshold for one
+// metric: the paired per-slice median when the class supports it and
+// sample counts match, the class estimates otherwise.
+func metricDelta(hs, bs []float64, c class) (delta, threshold float64) {
+	h, o := estimate(hs, c), estimate(bs, c)
+	switch {
+	case o != 0:
+		delta = (h - o) / o
+	case h != 0:
+		// 0 → nonzero must not slip through as delta 0.
+		delta = math.Inf(1)
+	}
+	threshold = c.threshold
+	if c.pairedThreshold > 0 && len(hs) == len(bs) && len(hs) > 1 {
+		delta, threshold = pairedDelta(hs, bs), c.pairedThreshold
+	}
+	return delta, threshold
+}
+
+// badBeyond reports whether delta moved past limit in the class's bad
+// direction.
+func badBeyond(delta, limit float64, c class) bool {
+	if c.lowerIsBad {
+		return -delta > limit
+	}
+	return delta > limit
+}
+
+// corroborated reports whether any deterministic metric of the
+// benchmark moved toward regression: a transitions count off at all, or
+// an allocation/disk figure past half its own gate threshold in the bad
+// direction. Wall-clock alarms gate only on corroborated benchmarks —
+// eight incidents of shared-runner noise moved every timing metric
+// while the deterministic counters sat flat, and that signature is
+// waived rather than gated.
+func corroborated(b string, base, head samples) bool {
+	for u, hs := range head[b] {
+		c := classify(u)
+		if c.wall || c.informative {
+			continue
+		}
+		bs, ok := base[b][u]
+		if !ok {
+			continue
+		}
+		delta, _ := metricDelta(hs, bs, c)
+		if c.twoSided {
+			if math.Abs(delta) > c.threshold {
+				return true
+			}
+			continue
+		}
+		if badBeyond(delta, c.threshold/2, c) {
+			return true
+		}
+	}
+	return false
+}
+
 // gate prints the comparison table and returns the number of gated
 // regressions, missing gated coverage included.
 func gate(w io.Writer, base, head samples, allowMissing bool) int {
-	regressions := 0
+	regressions, waived := 0, 0
 	fmt.Fprintln(w, "### Performance comparison vs base")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "| benchmark | metric | base | head | delta | verdict |")
 	fmt.Fprintln(w, "|---|---|---|---|---|---|")
 	for _, b := range sortedKeys(head) {
+		corr := corroborated(b, base, head)
 		for _, u := range sortedKeys(head[b]) {
 			c := classify(u)
 			hs := head[b][u]
@@ -291,18 +365,7 @@ func gate(w io.Writer, base, head samples, allowMissing bool) int {
 				continue
 			}
 			o := estimate(bs, c)
-			var delta float64
-			switch {
-			case o != 0:
-				delta = (h - o) / o
-			case h != 0:
-				// 0 → nonzero must not slip through as delta 0.
-				delta = math.Inf(1)
-			}
-			threshold := c.threshold
-			if c.pairedThreshold > 0 && len(hs) == len(bs) && len(hs) > 1 {
-				delta, threshold = pairedDelta(hs, bs), c.pairedThreshold
-			}
+			delta, threshold := metricDelta(hs, bs, c)
 			verdict := "ok"
 			switch {
 			case c.informative:
@@ -310,8 +373,19 @@ func gate(w io.Writer, base, head samples, allowMissing bool) int {
 			case c.twoSided && math.Abs(delta) > threshold:
 				verdict = fmt.Sprintf("**REGRESSION** (>±%g%%)", threshold*100)
 				regressions++
-			case !c.lowerIsBad && delta > threshold,
-				c.lowerIsBad && -delta > threshold:
+			case c.wall && badBeyond(delta, threshold, c):
+				switch {
+				case corr:
+					verdict = fmt.Sprintf("**REGRESSION** (>%g%%)", threshold*100)
+					regressions++
+				case badBeyond(delta, c.hardThreshold, c):
+					verdict = fmt.Sprintf("**REGRESSION** (>%g%%, uncorroborated blowup)", c.hardThreshold*100)
+					regressions++
+				default:
+					verdict = "waived (wall clock, uncorroborated)"
+					waived++
+				}
+			case !c.wall && badBeyond(delta, threshold, c):
 				verdict = fmt.Sprintf("**REGRESSION** (>%g%%)", threshold*100)
 				regressions++
 			}
@@ -348,6 +422,9 @@ func gate(w io.Writer, base, head samples, allowMissing bool) int {
 		}
 		fmt.Fprintf(w, "| %s | — | — | — | — | **MISSING from head** |\n", bname)
 		regressions++
+	}
+	if waived > 0 {
+		fmt.Fprintf(w, "\n%d wall-clock alarm(s) waived: uncorroborated by any deterministic metric (transitions, B/op, allocs, diskB) — the shared-runner-noise signature.\n", waived)
 	}
 	if regressions > 0 {
 		fmt.Fprintf(w, "\n%d gated metric(s) regressed.\n", regressions)

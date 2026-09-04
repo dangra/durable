@@ -8,7 +8,8 @@ import (
 	"testing"
 )
 
-// bench builds one go-test benchmark output line.
+// mustParse writes content as a benchmark-output file and parses it,
+// failing the test on parse errors.
 func mustParse(t *testing.T, content string) (samples, []string) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "bench.txt")
@@ -112,9 +113,10 @@ func TestPairedDelta(t *testing.T) {
 	if got := pairedDelta([]float64{110, 500, 90}, []float64{100, 100, 100}); got != 0.10000000000000009 && math.Abs(got-0.1) > 1e-9 {
 		t.Fatalf("paired median delta = %v, want ~+10%% (the 5x slice is the outlier)", got)
 	}
-	if got := pairedDelta([]float64{1, 2}, []float64{0, 2}); !math.IsInf(got, 1) && got != 0 {
-		// median of [+Inf, 0] with two samples picks index 1 = +Inf.
-		t.Fatalf("zero-base slice delta = %v", got)
+	// ratios are [+Inf, 0]; the two-sample median picks index 1 = +Inf,
+	// so a zero-base slice cannot hide inside a paired comparison.
+	if got := pairedDelta([]float64{1, 2}, []float64{0, 2}); !math.IsInf(got, 1) {
+		t.Fatalf("zero-base slice delta = %v, want +Inf", got)
 	}
 	if got := pairedDelta([]float64{0}, []float64{0}); got != 0 {
 		t.Fatalf("both-zero delta = %v", got)

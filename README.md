@@ -80,26 +80,34 @@ if result.Succeeded() {
 }
 ```
 
-Cross-cutting concerns use net/http-style middleware over the uniform
-type-erased operation layer (see
-[the design note](spec/http-analogy.md)):
+## Observability
+
+The engine logs through `log/slog`, emits typed lifecycle events
+(`Observer`), and snapshots occupancy (`Engine.Stats`); cross-cutting
+concerns use net/http-style middleware over the uniform type-erased
+operation layer (see [the design note](spec/http-analogy.md)). The core
+never depends on a telemetry library —
+[`contrib/durableotel`](contrib/durableotel/), a separate module,
+packages the OpenTelemetry integration: a span per attempt linked (not
+parented) to the trace that scheduled the Run, metrics with
+durable-scale histogram buckets, `trace_id`/`span_id` log correlation,
+and an opt-in W3C Baggage relay. Everything is declared once, at engine
+construction:
 
 ```go
-engine := durable.NewEngine(store, durable.WithMiddleware(logging, metrics))
+obs, _ := durableotel.NewObserver()
+engine := durable.NewEngine(store,
+    durable.WithMiddleware(durableotel.Middleware()),
+    durable.WithObserver(obs),
+    durable.WithScheduleAnnotator(durableotel.Annotator()))
+
+// anywhere, by any subsystem, with the provision pipeline from above —
+// propagation rides the request's ctx:
+run, _, _ := provision.Schedule(reqCtx, "machine-123", input)
 ```
 
-## Layout
-
-| Path | Contents |
-|---|---|
-| `spec/` | The specification |
-| `.` (`package durable`) | Public runtime API: engine, identities, `Fail`, results, typed step references, `LookupState` |
-| `internal/ledger` | Pure reconciliation core: frontiers, pinning, unwind eligibility |
-| `proto/durable/v1` + `durablepb/` | The `durable.v1.step` / `durable.v1.pipeline` protobuf options |
-| `cmd/protoc-gen-durable` | The code generator |
-| `bboltstore/` | bbolt-backed `Store` (SQLite: future work) |
-| `durabletest/` | In-memory `Store` and fake `Clock` for tests |
-| `examples/machines` | The provision-machine example with committed generated code |
+[examples/tracing-otel](examples/tracing-otel/) demonstrates the
+complete shape against the real OpenTelemetry SDK.
 
 ## Development
 

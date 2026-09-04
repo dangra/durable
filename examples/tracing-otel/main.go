@@ -2,8 +2,9 @@
 // real OpenTelemetry SDK, wired through contrib/durableotel:
 //
 //  1. The scheduling side — here, a pretend "POST /orders" request span
-//     — INJECTS its W3C trace context into the Run at acceptance:
-//     durableotel.WithTraceContext persists it with the Run.
+//     — INJECTS its W3C trace context into the Run at acceptance: the
+//     engine-wide durableotel.Annotator persists it with the Run, so
+//     Schedule call sites have nothing to remember.
 //  2. durableotel.Middleware EXTRACTS that context on every attempt —
 //     retries, unwind, restarts, hours later — and starts one span per
 //     attempt.
@@ -112,10 +113,14 @@ func run(ctx context.Context) (*tracetest.SpanRecorder, trace.SpanContext, order
 	defer tp.Shutdown(ctx)
 	tracer := tp.Tracer("examples/tracing-otel")
 
+	// Propagation intent is declared once, here: the Annotator injects
+	// whatever trace context rides the ctx of every future Schedule
+	// call, so no call site has anything to remember.
 	engine := durable.NewEngine(durabletest.NewMemStore(),
 		durable.WithRetryPolicy(durable.RetryPolicy{Initial: time.Millisecond, Max: 5 * time.Millisecond, Multiplier: 2}),
 		durable.WithLogger(slog.New(slog.DiscardHandler)),
-		durable.WithMiddleware(durableotel.Middleware(durableotel.WithTracerProvider(tp))))
+		durable.WithMiddleware(durableotel.Middleware(durableotel.WithTracerProvider(tp))),
+		durable.WithScheduleAnnotator(durableotel.Annotator()))
 	w := &warehouse{}
 	pipe, err := orderspb.NewFulfillOrder(
 		&reserveStock{w}, &chargePayment{w: w, tracer: tracer}, ship{},
@@ -132,16 +137,16 @@ func run(ctx context.Context) (*tracetest.SpanRecorder, trace.SpanContext, order
 	}
 	defer engine.Stop(ctx)
 
-	// The scheduling side: an ordinary request span whose context is
-	// injected durably into the Run by WithTraceContext. Schedule's ctx
-	// itself never reaches the handlers — the annotation is the only
-	// bridge.
+	// The scheduling side: an ordinary request span, and a bare Schedule
+	// call — the engine's Annotator injects reqCtx's trace context into
+	// the Run durably. Schedule's ctx itself never reaches the handlers;
+	// the annotation is the only bridge.
 	reqCtx, requestSpan := tracer.Start(ctx, "POST /orders")
 	origin := requestSpan.SpanContext()
 
 	run, _, err := pipe.Schedule(reqCtx, "order-7421", &orderspb.FulfillOrderInput{
 		Sku: "SKU-COFFEE-1KG", Quantity: 2, AmountCents: 3400, ShipTo: "invalid",
-	}, durableotel.WithTraceContext(reqCtx))
+	})
 	if err != nil {
 		return nil, trace.SpanContext{}, orderspb.FulfillOrderResult{}, err
 	}

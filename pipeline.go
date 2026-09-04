@@ -105,6 +105,13 @@ func (p *Pipeline) Schedule(ctx context.Context, resource ResourceID, input prot
 	}
 
 	var so scheduleOptions
+	// Engine-wide annotators seed the annotations from the caller's ctx
+	// first, so the call's own options win on key conflicts.
+	for _, a := range e.annotators {
+		if m := a(ctx); len(m) > 0 {
+			WithAnnotations(m)(&so)
+		}
+	}
 	for _, o := range opts {
 		o(&so)
 	}

@@ -3,14 +3,15 @@
 // module wired entirely through durable's public seams — WithMiddleware,
 // WithAnnotations, Observer, and Engine.Stats.
 //
-// The complete integration is three lines:
+// The complete integration is declared once, at engine construction:
 //
 //	obs, _ := durableotel.NewObserver()
 //	engine := durable.NewEngine(store,
 //		durable.WithMiddleware(durableotel.Middleware()),
-//		durable.WithObserver(obs))
-//	// ... and per request:
-//	pipe.Schedule(ctx, resource, input, durableotel.WithTraceContext(ctx))
+//		durable.WithObserver(obs),
+//		durable.WithScheduleAnnotator(durableotel.Annotator()))
+//	// ... and per request, nothing to remember:
+//	pipe.Schedule(ctx, resource, input)
 //
 // [Middleware] starts one span per operation attempt, linked (not
 // parented) to the trace that scheduled the Run; [WithTraceContext]

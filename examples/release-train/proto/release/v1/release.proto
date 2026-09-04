@@ -33,17 +33,13 @@ message RunMigrations {
 // whose forward frontier is run-migrations executes it; a run already
 // past shift-traffic never executes it retroactively.
 message CanaryAnalysis {
-  option (durable.v1.step) = {
-    id: "canary-analysis/v1"
-  };
+  option (durable.v1.step) = {id: "canary-analysis/v1"};
 
   uint32 score = 1;
 }
 
 message ShiftTraffic {
-  option (durable.v1.step) = {
-    id: "shift-traffic/v1"
-  };
+  option (durable.v1.step) = {id: "shift-traffic/v1"};
 
   string lb_generation = 1;
 }
@@ -73,21 +69,15 @@ message DeployService {
 // ---- release-train: ship every service of a release ----
 
 message PlanRelease {
-  option (durable.v1.step) = {
-    id: "plan/v1"
-  };
+  option (durable.v1.step) = {id: "plan/v1"};
 }
 
 message ShipWeb {
-  option (durable.v1.step) = {
-    id: "ship-web/v1"
-  };
+  option (durable.v1.step) = {id: "ship-web/v1"};
 }
 
 message ShipApi {
-  option (durable.v1.step) = {
-    id: "ship-api/v1"
-  };
+  option (durable.v1.step) = {id: "ship-api/v1"};
 }
 
 message ReleaseTrainInput {

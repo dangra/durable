@@ -49,6 +49,27 @@ jobs:
         run: go vet ./...
       - name: Test (race detector)
         run: go test -race -count=1 ./...
+      # The extracted mechanism packages carry the engine's subtlest
+      # invariants; their coverage is held at 100% so a new branch cannot
+      # land untested.
+      - name: Primitive coverage gate
+        run: |
+          go test -coverprofile=/tmp/prim.cov \
+            ./internal/ledger/ ./internal/watchset/ ./internal/tokenpool/ ./internal/dispatcher/
+          total=$(go tool cover -func=/tmp/prim.cov | awk '/^total:/{print $NF}')
+          echo "primitive coverage: $total"
+          if [ "$total" != "100.0%" ]; then
+            go tool cover -func=/tmp/prim.cov | grep -v '100.0%'
+            echo "::error::internal primitive coverage is $total, want 100.0%"
+            exit 1
+          fi
+      # Ten seconds per target is a smoke pass over the invariant
+      # checkers; long fuzz sessions run locally.
+      - name: Fuzz smoke (primitives)
+        run: |
+          go test -fuzz=FuzzReconcile -fuzztime=10s ./internal/ledger/
+          go test -fuzz=FuzzOps -fuzztime=10s ./internal/tokenpool/
+          go test -fuzz=FuzzOps -fuzztime=10s ./internal/watchset/
       - name: Benchmarks compile and run once
         run: go test -run xxx -bench . -benchtime 1x ./...
       - name: Example smoke test

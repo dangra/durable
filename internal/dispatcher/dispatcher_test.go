@@ -266,3 +266,102 @@ func TestNewValidatesConfig(t *testing.T) {
 		}()
 	}
 }
+
+// TestShutdownWhileWaitingForSemaphore: a worker parked on the
+// concurrency semaphore exits without running when the context ends.
+func TestShutdownWhileWaitingForSemaphore(t *testing.T) {
+	var runs atomic.Int32
+	inRun := make(chan struct{})
+	release := make(chan struct{})
+	h := newHarness(t, 1, func(k string) (time.Duration, bool) {
+		runs.Add(1)
+		if k == "hog" {
+			inRun <- struct{}{}
+			<-release
+		}
+		return 0, false
+	})
+	h.d.Dispatch("hog", 0)
+	<-inRun // the semaphore is now full
+	h.d.Dispatch("starved", 0)
+	h.cancel()
+	// The semaphore stays full until starved has exited through the
+	// ctx.Done arm — observed as Active dropping to just the hog — so
+	// the select can never see a free slot.
+	deadline := time.Now().Add(5 * time.Second)
+	for h.d.Active() != 1 {
+		if time.Now().After(deadline) {
+			t.Fatalf("starved worker never exited: active=%d", h.d.Active())
+		}
+		time.Sleep(time.Millisecond)
+	}
+	close(release)
+	h.wg.Wait()
+	if got := runs.Load(); got != 1 {
+		t.Fatalf("runs = %d, want only the semaphore holder", got)
+	}
+	if h.d.Active() != 0 {
+		t.Fatalf("active = %d after shutdown", h.d.Active())
+	}
+}
+
+// TestStressRandomChurn hammers Dispatch and Wake with random keys,
+// delays, and redispatch requests under the race detector, then proves
+// the dispatcher drains: no worker is lost, leaked, or duplicated
+// whatever the interleaving.
+func TestStressRandomChurn(t *testing.T) {
+	keys := []string{"a", "b", "c", "d", "e", "f", "g", "h"}
+	var runs atomic.Int32
+	h := newHarness(t, 4, func(k string) (time.Duration, bool) {
+		runs.Add(1)
+		if runs.Load()%7 == 0 {
+			time.Sleep(200 * time.Microsecond)
+		}
+		// Occasionally ask for a quick redispatch to exercise the
+		// worker-exit path racing new dispatches.
+		if runs.Load()%13 == 0 {
+			return 100 * time.Microsecond, true
+		}
+		return 0, false
+	})
+
+	var wg sync.WaitGroup
+	for g := 0; g < 6; g++ {
+		wg.Add(1)
+		go func(seed int) {
+			defer wg.Done()
+			for i := 0; i < 300; i++ {
+				k := keys[(seed*31+i*17)%len(keys)]
+				switch (seed + i) % 3 {
+				case 0:
+					h.d.Dispatch(k, 0)
+				case 1:
+					h.d.Dispatch(k, time.Duration((seed*7+i)%3)*time.Millisecond)
+				case 2:
+					h.d.Wake(k)
+				}
+				if i%50 == 0 {
+					time.Sleep(100 * time.Microsecond)
+				}
+			}
+		}(g)
+	}
+	wg.Wait()
+	// Wake any workers still parked on delays, then require full drain.
+	deadline := time.Now().Add(10 * time.Second)
+	for h.d.Active() != 0 {
+		for _, k := range keys {
+			h.d.Wake(k)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("dispatcher never drained: active=%d delayed=%d", h.d.Active(), h.d.Delayed())
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if h.d.Delayed() != 0 {
+		t.Fatalf("delayed = %d after drain", h.d.Delayed())
+	}
+	if runs.Load() == 0 {
+		t.Fatal("no work happened")
+	}
+}

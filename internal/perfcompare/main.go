@@ -20,8 +20,10 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"sort"
@@ -180,25 +182,34 @@ func sortedKeys[V any](m map[string]V) []string {
 	return ks
 }
 
-// mustParseComplete parses a gate-mode input and refuses to gate against
+// parseComplete parses a gate-mode input and refuses to gate against
 // untrustworthy data: recorded failures or an empty result set (a suite
 // that panicked early emits no `--- FAIL:` line at all — absence of
 // results is the only evidence left).
-func mustParseComplete(path string) samples {
+func parseComplete(path string) (samples, error) {
 	s, failures, err := parse(path)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(2)
+		return nil, err
 	}
 	if len(failures) > 0 {
-		fmt.Fprintf(os.Stderr, "%s recorded failures; refusing to gate:\n", path)
+		var b strings.Builder
+		fmt.Fprintf(&b, "%s recorded failures; refusing to gate:", path)
 		for _, f := range failures {
-			fmt.Fprintln(os.Stderr, "  "+f)
+			b.WriteString("\n  " + f)
 		}
-		os.Exit(2)
+		return nil, errors.New(b.String())
 	}
 	if len(s) == 0 {
-		fmt.Fprintf(os.Stderr, "no benchmark results in %s — the suite likely crashed before reporting\n", path)
+		return nil, fmt.Errorf("no benchmark results in %s — the suite likely crashed before reporting", path)
+	}
+	return s, nil
+}
+
+// mustParseComplete is parseComplete with gate-mode exit semantics.
+func mustParseComplete(path string) samples {
+	s, err := parseComplete(path)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
 	}
 	return s
@@ -220,24 +231,7 @@ func main() {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(2)
 		}
-		fmt.Println("### Performance suite")
-		fmt.Println()
-		// Report mode never gates, so a failure must not discard the
-		// remaining valid metrics — surface it and keep going.
-		if len(failures) > 0 {
-			fmt.Println("> ⚠️ the run recorded failures; values below may be incomplete:")
-			for _, f := range failures {
-				fmt.Printf("> `%s`\n", f)
-			}
-			fmt.Println()
-		}
-		fmt.Println("| benchmark | metric | value |")
-		fmt.Println("|---|---|---|")
-		for _, b := range sortedKeys(head) {
-			for _, u := range sortedKeys(head[b]) {
-				fmt.Printf("| %s | %s | %.4g |\n", b, u, median(head[b][u]))
-			}
-		}
+		writeReport(os.Stdout, head, failures)
 		return
 	}
 
@@ -247,12 +241,41 @@ func main() {
 	}
 	base := mustParseComplete(flag.Arg(0))
 	head := mustParseComplete(flag.Arg(1))
+	if gate(os.Stdout, base, head, *allowMissing) > 0 {
+		os.Exit(1)
+	}
+}
 
+// writeReport prints the ungated single-run table. Report mode never
+// gates, so a recorded failure must not discard the remaining valid
+// metrics — it is surfaced as a warning and the table follows.
+func writeReport(w io.Writer, head samples, failures []string) {
+	fmt.Fprintln(w, "### Performance suite")
+	fmt.Fprintln(w)
+	if len(failures) > 0 {
+		fmt.Fprintln(w, "> ⚠️ the run recorded failures; values below may be incomplete:")
+		for _, f := range failures {
+			fmt.Fprintf(w, "> `%s`\n", f)
+		}
+		fmt.Fprintln(w)
+	}
+	fmt.Fprintln(w, "| benchmark | metric | value |")
+	fmt.Fprintln(w, "|---|---|---|")
+	for _, b := range sortedKeys(head) {
+		for _, u := range sortedKeys(head[b]) {
+			fmt.Fprintf(w, "| %s | %s | %.4g |\n", b, u, median(head[b][u]))
+		}
+	}
+}
+
+// gate prints the comparison table and returns the number of gated
+// regressions, missing gated coverage included.
+func gate(w io.Writer, base, head samples, allowMissing bool) int {
 	regressions := 0
-	fmt.Println("### Performance comparison vs base")
-	fmt.Println()
-	fmt.Println("| benchmark | metric | base | head | delta | verdict |")
-	fmt.Println("|---|---|---|---|---|---|")
+	fmt.Fprintln(w, "### Performance comparison vs base")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "| benchmark | metric | base | head | delta | verdict |")
+	fmt.Fprintln(w, "|---|---|---|---|---|---|")
 	for _, b := range sortedKeys(head) {
 		for _, u := range sortedKeys(head[b]) {
 			c := classify(u)
@@ -260,7 +283,7 @@ func main() {
 			h := estimate(hs, c)
 			bs, ok := base[b][u]
 			if !ok {
-				fmt.Printf("| %s | %s | — | %.4g | — | new |\n", b, u, h)
+				fmt.Fprintf(w, "| %s | %s | — | %.4g | — | new |\n", b, u, h)
 				continue
 			}
 			o := estimate(bs, c)
@@ -292,7 +315,7 @@ func main() {
 			if math.IsInf(delta, 1) {
 				deltaStr = "+∞"
 			}
-			fmt.Printf("| %s | %s | %.4g | %.4g | %s | %s |\n", b, u, o, h, deltaStr, verdict)
+			fmt.Fprintf(w, "| %s | %s | %.4g | %.4g | %s | %s |\n", b, u, o, h, deltaStr, verdict)
 		}
 		// A gated metric that reported in base but not in head is lost
 		// coverage: a deleted or renamed b.ReportMetric line must not
@@ -301,11 +324,11 @@ func main() {
 			if _, ok := head[b][u]; ok {
 				continue
 			}
-			if classify(u).informative || *allowMissing {
-				fmt.Printf("| %s | %s | %.4g | — | — | missing (info) |\n", b, u, median(base[b][u]))
+			if classify(u).informative || allowMissing {
+				fmt.Fprintf(w, "| %s | %s | %.4g | — | — | missing (info) |\n", b, u, median(base[b][u]))
 				continue
 			}
-			fmt.Printf("| %s | %s | %.4g | — | — | **MISSING from head** |\n", b, u, median(base[b][u]))
+			fmt.Fprintf(w, "| %s | %s | %.4g | — | — | **MISSING from head** |\n", b, u, median(base[b][u]))
 			regressions++
 		}
 	}
@@ -315,16 +338,17 @@ func main() {
 		if _, ok := head[bname]; ok {
 			continue
 		}
-		if *allowMissing {
-			fmt.Printf("| %s | — | — | — | — | missing (info) |\n", bname)
+		if allowMissing {
+			fmt.Fprintf(w, "| %s | — | — | — | — | missing (info) |\n", bname)
 			continue
 		}
-		fmt.Printf("| %s | — | — | — | — | **MISSING from head** |\n", bname)
+		fmt.Fprintf(w, "| %s | — | — | — | — | **MISSING from head** |\n", bname)
 		regressions++
 	}
 	if regressions > 0 {
-		fmt.Printf("\n%d gated metric(s) regressed.\n", regressions)
-		os.Exit(1)
+		fmt.Fprintf(w, "\n%d gated metric(s) regressed.\n", regressions)
+	} else {
+		fmt.Fprintln(w, "\nAll gated metrics within thresholds.")
 	}
-	fmt.Println("\nAll gated metrics within thresholds.")
+	return regressions
 }

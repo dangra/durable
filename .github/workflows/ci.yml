@@ -75,7 +75,9 @@ jobs:
       - name: Benchmarks compile and run once
         run: go test -run xxx -bench . -benchtime 1x ./...
       - name: Example smoke test
-        run: go run ./examples/machines
+        run: |
+          go run ./examples/machines
+          go run ./examples/tracing
 
   staticcheck:
     name: Staticcheck

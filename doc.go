@@ -38,5 +38,6 @@
 // WithMiddleware tracing middleware via Invocation.Annotations, emitting
 // per-attempt spans linked to the originating trace — span links, not a
 // long-lived parent, are the recommended shape for work that may run
-// hours later. The engine itself never depends on a tracing library.
+// hours later. The engine itself never depends on a tracing library;
+// examples/tracing demonstrates the complete shape.
 package durable

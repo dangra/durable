@@ -9,9 +9,9 @@ import (
 
 // NewLogHandler wraps a slog.Handler so every record logged with a
 // context carrying a span — the ctx Middleware hands to handlers —
-// gains trace_id, span_id, and (when sampled) trace_flags attributes,
-// the OpenTelemetry log-correlation convention. Wrap the handler behind
-// the engine's WithLogger once:
+// gains trace_id, span_id, and trace_flags (hex-encoded W3C flags)
+// attributes, the OpenTelemetry log-correlation convention. Wrap the
+// handler behind the engine's WithLogger once:
 //
 //	logger := slog.New(durableotel.NewLogHandler(
 //		slog.NewJSONHandler(os.Stderr, nil)))
@@ -47,14 +47,11 @@ func (h *logHandler) Enabled(ctx context.Context, level slog.Level) bool {
 func (h *logHandler) Handle(ctx context.Context, r slog.Record) error {
 	if sc := trace.SpanContextFromContext(ctx); sc.IsValid() {
 		r = r.Clone() // the caller may share the record with other handlers
-		attrs := []slog.Attr{
+		r.AddAttrs(
 			slog.String("trace_id", sc.TraceID().String()),
 			slog.String("span_id", sc.SpanID().String()),
-		}
-		if sc.IsSampled() {
-			attrs = append(attrs, slog.String("trace_flags", "01"))
-		}
-		r.AddAttrs(attrs...)
+			slog.String("trace_flags", sc.TraceFlags().String()),
+		)
 	}
 	return h.inner.Handle(ctx, r)
 }

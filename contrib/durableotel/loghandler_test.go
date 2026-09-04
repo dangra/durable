@@ -50,11 +50,24 @@ func TestLogHandlerStampsSpanContext(t *testing.T) {
 	logger.Info("no ctx at all")
 	span.End()
 
+	// A remote, unsampled context with the W3C random-trace-id bit set:
+	// trace_flags must encode the actual flags, not assume sampled.
+	remote := trace.ContextWithSpanContext(t.Context(), trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID:    trace.TraceID{1},
+		SpanID:     trace.SpanID{2},
+		TraceFlags: trace.TraceFlags(0x02),
+		Remote:     true,
+	}))
+	logger.InfoContext(remote, "remote flags")
+
 	lines := logLines(t, &buf)
-	if len(lines) != 3 {
-		t.Fatalf("lines = %d, want 3", len(lines))
+	if len(lines) != 4 {
+		t.Fatalf("lines = %d, want 4", len(lines))
 	}
 	in, noSpan, noCtx := lines[0], lines[1], lines[2]
+	if lines[3]["trace_flags"] != "02" {
+		t.Fatalf("trace_flags = %v, want 02 for the remote context", lines[3]["trace_flags"])
+	}
 	if in["trace_id"] != span.SpanContext().TraceID().String() ||
 		in["span_id"] != span.SpanContext().SpanID().String() {
 		t.Fatalf("correlated line = %v, want trace/span of the active span", in)

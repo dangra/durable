@@ -83,9 +83,9 @@ func TestClassify(t *testing.T) {
 		{"diskB/run", class{threshold: 0.15, bestOf: true}},
 		{"B/op", class{threshold: 0.10}},
 		{"allocs/op", class{threshold: 0.10}},
-		{"ns/op", class{threshold: 1.00, pairedThreshold: 1.00, bestOf: true}},
-		{"p99-ms", class{threshold: 1.00, pairedThreshold: 1.00, bestOf: true}},
-		{"runs/sec", class{threshold: 0.50, pairedThreshold: 0.50, lowerIsBad: true, bestOf: true}},
+		{"ns/op", class{threshold: 1.00, pairedThreshold: 1.00, bestOf: true, wall: true, hardThreshold: 4.00}},
+		{"p99-ms", class{threshold: 1.00, pairedThreshold: 1.00, bestOf: true, wall: true, hardThreshold: 4.00}},
+		{"runs/sec", class{threshold: 0.50, pairedThreshold: 0.50, lowerIsBad: true, bestOf: true, wall: true, hardThreshold: 0.80}},
 		{"wake-max-ms", class{informative: true}},
 		{"anything-else", class{informative: true}},
 	}
@@ -171,14 +171,60 @@ BenchmarkA-4  1  141 ns/op  15.00 transitions/run  1000 diskB/run  283.0 runs/se
 			want: []string{"All gated metrics within thresholds"},
 		},
 		{
-			name: "a 2.3x wall blowup fails time and throughput",
+			name: "a 2.3x wall blowup with flat counters is waived as runner noise",
 			head: `
 BenchmarkA-4  1  230 ns/op  15.00 transitions/run  1000 diskB/run  174.0 runs/sec  50000 B/op
 BenchmarkA-4  1  240 ns/op  15.00 transitions/run  1100 diskB/run  166.0 runs/sec  50000 B/op
 BenchmarkA-4  1  228 ns/op  15.00 transitions/run  1000 diskB/run  175.0 runs/sec  50000 B/op
 `,
+			want: []string{
+				"waived (wall clock, uncorroborated)",
+				"2 wall-clock alarm(s) waived",
+			},
+		},
+		{
+			// B/op +6% corroborates (past half its 10% gate) without
+			// itself gating: the wall alarms fire.
+			name: "a corroborated 2.3x wall blowup fails time and throughput",
+			head: `
+BenchmarkA-4  1  230 ns/op  15.00 transitions/run  1000 diskB/run  174.0 runs/sec  53000 B/op
+BenchmarkA-4  1  240 ns/op  15.00 transitions/run  1100 diskB/run  166.0 runs/sec  53000 B/op
+BenchmarkA-4  1  228 ns/op  15.00 transitions/run  1000 diskB/run  175.0 runs/sec  53000 B/op
+`,
 			regressions: 2,
-			want:        []string{"ns/op", "**REGRESSION** (>100%)", "runs/sec", "**REGRESSION** (>50%)"},
+			want: []string{
+				"ns/op", "**REGRESSION** (>100%)",
+				"runs/sec", "**REGRESSION** (>50%)",
+				"| B/op | 5e+04 | 5.3e+04 | +6.0% | ok |",
+			},
+		},
+		{
+			// diskB +8% (past half its 15% gate, judged on the best
+			// sample) corroborates without itself gating.
+			name: "diskB movement below its own gate still corroborates wall alarms",
+			head: `
+BenchmarkA-4  1  230 ns/op  15.00 transitions/run  1080 diskB/run  174.0 runs/sec  50000 B/op
+BenchmarkA-4  1  240 ns/op  15.00 transitions/run  1090 diskB/run  166.0 runs/sec  50000 B/op
+BenchmarkA-4  1  228 ns/op  15.00 transitions/run  1085 diskB/run  175.0 runs/sec  50000 B/op
+`,
+			regressions: 2,
+			want: []string{
+				"ns/op", "**REGRESSION** (>100%)",
+				"| diskB/run | 1000 | 1080 | +8.0% | ok |",
+			},
+		},
+		{
+			name: "an uncorroborated blowup past the hard ceiling still gates",
+			head: `
+BenchmarkA-4  1  600 ns/op  15.00 transitions/run  1000 diskB/run  60.0 runs/sec  50000 B/op
+BenchmarkA-4  1  610 ns/op  15.00 transitions/run  1100 diskB/run  58.0 runs/sec  50000 B/op
+BenchmarkA-4  1  605 ns/op  15.00 transitions/run  1000 diskB/run  62.0 runs/sec  50000 B/op
+`,
+			regressions: 2,
+			want: []string{
+				"**REGRESSION** (>400%, uncorroborated blowup)",
+				"**REGRESSION** (>80%, uncorroborated blowup)",
+			},
 		},
 		{
 			name: "diskB gates on the best sample: bimodal medians pass",
@@ -288,16 +334,17 @@ BenchmarkZ-4  1  100 ns/op  3.000 transitions/run
 
 func TestPairedGatingRequiresEqualCounts(t *testing.T) {
 	// runs/sec (lowerIsBad, paired at 50%): identical medians but a
-	// paired ratio pattern only the per-slice view can see.
+	// paired ratio pattern only the per-slice view can see. B/op +6%
+	// corroborates the wall alarm without gating itself.
 	base := `
-BenchmarkP-4  1  100 ns/op  100.0 runs/sec
-BenchmarkP-4  1  100 ns/op  100.0 runs/sec
-BenchmarkP-4  1  100 ns/op  100.0 runs/sec
+BenchmarkP-4  1  100 ns/op  100.0 runs/sec  50000 B/op
+BenchmarkP-4  1  100 ns/op  100.0 runs/sec  50000 B/op
+BenchmarkP-4  1  100 ns/op  100.0 runs/sec  50000 B/op
 `
 	head := `
-BenchmarkP-4  1  100 ns/op  45.0 runs/sec
-BenchmarkP-4  1  100 ns/op  44.0 runs/sec
-BenchmarkP-4  1  100 ns/op  46.0 runs/sec
+BenchmarkP-4  1  100 ns/op  45.0 runs/sec  53000 B/op
+BenchmarkP-4  1  100 ns/op  44.0 runs/sec  53000 B/op
+BenchmarkP-4  1  100 ns/op  46.0 runs/sec  53000 B/op
 `
 	n, out := gateOn(t, base, head, false)
 	if n != 1 || !strings.Contains(out, "runs/sec") || !strings.Contains(out, "REGRESSION") {
@@ -307,7 +354,7 @@ BenchmarkP-4  1  100 ns/op  46.0 runs/sec
 	// Unequal counts fall back to best-of estimates: head's single fast
 	// sample sits within the unpaired threshold.
 	headOne := `
-BenchmarkP-4  1  100 ns/op  60.0 runs/sec
+BenchmarkP-4  1  100 ns/op  60.0 runs/sec  53000 B/op
 `
 	n, out = gateOn(t, base, headOne, false)
 	if n != 0 {

@@ -218,11 +218,13 @@ jobs:
           fi
           # transitions/* gate two-sided at 0.1% (exactly deterministic),
           # disk bytes (best sample, 15%) and allocations (median, 10%),
-          # wall clock
-          # as a 2x smoke alarm on paired per-slice ratios; the
-          # thresholds live in internal/perfcompare, which also fails on
-          # recorded test failures and on gated metrics missing from
-          # head.
+          # wall clock as a 2x smoke alarm on paired per-slice ratios
+          # that gates only when a deterministic metric of the same
+          # benchmark also moved (uncorroborated alarms are waived up to
+          # a 5x blowup ceiling — timing-only movement is the
+          # shared-runner-noise signature); the thresholds live in
+          # internal/perfcompare, which also fails on recorded test
+          # failures and on gated metrics missing from head.
           go run ./internal/perfcompare /tmp/perf-base.txt /tmp/perf-head.txt | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Report (master)
         if: github.event_name == 'push'

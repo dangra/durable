@@ -202,12 +202,16 @@ func runCrashScenario(t *testing.T, seed uint64, store durable.Store) {
 	for round := 0; round < 4; round++ {
 		time.Sleep(time.Duration(4+(seed+uint64(round))%12) * time.Millisecond)
 		victim := crashIDs[(int(seed)+round*3)%len(crashIDs)]
-		if run, err := crashPipe.Run(ctx, victim); err == nil {
-			if err := run.Cancel(ctx, "crash-round cancel"); err == nil {
-				canceled[victim] = true
-			} else if !errors.Is(err, durable.ErrRunTerminal) {
-				t.Fatalf("Cancel(%s): %v", victim, err)
-			}
+		// A scheduled run must always be reopenable after restarts; a
+		// lookup error is itself a recovery regression.
+		run, err := crashPipe.Run(ctx, victim)
+		if err != nil {
+			t.Fatalf("reopen %s after restart: %v", victim, err)
+		}
+		if err := run.Cancel(ctx, "crash-round cancel"); err == nil {
+			canceled[victim] = true
+		} else if !errors.Is(err, durable.ErrRunTerminal) {
+			t.Fatalf("Cancel(%s): %v", victim, err)
 		}
 		stop(e)
 		e, crashPipe, waitPipe = boot()
@@ -238,7 +242,9 @@ func runCrashScenario(t *testing.T, seed uint64, store durable.Store) {
 		if err != nil {
 			t.Fatalf("Wait(waiter %s): %v", id, err)
 		}
-		if res.Outcome != durable.OutcomeSuccess && !res.Canceled() {
+		// No waiter is ever canceled by this test: anything but success
+		// is a phantom cancellation or a scripting hole.
+		if res.Outcome != durable.OutcomeSuccess {
 			t.Fatalf("waiter %s outcome = %+v, want success", id, res)
 		}
 	}
@@ -294,7 +300,10 @@ func runCrashScenario(t *testing.T, seed uint64, store durable.Store) {
 		}
 
 		// Status agrees with Wait.
-		run, _ := crashPipe.Run(ctx, id)
+		run, err := crashPipe.Run(ctx, id)
+		if err != nil {
+			t.Fatalf("reopen %s for status: %v", id, err)
+		}
 		st, err := run.Status(ctx)
 		if err != nil {
 			t.Fatalf("Status(%s): %v", id, err)

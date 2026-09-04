@@ -20,14 +20,14 @@ func TestAttemptSpansLinkToOrigin(t *testing.T) {
 	}
 
 	// reserve, charge attempt 1 (retry) + 2, ship (permanent), charge
-	// unwind, reserve unwind.
-	want := map[string]bool{
-		"reserve-stock/v1 forward attempt 1":  true,
-		"charge-payment/v1 forward attempt 1": true,
-		"charge-payment/v1 forward attempt 2": true,
-		"ship/v1 forward attempt 1":           true,
-		"charge-payment/v1 unwind attempt 1":  true,
-		"reserve-stock/v1 unwind attempt 1":   true,
+	// unwind, reserve unwind. Span names are low-cardinality
+	// "<step> <phase>"; the attempt number is an attribute.
+	want := map[string]int{
+		"reserve-stock/v1 forward":  1,
+		"charge-payment/v1 forward": 2,
+		"ship/v1 forward":           1,
+		"charge-payment/v1 unwind":  1,
+		"reserve-stock/v1 unwind":   1,
 	}
 	attempts, childSpans := 0, 0
 	attemptTraces := map[string]bool{} // trace IDs owned by attempt spans
@@ -48,9 +48,10 @@ func TestAttemptSpansLinkToOrigin(t *testing.T) {
 			continue
 		}
 		attempts++
-		if !want[sp.Name()] {
-			t.Fatalf("unexpected span %q", sp.Name())
+		if want[sp.Name()] == 0 {
+			t.Fatalf("unexpected or surplus span %q", sp.Name())
 		}
+		want[sp.Name()]--
 		linked := false
 		for _, l := range sp.Links() {
 			if l.SpanContext.TraceID() == origin.TraceID() && l.SpanContext.SpanID() == origin.SpanID() {
@@ -67,8 +68,8 @@ func TestAttemptSpansLinkToOrigin(t *testing.T) {
 			t.Fatalf("span %q parented under the origin trace", sp.Name())
 		}
 	}
-	if attempts != len(want) {
-		t.Fatalf("attempt spans = %d, want %d", attempts, len(want))
+	if attempts != 6 {
+		t.Fatalf("attempt spans = %d, want 6", attempts)
 	}
 	// Two payment attempts, each with a nested gateway-call span.
 	if childSpans != 2 {

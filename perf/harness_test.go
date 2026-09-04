@@ -7,10 +7,11 @@
 // near-deterministic byte and allocation metrics (diskB/* on the best
 // sample, B/op and allocs/op on the median, gated at 10%). Every scenario
 // runs with the observer installed, so observer-path overhead is itself
-// gated. Wall-clock metrics (p50-ms, p99-ms, runs/sec, ns/op) gate at
-// 25% on paired per-slice head/base ratios under CI's interleaved runs
-// (50% best-sample smoke alarm when pairing is unavailable); the
-// internal/perfcompare tool applies the per-metric-class thresholds.
+// gated. Wall-clock metrics (p50-ms, p99-ms, runs/sec, ns/op) are a 2x
+// smoke alarm over paired per-slice ratios: shared-runner noise defeats
+// any tighter wall-clock gate, and real regressions in this suite's
+// target classes land in the counters; the internal/perfcompare tool
+// applies the per-metric-class thresholds.
 //
 // Every scenario is write-deterministic: retries are bounded by attempt
 // number, never by timing, so the logical write counts are identical

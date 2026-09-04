@@ -201,10 +201,10 @@ jobs:
           fi
           # transitions/* gate two-sided at 0.1% (exactly deterministic),
           # disk bytes (best sample) and allocations at 10%, wall clock
-          # at 25% on paired per-slice head/base ratios (50% best-sample
-          # fallback when pairing is unavailable); the thresholds live in
-          # internal/perfcompare, which also fails on recorded test
-          # failures and on gated metrics missing from head.
+          # as a 2x smoke alarm on paired per-slice ratios; the
+          # thresholds live in internal/perfcompare, which also fails on
+          # recorded test failures and on gated metrics missing from
+          # head.
           go run ./internal/perfcompare /tmp/perf-base.txt /tmp/perf-head.txt | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Report (master)
         if: github.event_name == 'push'

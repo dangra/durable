@@ -463,9 +463,11 @@ func (e *Engine) processRun(id RunID) (time.Duration, bool) {
 
 		// Lock-free read: pipelines is frozen at Start (register rejects
 		// later binds under mu), and every worker descends from a
-		// mu-synchronized point after that freeze — Start's recovery
-		// dispatches, or a Schedule that passed isStarted. The last
-		// write happens-before every read here.
+		// mu-synchronized point after that freeze — Start's own recovery
+		// dispatches, or a public entry point that passed an isStarted
+		// check under mu (Schedule, Cancel, ...) before dispatching,
+		// directly or through the wakes and kicks of workers so rooted.
+		// The last write therefore happens-before every read here.
 		def := e.pipelines[rec.PipelineID]
 		if def == nil {
 			e.markInvalid(rec, "", fmt.Sprintf("pipeline %q is not registered with the current deployment", rec.PipelineID))

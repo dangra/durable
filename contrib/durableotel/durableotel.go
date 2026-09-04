@@ -18,9 +18,10 @@
 // acceptance; [NewObserver] translates engine lifecycle events into
 // OTel metrics; [RegisterStats] publishes Engine.Stats occupancy as
 // gauges; [NewLogHandler] stamps trace_id/span_id onto slog records so
-// handler log lines join their attempt span. Traces, metrics, and logs
-// all label with the same durable.* attribute keys declared in this
-// package.
+// handler log lines join their attempt span; [WithBaggage] relays W3C
+// Baggage through the Run so upstream business context reaches every
+// attempt and its outbound calls. Traces, metrics, and logs all label
+// with the same durable.* attribute keys declared in this package.
 package durableotel
 
 import (
@@ -66,6 +67,9 @@ type config struct {
 	meterProvider   metric.MeterProvider
 	propagator      propagation.TextMapPropagator
 	spanAnnotations []string
+	baggage         bool
+	spanBaggage     []string
+	spanBaggageAll  bool
 }
 
 func newConfig(opts []Option) config {
@@ -76,6 +80,11 @@ func newConfig(opts []Option) config {
 	}
 	for _, o := range opts {
 		o(&cfg)
+	}
+	// Composed after all options so WithBaggage and WithPropagator work
+	// in either order.
+	if cfg.baggage {
+		cfg.propagator = propagation.NewCompositeTextMapPropagator(cfg.propagator, propagation.Baggage{})
 	}
 	return cfg
 }
@@ -103,18 +112,54 @@ func WithMeterProvider(mp metric.MeterProvider) Option {
 // WithPropagator sets the TextMapPropagator shared by WithTraceContext
 // (inject) and Middleware (extract). The default is W3C
 // propagation.TraceContext alone — deliberately not the global
-// propagator, so the pair round-trips with zero global setup. Pass a
-// composite propagator to carry more:
-//
-//	durableotel.WithPropagator(propagation.NewCompositeTextMapPropagator(
-//		propagation.TraceContext{}, propagation.Baggage{}))
-//
-// flows OTel baggage (tenant, order ID) into every attempt alongside
-// the trace context. Inject and extract must be configured alike.
+// propagator, so the pair round-trips with zero global setup. For
+// baggage, prefer WithBaggage over building a composite propagator by
+// hand. Inject and extract must be configured alike.
 func WithPropagator(p propagation.TextMapPropagator) Option {
 	return func(c *config) {
 		if p != nil {
 			c.propagator = p
+		}
+	}
+}
+
+// WithBaggage adds W3C Baggage to the propagator, on top of whatever
+// WithPropagator configured (default TraceContext). Passed to both
+// WithTraceContext and Middleware, it makes the Run a durable relay of
+// baggage: members set upstream of Schedule (an edge gateway, an API
+// layer) persist in the Run's annotations, reappear in every attempt's
+// ctx — retries, unwind, restarts, hours later — and re-propagate on
+// the handler's outbound instrumented calls, exactly as they would have
+// on a live request path:
+//
+//	pipe.Schedule(reqCtx, res, in, durableotel.WithTraceContext(reqCtx,
+//		durableotel.WithBaggage()))
+//	durable.WithMiddleware(durableotel.Middleware(durableotel.WithBaggage()))
+//
+// Handlers read members with baggage.FromContext(ctx); WithSpanBaggage
+// surfaces them on attempt spans. Baggage rides the Run and every
+// downstream hop, so keep it small and free of secrets.
+func WithBaggage() Option {
+	return func(c *config) {
+		c.baggage = true
+	}
+}
+
+// WithSpanBaggage selects baggage member keys Middleware copies onto
+// every attempt span, each under its member key verbatim as the
+// attribute name; with no keys, every member is copied. It implies
+// nothing about propagation — combine with WithBaggage, which is what
+// delivers the members to the attempt in the first place.
+func WithSpanBaggage(keys ...string) Option {
+	return func(c *config) {
+		if len(keys) == 0 {
+			c.spanBaggageAll = true
+			return
+		}
+		for _, k := range keys {
+			if k != "" {
+				c.spanBaggage = append(c.spanBaggage, k)
+			}
 		}
 	}
 }

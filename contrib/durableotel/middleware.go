@@ -7,6 +7,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/baggage"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
@@ -52,8 +53,9 @@ func WithTraceContext(ctx context.Context, opts ...Option) durable.ScheduleOptio
 //     payment-gateway call, say) nest under the attempt correctly.
 //
 // Span names are "<step> <phase>" (low cardinality); the attempt number
-// and Run identity ride as durable.* attributes, and WithSpanAnnotations
-// adds selected Run annotations. A handler error records on the span and
+// and Run identity ride as durable.* attributes, WithSpanAnnotations
+// adds selected Run annotations, and WithSpanBaggage adds baggage
+// members (delivered by WithBaggage). A handler error records on the span and
 // sets Error status; a permanent failure additionally stamps the
 // durable.failure_kind and durable.reason the engine will commit
 // (FailureInfo). An AwaitRun resolution is a park, not a failure, and
@@ -81,6 +83,20 @@ func Middleware(opts ...Option) durable.Middleware {
 			for _, k := range cfg.spanAnnotations {
 				if v, ok := annotations[k]; ok {
 					attrs = append(attrs, attribute.String(k, v))
+				}
+			}
+			if cfg.spanBaggageAll || len(cfg.spanBaggage) > 0 {
+				bag := baggage.FromContext(ctx)
+				if cfg.spanBaggageAll {
+					for _, m := range bag.Members() {
+						attrs = append(attrs, attribute.String(m.Key(), m.Value()))
+					}
+				} else {
+					for _, k := range cfg.spanBaggage {
+						if m := bag.Member(k); m.Key() != "" {
+							attrs = append(attrs, attribute.String(m.Key(), m.Value()))
+						}
+					}
 				}
 			}
 			startOpts := []trace.SpanStartOption{

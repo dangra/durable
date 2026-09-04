@@ -54,8 +54,9 @@ func WithTraceContext(ctx context.Context, opts ...Option) durable.ScheduleOptio
 //
 // Span names are "<step> <phase>" (low cardinality); the attempt number
 // and Run identity ride as durable.* attributes, WithSpanAnnotations
-// adds selected Run annotations, and WithSpanBaggage adds baggage
-// members (delivered by WithBaggage). A handler error records on the span and
+// adds selected Run annotations, and WithSpanBaggage adds whatever
+// baggage members the attempt ctx carries (typically delivered by
+// WithBaggage). A handler error records on the span and
 // sets Error status; a permanent failure additionally stamps the
 // durable.failure_kind and durable.reason the engine will commit
 // (FailureInfo). An AwaitRun resolution is a park, not a failure, and

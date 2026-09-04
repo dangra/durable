@@ -147,9 +147,13 @@ func WithBaggage() Option {
 
 // WithSpanBaggage selects baggage member keys Middleware copies onto
 // every attempt span, each under its member key verbatim as the
-// attribute name; with no keys, every member is copied. It implies
-// nothing about propagation — combine with WithBaggage, which is what
-// delivers the members to the attempt in the first place.
+// attribute name; with no keys, every member is copied. Prefer the
+// explicit-key mode unless the key set is under your control: baggage
+// keys are chosen by upstream callers, and copying all members turns
+// them into dynamic attribute KEYS — an effectively unbounded schema
+// some telemetry backends handle badly. It implies nothing about
+// propagation — combine with WithBaggage, which is the usual way
+// members reach the attempt.
 func WithSpanBaggage(keys ...string) Option {
 	return func(c *config) {
 		if len(keys) == 0 {

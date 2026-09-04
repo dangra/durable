@@ -1,0 +1,57 @@
+// Yesterday's build of the deploy pipeline: same pipeline id, same
+// steps and state shapes — but no canary-analysis step yet. A separate
+// buf module because the two definitions never coexist in one build;
+// the example binary carries both only to simulate a daemon restart
+// onto a new deployment.
+syntax = "proto3";
+
+package legacy.v1;
+
+import "durable/v1/options.proto";
+
+option go_package = "github.com/dangra/durable/examples/release-train/legacypb";
+
+message ProvisionEnv {
+  option (durable.v1.step) = {
+    id: "provision-env/v1"
+    unwind: true
+  };
+
+  string env_id = 1;
+}
+
+message RunMigrations {
+  option (durable.v1.step) = {
+    id: "run-migrations/v1"
+    unwind: true
+  };
+
+  string schema_version = 1;
+}
+
+message ShiftTraffic {
+  option (durable.v1.step) = {id: "shift-traffic/v1"};
+
+  string lb_generation = 1;
+}
+
+message DeployServiceInput {
+  string service = 1;
+  string image = 2;
+}
+
+message DeployServiceOutput {
+  string url = 1;
+}
+
+message DeployService {
+  option (durable.v1.pipeline) = {
+    id: "deploy-service"
+    input: ".legacy.v1.DeployServiceInput"
+    output: ".legacy.v1.DeployServiceOutput"
+
+    steps: ".legacy.v1.ProvisionEnv"
+    steps: ".legacy.v1.RunMigrations"
+    steps: ".legacy.v1.ShiftTraffic"
+  };
+}

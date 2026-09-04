@@ -3,6 +3,8 @@ modules:
   - path: proto
   - path: examples/machines/proto
   - path: examples/tracing-otel/proto
+  - path: examples/release-train/proto
+  - path: examples/release-train/legacyproto
 lint:
   use:
     - STANDARD

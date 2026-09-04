@@ -200,7 +200,8 @@ jobs:
             exit 0
           fi
           # transitions/* gate two-sided at 0.1% (exactly deterministic),
-          # disk bytes (best sample) and allocations at 10%, wall clock
+          # disk bytes (best sample, 15%) and allocations (median, 10%),
+          # wall clock
           # as a 2x smoke alarm on paired per-slice ratios; the
           # thresholds live in internal/perfcompare, which also fails on
           # recorded test failures and on gated metrics missing from

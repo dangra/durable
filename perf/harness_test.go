@@ -5,7 +5,7 @@
 // transitions/run (logical store writes observed via a durable.Observer,
 // exactly deterministic, gated two-sided at 0.1%) and the
 // near-deterministic byte and allocation metrics (diskB/* on the best
-// sample, B/op and allocs/op on the median, gated at 10%). Every scenario
+// sample at 15%, B/op and allocs/op on the median at 10%). Every scenario
 // runs with the observer installed, so observer-path overhead is itself
 // gated. Wall-clock metrics (p50-ms, p99-ms, runs/sec, ns/op) are a 2x
 // smoke alarm over paired per-slice ratios: shared-runner noise defeats

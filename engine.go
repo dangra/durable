@@ -155,11 +155,15 @@ type Engine struct {
 
 	mu            sync.Mutex
 	awaitParked   map[RunID]time.Time
-	pipelines     map[PipelineID]*Definition
-	stepOwner     map[StepID]PipelineID
 	started       bool
 	invalid       map[RunID]*InvalidRunError
 	attemptCancel map[RunID]context.CancelFunc
+
+	// pipelines and stepOwner are written only before Start, under mu
+	// (register rejects later binds); after the Start freeze they are
+	// read without locking.
+	pipelines map[PipelineID]*Definition
+	stepOwner map[StepID]PipelineID
 
 	// waiters broadcasts a Run's terminal/invalid notification to
 	// Run.Wait callers and await watchers; it is internally locked,
@@ -457,9 +461,14 @@ func (e *Engine) processRun(id RunID) (time.Duration, bool) {
 			return 0, false
 		}
 
-		e.mu.Lock()
+		// Lock-free read: pipelines is frozen at Start (register rejects
+		// later binds under mu), and every worker descends from a
+		// mu-synchronized point after that freeze — Start's own recovery
+		// dispatches, or a public entry point that passed an isStarted
+		// check under mu (Schedule, Cancel, ...) before dispatching,
+		// directly or through the wakes and kicks of workers so rooted.
+		// The last write therefore happens-before every read here.
 		def := e.pipelines[rec.PipelineID]
-		e.mu.Unlock()
 		if def == nil {
 			e.markInvalid(rec, "", fmt.Sprintf("pipeline %q is not registered with the current deployment", rec.PipelineID))
 			return 0, false

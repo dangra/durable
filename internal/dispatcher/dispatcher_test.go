@@ -63,13 +63,20 @@ func TestSingleFlight(t *testing.T) {
 		go func() { defer wg.Done(); h.d.Dispatch("k", 0) }()
 	}
 	wg.Wait()
+	// Let at least one run happen before shutdown: a cancel racing the
+	// first worker's semaphore select can legitimately win, and zero
+	// runs would then be correct behavior, not a single-flight failure.
+	deadline := time.Now().Add(5 * time.Second)
+	for runs.Load() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("no runs happened")
+		}
+		time.Sleep(time.Millisecond)
+	}
 	h.cancel()
 	h.wg.Wait()
 	if maxSeen.Load() != 1 {
 		t.Fatalf("max concurrent workers for one key = %d", maxSeen.Load())
-	}
-	if runs.Load() == 0 {
-		t.Fatal("no runs happened")
 	}
 }
 

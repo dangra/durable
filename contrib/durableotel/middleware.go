@@ -23,11 +23,42 @@ import (
 // only bridge:
 //
 //	pipe.Schedule(reqCtx, resource, input, durableotel.WithTraceContext(reqCtx))
+//
+// For injection on every Schedule without per-call-site options, prefer
+// Annotator.
 func WithTraceContext(ctx context.Context, opts ...Option) durable.ScheduleOption {
 	cfg := newConfig(opts)
+	return durable.WithAnnotations(inject(ctx, cfg))
+}
+
+// Annotator returns a durable.ScheduleAnnotator that injects the
+// scheduling ctx's trace context (and baggage, with WithBaggage) into
+// every Run's annotations. Installed once at engine construction, it
+// removes the per-call-site burden entirely — a pipeline handed to a
+// subsystem propagates whatever already rides the ctx the subsystem
+// passes to Schedule anyway:
+//
+//	engine := durable.NewEngine(store,
+//		durable.WithMiddleware(durableotel.Middleware(durableotel.WithBaggage())),
+//		durable.WithScheduleAnnotator(durableotel.Annotator(durableotel.WithBaggage())))
+//	// anywhere, with nothing to remember:
+//	pipe.Schedule(reqCtx, resource, input)
+//
+// An explicit WithAnnotations or WithTraceContext at a call site still
+// wins on key conflicts. Configure the same propagation options here
+// and on Middleware.
+func Annotator(opts ...Option) durable.ScheduleAnnotator {
+	cfg := newConfig(opts)
+	return func(ctx context.Context) map[string]string {
+		return inject(ctx, cfg)
+	}
+}
+
+// inject runs the configured propagator over ctx into a fresh carrier.
+func inject(ctx context.Context, cfg config) propagation.MapCarrier {
 	carrier := propagation.MapCarrier{}
 	cfg.propagator.Inject(ctx, carrier)
-	return durable.WithAnnotations(carrier)
+	return carrier
 }
 
 // Middleware returns a durable.Middleware that wraps every operation

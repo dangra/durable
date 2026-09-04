@@ -86,6 +86,30 @@ func WithLogger(l *slog.Logger) Option {
 	}
 }
 
+// ScheduleAnnotator derives Run annotations from the context a caller
+// passes to Schedule. See WithScheduleAnnotator.
+type ScheduleAnnotator func(context.Context) map[string]string
+
+// WithScheduleAnnotator installs an engine-wide annotator: on every
+// Schedule, it derives annotations from the caller's ctx and merges
+// them in before the call's own ScheduleOptions, so an explicit
+// WithAnnotations at the call site wins on key conflicts. Repeatable —
+// annotators run in installation order, later keys winning.
+//
+// It exists so propagation intent is declared once, at engine
+// construction, instead of remembered at every Schedule call site: a
+// pipeline handed to a subsystem propagates the trace context and
+// baggage already riding the ctx the subsystem passes anyway (e.g.
+// contrib/durableotel's Annotator). Returned maps are copied; a nil or
+// empty result contributes nothing.
+func WithScheduleAnnotator(a ScheduleAnnotator) Option {
+	return func(e *Engine) {
+		if a != nil {
+			e.annotators = append(e.annotators, a)
+		}
+	}
+}
+
 // WithConcurrencyClass sets the capacity of a named concurrency class:
 // at most capacity operations of steps declaring the class execute
 // simultaneously. A class declared in step options but never configured
@@ -146,6 +170,7 @@ type Engine struct {
 	retention       RetentionPolicy
 	middleware      []Middleware
 	observers       []Observer
+	annotators      []ScheduleAnnotator
 
 	classCapacity map[string]int
 

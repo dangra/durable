@@ -21,7 +21,7 @@ because that is the point:
 ```mermaid
 flowchart LR
     subgraph train["release-train (parent run)"]
-        direction LR
+        direction TB
         P[plan/v1] --> SW[ship-web/v1] --> SA[ship-api/v1]
     end
 
@@ -35,8 +35,8 @@ flowchart LR
         A2[provision-env/v1] --> B2[run-migrations/v1] --> C2([canary-analysis/v1]) --> D2[shift-traffic/v1]
     end
 
-    SW -. "schedules + AwaitRun" .-> deployV1
-    SA -. "schedules + AwaitRun" .-> deployV2
+    SW -. "schedules + AwaitRun" .-> A1
+    SA -. "schedules + AwaitRun" .-> A2
 
     style C2 fill:#e8f5e9,stroke:#2e7d32
 ```

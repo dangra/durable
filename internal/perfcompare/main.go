@@ -58,8 +58,12 @@ func classify(unit string) class {
 	// commit makes page accounting timing-dependent one-sidedly —
 	// scheduling noise only ever reduces coalescing and adds bytes — so
 	// the smallest sample is the closest to the deterministic ideal.
+	// 15%: best-sample floors of identical code have measured 11.8%
+	// apart on the recovery scenario, whose coalescing modes are the
+	// widest; real write-amplification regressions this gate exists for
+	// measured 2x.
 	case "diskB/run", "diskB/attempt", "diskB/cycle":
-		return class{threshold: 0.10, bestOf: true}
+		return class{threshold: 0.15, bestOf: true}
 	// Allocation counters: near-deterministic, small timing wiggle.
 	case "B/op", "allocs/op":
 		return class{threshold: 0.10}

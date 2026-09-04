@@ -79,7 +79,7 @@ func TestClassify(t *testing.T) {
 	}{
 		{"transitions/run", class{threshold: 0.001, twoSided: true}},
 		{"transitions/cycle", class{threshold: 0.001, twoSided: true}},
-		{"diskB/run", class{threshold: 0.10, bestOf: true}},
+		{"diskB/run", class{threshold: 0.15, bestOf: true}},
 		{"B/op", class{threshold: 0.10}},
 		{"allocs/op", class{threshold: 0.10}},
 		{"ns/op", class{threshold: 1.00, pairedThreshold: 1.00, bestOf: true}},
@@ -195,7 +195,7 @@ BenchmarkA-4  1  105 ns/op  15.00 transitions/run  1250 diskB/run  390.0 runs/se
 BenchmarkA-4  1   99 ns/op  15.00 transitions/run  1210 diskB/run  405.0 runs/sec  50000 B/op
 `,
 			regressions: 1,
-			want:        []string{"diskB/run | 1000 | 1200 | +20.0% | **REGRESSION** (>10%)"},
+			want:        []string{"diskB/run | 1000 | 1200 | +20.0% | **REGRESSION** (>15%)"},
 		},
 		{
 			name: "allocation gate at 10 percent on the median",

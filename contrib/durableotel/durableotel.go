@@ -128,9 +128,14 @@ func WithPropagator(p propagation.TextMapPropagator) Option {
 //		map[string]string{"machine.id": id}))
 //	durableotel.Middleware(durableotel.WithSpanAnnotations("machine.id"))
 //
-// Keys absent from a Run's annotations are skipped.
+// Keys absent from a Run's annotations are skipped, as are empty key
+// names — an empty attribute key is invalid telemetry.
 func WithSpanAnnotations(keys ...string) Option {
 	return func(c *config) {
-		c.spanAnnotations = append(c.spanAnnotations, keys...)
+		for _, k := range keys {
+			if k != "" {
+				c.spanAnnotations = append(c.spanAnnotations, k)
+			}
+		}
 	}
 }

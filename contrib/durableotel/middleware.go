@@ -101,7 +101,13 @@ func Middleware(opts ...Option) durable.Middleware {
 				// back to the engine untouched.
 				if p := recover(); p != nil {
 					span.SetAttributes(AttrPanicked.Bool(true))
-					span.RecordError(fmt.Errorf("handler panic: %v", p), trace.WithStackTrace(true))
+					// A panic(err) records the original error so
+					// exception.type reflects it; other values format.
+					err, ok := p.(error)
+					if !ok {
+						err = fmt.Errorf("handler panic: %v", p)
+					}
+					span.RecordError(err, trace.WithStackTrace(true))
 					span.SetStatus(codes.Error, "handler panic")
 					panic(p)
 				}

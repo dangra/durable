@@ -63,15 +63,6 @@ jobs:
             echo "::error::internal primitive coverage is $total, want 100.0%"
             exit 1
           fi
-      # Ten seconds per target is a smoke pass over the invariant
-      # checkers; long fuzz sessions run locally.
-      - name: Fuzz smoke (primitives)
-        run: |
-          go test -fuzz=FuzzReconcile -fuzztime=10s ./internal/ledger/
-          go test -fuzz=FuzzOps -fuzztime=10s ./internal/tokenpool/
-          go test -fuzz=FuzzOps -fuzztime=10s ./internal/watchset/
-          go test -fuzz=FuzzRoundTrip -fuzztime=10s ./internal/storagepb/
-          go test -run xxx -fuzz=FuzzStoreContract -fuzztime=10s ./bboltstore/
       - name: Benchmarks compile and run once
         run: go test -run xxx -bench . -benchtime 1x ./...
       - name: Example smoke test
@@ -95,6 +86,29 @@ jobs:
           go vet ./...
           go test -race -count=1 ./...
           go run .
+
+  # Half the old Build & test wall time was fuzzing; it gates nothing
+  # downstream, so it runs as its own parallel lane.
+  fuzz:
+    name: Fuzz smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      # Ten seconds per target is a smoke pass over the invariant
+      # checkers; long fuzz sessions run locally.
+      - name: Fuzz smoke (primitives)
+        run: |
+          go test -fuzz=FuzzReconcile -fuzztime=10s ./internal/ledger/
+          go test -fuzz=FuzzOps -fuzztime=10s ./internal/tokenpool/
+          go test -fuzz=FuzzOps -fuzztime=10s ./internal/watchset/
+          go test -fuzz=FuzzRoundTrip -fuzztime=10s ./internal/storagepb/
+          go test -run xxx -fuzz=FuzzStoreContract -fuzztime=10s ./bboltstore/
 
   staticcheck:
     name: Staticcheck

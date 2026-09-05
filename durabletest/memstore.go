@@ -1,5 +1,6 @@
 // Package durabletest provides test doubles for the durable runtime: an
-// in-memory Store and a deterministic fake Clock.
+// in-memory Store, a deterministic fake Clock, and a fake Invocation
+// (NewInvocation) for unit-testing handlers without an engine.
 package durabletest
 
 import (

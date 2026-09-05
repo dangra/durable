@@ -203,3 +203,7 @@ Part of the [`durable` specification](README.md). This list is append-only; inva
 100. A `Fail` wrapping a `*PreemptedError` is attributed as cancellation only on Engine-side evidence of the preemption.
 
 101. Shutdown starts no new attempt; in-flight attempts drain for the configured timeout and are preempted only at its deadline.
+
+102. `Engine.Bind` is the single validator of a definition: a malformed definition is a `Bind` error, never a construction panic, and `Bind` after `Start` returns `ErrStarted`.
+
+103. Handler code depends only on the `durable` package, and the Engine reads a handler's result through the same exported classifiers middleware uses; the handler contract carries no engine-only plumbing.

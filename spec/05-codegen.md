@@ -56,6 +56,12 @@ Published protobuf extensions MUST use globally allocated extension numbers.
 - typed Results,
 - runtime adapters.
 
+Generated code imports three packages and is the only code that does:
+`durable` for the handler contract its typed Invocations wrap,
+`pipelinedef` for the `Definition` its constructor builds and the step
+references it exports, and `engine` for `Bind`, `Pipeline`, `Run`,
+`Result`, and `Status` beneath its typed handles.
+
 ---
 
 ## Generation-time validation
@@ -79,6 +85,12 @@ Generated APIs MUST make these compile-time errors where possible:
 - missing required `Unwind`,
 - invalid Reducer signature,
 - passing a stateless `StepRef` to `State`.
+
+The structural checks (missing or duplicate identifiers, empty
+Pipelines, a step without a forward adapter, an unwind declaration
+without its adapter) are enforced again by `engine.Bind` at runtime, so
+a hand-rolled `pipelinedef.Definition` gets the same validation as a
+generated one — as an error, never a panic.
 
 ---
 

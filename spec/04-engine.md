@@ -332,7 +332,8 @@ running
 
 During configuration:
 
-- Pipeline definitions bind,
+- Pipeline definitions bind through `Engine.Bind`, which validates
+  each one and rejects a malformed definition with an error,
 - Step handlers register,
 - Reducers register.
 
@@ -551,7 +552,8 @@ This differs from Reducer panic because a handler operation explicitly supports 
 
 ## Middleware
 
-The uniform type-erased operation is exposed as:
+The uniform type-erased operation is exposed by the `durable` package,
+since middleware is written in handler vocabulary:
 
 ```go
 type Handler func(ctx context.Context, inv Invocation) (proto.Message, error)
@@ -678,7 +680,11 @@ The Clock governs retention timing, so sweeps are deterministic under
 
 ## Internal type erasure
 
-The Engine core SHOULD remain non-generic.
+The Engine core SHOULD remain non-generic. The erased shape is
+`pipelinedef.Config`, and the Engine reads a handler's result only
+through the exported classifiers middleware uses (`AwaitRequest`,
+`AwaitTimeout`, `FailureInfo`, `FailureCause`, `FailureReason`), so the
+`durable` package holds no engine-only plumbing.
 
 Generated adapters may erase typed application values into:
 

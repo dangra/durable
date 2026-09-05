@@ -1,6 +1,6 @@
 # `durable`: Durable Linear Pipelines with Unwind Semantics
 
-**Status:** Draft 1.2  
+**Status:** Draft 1.3  
 **Target:** Go 1.27+  
 **Persistence:** Local transactional database such as SQLite or bbolt  
 **Schema and code generation:** Protocol Buffers, Buf, and `protoc-gen-durable`
@@ -102,6 +102,42 @@ The Engine:
 A corrected future deployment MAY make the Run valid and runnable again.
 
 Invalidity is an operational runtime condition, not a Pipeline business failure.
+
+---
+
+## Package layout
+
+The module is one package per audience plus one shared leaf, and every
+import arrow points from the more specific package to the more general
+one:
+
+```text
+kernel        identities, phases, outcomes, parks, failure records
+   ^               ^                ^
+durable       storedriver        observe
+   ^          (store SPI)        (lifecycle events)
+pipelinedef   type-erased definitions built by generated code
+   ^
+engine        the runtime: New, Bind, Schedule, Run, Result, Status
+   ^
+bboltstore, durabletest, contrib/durableotel, generated code
+```
+
+- `durable` is the handler contract and nothing else: `Invocation`,
+  `Failure`, `Fail`, the `Await*` resolutions, `Handler` and
+  `Middleware` with their classifiers, the step references, and
+  aliases of the `kernel` vocabulary. Handler code imports only this.
+- `engine` is the wiring side. Its exported signatures use the
+  `durable` aliases, so a `Status.RunID` reads as `durable.RunID`.
+- `pipelinedef` is what generated code builds and `Engine.Bind`
+  validates. Application code does not import it.
+- `kernel` has no audience of its own; it exists so that `storedriver`
+  and `observe` do not depend on the handler contract, and the handler
+  contract does not depend on the store SPI.
+
+Normative identifiers in this specification are qualified by package
+where it matters; unqualified names (`Invocation`, `Fail`, `Wake`) are
+the `durable` package's.
 
 ---
 

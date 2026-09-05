@@ -4,7 +4,7 @@ This is the middle layer between the [README](../README.md) and the
 [specification](../spec/README.md): every feature, introduced as an
 operational need, with enough code to use it and links into the spec
 for the full rules. The runnable versions of most snippets live in the
-[godoc examples](https://pkg.go.dev/github.com/dangra/durable#pkg-examples).
+[godoc examples](https://pkg.go.dev/github.com/dangra/durable/engine#pkg-examples).
 
 The running example is a deployment platform: a `deploy-service`
 pipeline that provisions an environment, runs database migrations, and
@@ -103,6 +103,14 @@ run, created, err := deploy.Schedule(ctx, "service-web", &deploypb.DeployService
 })
 result, err := run.Wait(ctx)
 ```
+
+Two packages appear here and they stay apart throughout: `durable` is
+the handler contract (`durable.Fail`, `durable.AwaitRun`, the
+`Invocation` a handler receives), and `engine` is the wiring side
+(`engine.New`, the `With*` options, `Bind`, `Schedule`, `Wait`). A file
+that implements steps imports `durable`; the file that starts the
+daemon imports `engine`; nothing else imports the generated package's
+dependencies.
 
 `"service-web"` is the **resource**: the thing the run is about. At
 most one run of a pipeline is active per resource at a time — more on
@@ -522,7 +530,7 @@ demonstrates it end to end.
 
 ## Where next
 
-- [Godoc examples](https://pkg.go.dev/github.com/dangra/durable#pkg-examples) — runnable versions of this tour's snippets
+- [Godoc examples](https://pkg.go.dev/github.com/dangra/durable/engine#pkg-examples) — runnable versions of this tour's snippets
 - [examples/release-train](../examples/release-train/) — the flagship demo: one release living through a crash, a definition change, awaited children, and a cascading cancellation
 - [examples/machines](../examples/machines/) — a complete generated pipeline
 - [examples/tracing-otel](../examples/tracing-otel/) — the observability story, end to end

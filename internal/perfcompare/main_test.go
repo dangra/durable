@@ -83,6 +83,7 @@ func TestClassify(t *testing.T) {
 		{"diskB/run", class{threshold: 0.15, bestOf: true}},
 		{"B/op", class{threshold: 0.10}},
 		{"allocs/op", class{threshold: 0.10}},
+		{"reads/child", class{threshold: 0.50, bestOf: true}},
 		{"ns/op", class{threshold: 1.00, pairedThreshold: 1.00, bestOf: true, wall: true, hardThreshold: 4.00}},
 		{"p99-ms", class{threshold: 1.00, pairedThreshold: 1.00, bestOf: true, wall: true, hardThreshold: 4.00}},
 		{"runs/sec", class{threshold: 0.50, pairedThreshold: 0.50, lowerIsBad: true, bestOf: true, wall: true, hardThreshold: 0.80}},

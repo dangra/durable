@@ -78,6 +78,13 @@ func classify(unit string) class {
 	// Allocation counters: near-deterministic, small timing wiggle.
 	case "B/op", "allocs/op":
 		return class{threshold: 0.10}
+	// Logical store reads per unit of coordination work: near-
+	// deterministic, with timing noise one-sided downward (coalesced
+	// wakes skip gate runs), so the smallest sample is the ideal. The
+	// regressions this guards — a gate going quadratic in its fan-in —
+	// measure in multiples, not percent.
+	case "reads/child":
+		return class{threshold: 0.50, bestOf: true}
 	// Wall clock: a 2x smoke alarm, deliberately loose, and gating only
 	// when corroborated. Eight gate failures (six at tighter settings —
 	// 25% and 50%, unpaired and paired, interleaved and not — and two

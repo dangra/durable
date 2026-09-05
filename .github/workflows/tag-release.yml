@@ -1,0 +1,60 @@
+name: Tag release
+
+# The tag phase of a lockstep release: at a commit whose VERSION and
+# require lines already name the version (the merged "Release vX.Y.Z" PR
+# from scripts/release.sh prepare), tag the core and every contrib module,
+# publish the GitHub release, and prove the modules resolve for consumers
+# without the in-tree replace directives. See docs/releasing.md.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to tag (vX.Y.Z or vX.Y.Z-pre); must equal VERSION at the commit
+        required: true
+        type: string
+      commit:
+        description: Commit to tag (default master HEAD)
+        required: false
+        type: string
+        default: master
+      dry_run:
+        description: Run every check but create nothing
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write # tags and the release
+  checks: read # the CI-green gate reads the commit's check runs
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    name: Tag release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.commit }}
+          fetch-depth: 0
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+      - name: Tag, release, verify
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          flags=()
+          if [ "${{ inputs.dry_run }}" = "true" ]; then flags=(--dry-run); fi
+          scripts/release.sh tag "${{ inputs.version }}" "${flags[@]}"

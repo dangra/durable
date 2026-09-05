@@ -89,6 +89,19 @@ jobs:
 
   # Half the old Build & test wall time was fuzzing; it gates nothing
   # downstream, so it runs as its own parallel lane.
+  release-versions:
+    name: Release versions
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Lockstep invariant: every in-tree require of an in-tree module
+      # equals VERSION and is replaced by a local path. See
+      # docs/releasing.md.
+      - name: Verify release versions
+        run: scripts/release.sh verify
+
   fuzz:
     name: Fuzz smoke
     runs-on: ubuntu-latest

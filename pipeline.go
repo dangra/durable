@@ -3,6 +3,7 @@ package durable
 import (
 	"context"
 	"fmt"
+	"github.com/dangra/durable/storedriver"
 	"time"
 	"unicode/utf8"
 
@@ -122,7 +123,7 @@ func (p *Pipeline) Schedule(ctx context.Context, resource ResourceID, input prot
 	}
 
 	now := e.clock.Now()
-	rec := &RunRecord{
+	rec := &storedriver.RunRecord{
 		RunID:       newRunID(now),
 		PipelineID:  p.def.ID(),
 		ResourceID:  resource,

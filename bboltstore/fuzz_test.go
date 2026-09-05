@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/dangra/durable/storedriver"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -38,7 +39,7 @@ type canonRecord struct {
 
 type canonStep struct {
 	ID     string
-	Record durable.StepRecord
+	Record storedriver.StepRecord
 }
 
 type canonCancel struct {
@@ -65,7 +66,7 @@ func canonFailure(f durable.FailureRecord) durable.FailureRecord {
 	return f
 }
 
-func canonicalize(rec *durable.RunRecord) *canonRecord {
+func canonicalize(rec *storedriver.RunRecord) *canonRecord {
 	if rec == nil {
 		return nil
 	}
@@ -161,14 +162,14 @@ func FuzzStoreContract(f *testing.F) {
 			switch op % 6 {
 			case 0: // CreateRun
 				now := next()
-				rec := &durable.RunRecord{
+				rec := &storedriver.RunRecord{
 					RunID:      id,
 					PipelineID: pipelines[int(arg/4)%len(pipelines)],
 					ResourceID: resources[int(arg/8)%len(resources)],
 					Group:      groups[int(arg/16)%len(groups)],
 					Input:      normBytes([]byte{arg}),
 					Phase:      durable.PhaseForward,
-					Steps:      map[durable.StepID]*durable.StepRecord{},
+					Steps:      map[durable.StepID]*storedriver.StepRecord{},
 					CreatedAt:  now,
 					UpdatedAt:  now,
 				}
@@ -199,7 +200,7 @@ func FuzzStoreContract(f *testing.F) {
 				if arg%2 == 1 {
 					phase = durable.PhaseUnwind
 				}
-				tr := durable.Transition{Cursor: durable.Cursor{
+				tr := storedriver.Transition{Cursor: storedriver.Cursor{
 					Phase:     phase,
 					UpdatedAt: now,
 				}}
@@ -212,13 +213,13 @@ func FuzzStoreContract(f *testing.F) {
 					tr.Cursor.NextAttemptAt = now.Add(time.Minute)
 				}
 				if arg%4 == 0 {
-					tr.Steps = []durable.StepWrite{{
+					tr.Steps = []storedriver.StepWrite{{
 						StepID: steps[int(arg/2)%len(steps)],
-						Record: durable.StepRecord{
-							ForwardStatus:   durable.OpStatus(arg % 4),
+						Record: storedriver.StepRecord{
+							ForwardStatus:   storedriver.OpStatus(arg % 4),
 							ForwardAttempts: uint64(arg % 7),
 							State:           normBytes([]byte{arg, arg}),
-							UnwindStatus:    durable.OpStatus((arg / 4) % 4),
+							UnwindStatus:    storedriver.OpStatus((arg / 4) % 4),
 							UnwindAttempts:  uint64(arg % 3),
 						},
 					}}
@@ -248,7 +249,7 @@ func FuzzStoreContract(f *testing.F) {
 				// reservation are outside the Store contract.
 				if prev, err := ms.GetRun(ctx, id); err == nil {
 					for sid, sr := range prev.Steps {
-						if sr.ForwardStatus != durable.OpUnresolved && sr.UnwindStatus != durable.OpUnresolved {
+						if sr.ForwardStatus != storedriver.OpUnresolved && sr.UnwindStatus != storedriver.OpUnresolved {
 							continue
 						}
 						if sid == tr.Cursor.StepID {
@@ -262,7 +263,7 @@ func FuzzStoreContract(f *testing.F) {
 							}
 						}
 						if !covered {
-							tr.Steps = append(tr.Steps, durable.StepWrite{StepID: sid, Record: *sr})
+							tr.Steps = append(tr.Steps, storedriver.StepWrite{StepID: sid, Record: *sr})
 						}
 					}
 				}
@@ -271,7 +272,7 @@ func FuzzStoreContract(f *testing.F) {
 				mustEqual("ApplyTransition error", berr, merr)
 				compareRun(id)
 			case 2: // RequestCancel
-				req := durable.CancelRequest{Cause: "cause", At: next()}
+				req := storedriver.CancelRequest{Cause: "cause", At: next()}
 				bacc, berr := bs.RequestCancel(ctx, id, req)
 				macc, merr := ms.RequestCancel(ctx, id, req)
 				mustEqual("RequestCancel error", berr, merr)
@@ -308,7 +309,7 @@ func FuzzStoreContract(f *testing.F) {
 		bn, berr := bs.ListNonterminal(ctx)
 		mn, merr := ms.ListNonterminal(ctx)
 		mustEqual("ListNonterminal error", berr, merr)
-		key := func(rs []*durable.RunRecord) map[string]*canonRecord {
+		key := func(rs []*storedriver.RunRecord) map[string]*canonRecord {
 			out := map[string]*canonRecord{}
 			for _, rr := range rs {
 				out[string(rr.RunID)] = canonicalize(rr)

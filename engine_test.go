@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/dangra/durable/storedriver"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -47,7 +48,7 @@ func stateless(id durable.StepID, run func(context.Context, *durable.Invocation)
 	}
 }
 
-func startEngine(t *testing.T, store durable.Store, defs ...*durable.Definition) (*durable.Engine, []*durable.Pipeline) {
+func startEngine(t *testing.T, store storedriver.Store, defs ...*durable.Definition) (*durable.Engine, []*durable.Pipeline) {
 	t.Helper()
 	e := durable.NewEngine(store, fastRetry, durable.WithRecoveryBackoff(0))
 	var pipes []*durable.Pipeline
@@ -410,9 +411,9 @@ func TestRecoveryResumesAcrossEngines(t *testing.T) {
 
 // seedRun persists a nonterminal record with pre-existing execution facts,
 // simulating a Run started under an earlier deployment.
-func seedRun(t *testing.T, store durable.Store, pipeline durable.PipelineID, steps map[durable.StepID]*durable.StepRecord) durable.RunID {
+func seedRun(t *testing.T, store storedriver.Store, pipeline durable.PipelineID, steps map[durable.StepID]*storedriver.StepRecord) durable.RunID {
 	t.Helper()
-	rec := &durable.RunRecord{
+	rec := &storedriver.RunRecord{
 		RunID:      durable.RunID("seeded-" + t.Name()),
 		PipelineID: pipeline,
 		ResourceID: "seed-resource",
@@ -429,8 +430,8 @@ func seedRun(t *testing.T, store durable.Store, pipeline durable.PipelineID, ste
 
 func TestRetiredStepIsBypassed(t *testing.T) {
 	store := durabletest.NewMemStore()
-	runID := seedRun(t, store, "evolving", map[durable.StepID]*durable.StepRecord{
-		"a/v1": {ForwardStatus: durable.OpSucceeded},
+	runID := seedRun(t, store, "evolving", map[durable.StepID]*storedriver.StepRecord{
+		"a/v1": {ForwardStatus: storedriver.OpSucceeded},
 	})
 
 	var bRan, cRan atomic.Bool
@@ -472,9 +473,9 @@ func TestRetiredStepIsBypassed(t *testing.T) {
 
 func TestRetiredUnresolvedStepContinues(t *testing.T) {
 	store := durabletest.NewMemStore()
-	runID := seedRun(t, store, "evolving", map[durable.StepID]*durable.StepRecord{
-		"a/v1": {ForwardStatus: durable.OpSucceeded},
-		"b/v1": {ForwardStatus: durable.OpUnresolved, ForwardAttempts: 2},
+	runID := seedRun(t, store, "evolving", map[durable.StepID]*storedriver.StepRecord{
+		"a/v1": {ForwardStatus: storedriver.OpSucceeded},
+		"b/v1": {ForwardStatus: storedriver.OpUnresolved, ForwardAttempts: 2},
 	})
 
 	var bAttempt atomic.Uint64
@@ -506,9 +507,9 @@ func TestRetiredUnresolvedStepContinues(t *testing.T) {
 
 func TestUnresolvedStepRemovedIsInvalid(t *testing.T) {
 	store := durabletest.NewMemStore()
-	runID := seedRun(t, store, "evolving", map[durable.StepID]*durable.StepRecord{
-		"a/v1": {ForwardStatus: durable.OpSucceeded},
-		"b/v1": {ForwardStatus: durable.OpUnresolved, ForwardAttempts: 1},
+	runID := seedRun(t, store, "evolving", map[durable.StepID]*storedriver.StepRecord{
+		"a/v1": {ForwardStatus: storedriver.OpSucceeded},
+		"b/v1": {ForwardStatus: storedriver.OpUnresolved, ForwardAttempts: 1},
 	})
 
 	def := durable.NewDefinition(durable.DefinitionConfig{
@@ -1377,8 +1378,8 @@ func TestRetentionReapsOnlyOldTerminalRuns(t *testing.T) {
 
 	// A nonterminal seeded run belonging to an unregistered pipeline: it
 	// will be invalid under this deployment and must survive any sweep.
-	invalidID := seedRun(t, store, "ghost-pipeline", map[durable.StepID]*durable.StepRecord{
-		"g/v1": {ForwardStatus: durable.OpUnresolved, ForwardAttempts: 1},
+	invalidID := seedRun(t, store, "ghost-pipeline", map[durable.StepID]*storedriver.StepRecord{
+		"g/v1": {ForwardStatus: storedriver.OpUnresolved, ForwardAttempts: 1},
 	})
 
 	blocked := make(chan struct{})

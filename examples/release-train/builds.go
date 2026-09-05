@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"github.com/dangra/durable/storedriver"
 	"log/slog"
 	"time"
 
@@ -23,7 +24,7 @@ func fast() durable.Option {
 // yesterdaysBuild binds the legacy deploy pipeline (no canary step) and
 // the release train, and returns the started engine plus the train
 // pipeline handle.
-func yesterdaysBuild(ctx context.Context, store durable.Store, w *world) (*durable.Engine, *releasepb.ReleaseTrainPipeline, error) {
+func yesterdaysBuild(ctx context.Context, store storedriver.Store, w *world) (*durable.Engine, *releasepb.ReleaseTrainPipeline, error) {
 	engine := durable.NewEngine(store, quiet(), fast(), durable.WithRecoveryBackoff(0))
 	deploy, err := legacypb.NewDeployService(
 		&legacyProvisionEnv{w}, &legacyRunMigrations{w}, &legacyShiftTraffic{w}, reduceLegacyDeploy,
@@ -58,7 +59,7 @@ func yesterdaysBuild(ctx context.Context, store durable.Store, w *world) (*durab
 
 // todaysBuild binds the current deploy pipeline — same pipeline id,
 // canary-analysis step added — and the same release train.
-func todaysBuild(ctx context.Context, store durable.Store, w *world) (*durable.Engine, *releasepb.ReleaseTrainPipeline, *releasepb.DeployServicePipeline, error) {
+func todaysBuild(ctx context.Context, store storedriver.Store, w *world) (*durable.Engine, *releasepb.ReleaseTrainPipeline, *releasepb.DeployServicePipeline, error) {
 	engine := durable.NewEngine(store, quiet(), fast(), durable.WithRecoveryBackoff(0))
 	deploy, err := releasepb.NewDeployService(
 		&provisionEnv{w}, &runMigrations{w}, &canaryAnalysis{w}, &shiftTraffic{w}, reduceDeploy,

@@ -27,7 +27,7 @@ var ShiftTrafficStep = durable.NewStateStepRef("shift-traffic/v1", func() *Shift
 
 // ProvisionEnvInvocation is passed to ProvisionEnvHandler methods.
 type ProvisionEnvInvocation struct {
-	core *durable.Invocation
+	core durable.Invocation
 }
 
 func (inv ProvisionEnvInvocation) PipelineID() durable.PipelineID { return inv.core.PipelineID() }
@@ -91,7 +91,7 @@ func (f ProvisionEnvFuncs) Unwind(ctx context.Context, inv ProvisionEnvInvocatio
 
 // RunMigrationsInvocation is passed to RunMigrationsHandler methods.
 type RunMigrationsInvocation struct {
-	core *durable.Invocation
+	core durable.Invocation
 }
 
 func (inv RunMigrationsInvocation) PipelineID() durable.PipelineID { return inv.core.PipelineID() }
@@ -155,7 +155,7 @@ func (f RunMigrationsFuncs) Unwind(ctx context.Context, inv RunMigrationsInvocat
 
 // CanaryAnalysisInvocation is passed to CanaryAnalysisHandler methods.
 type CanaryAnalysisInvocation struct {
-	core *durable.Invocation
+	core durable.Invocation
 }
 
 func (inv CanaryAnalysisInvocation) PipelineID() durable.PipelineID { return inv.core.PipelineID() }
@@ -211,7 +211,7 @@ func (f CanaryAnalysisFunc) Run(ctx context.Context, inv CanaryAnalysisInvocatio
 
 // ShiftTrafficInvocation is passed to ShiftTrafficHandler methods.
 type ShiftTrafficInvocation struct {
-	core *durable.Invocation
+	core durable.Invocation
 }
 
 func (inv ShiftTrafficInvocation) PipelineID() durable.PipelineID { return inv.core.PipelineID() }
@@ -272,12 +272,12 @@ type DeployServiceReducer func(*DeployService) *DeployServiceOutput
 
 var deployServiceViews sync.Map
 
-func (x *DeployService) durableView() *durable.ReduceView {
+func (x *DeployService) durableView() durable.ReduceView {
 	v, ok := deployServiceViews.Load(x)
 	if !ok {
 		panic("releasepb: DeployService is only usable as a reducer view during reduction")
 	}
-	return v.(*durable.ReduceView)
+	return v.(durable.ReduceView)
 }
 
 // Input returns a defensive caller-owned copy of the immutable pipeline input.
@@ -309,7 +309,7 @@ func NewDeployService(
 	return &DeployServiceDefinition{def: durable.NewDefinition(durable.DefinitionConfig{
 		ID:       "deploy-service",
 		NewInput: func() proto.Message { return &DeployServiceInput{} },
-		Reduce: func(view *durable.ReduceView) proto.Message {
+		Reduce: func(view durable.ReduceView) proto.Message {
 			x := &DeployService{}
 			deployServiceViews.Store(x, view)
 			defer deployServiceViews.Delete(x)
@@ -320,14 +320,14 @@ func NewDeployService(
 				ID:       "provision-env/v1",
 				Unwind:   true,
 				HasState: true,
-				Run: func(ctx context.Context, core *durable.Invocation) (proto.Message, error) {
+				Run: func(ctx context.Context, core durable.Invocation) (proto.Message, error) {
 					state, err := provisionEnv.Run(ctx, ProvisionEnvInvocation{core: core})
 					if state == nil {
 						return nil, err
 					}
 					return state, err
 				},
-				UnwindFunc: func(ctx context.Context, core *durable.Invocation, failure durable.Failure) error {
+				UnwindFunc: func(ctx context.Context, core durable.Invocation, failure durable.Failure) error {
 					return provisionEnv.Unwind(ctx, ProvisionEnvInvocation{core: core}, failure)
 				},
 			},
@@ -335,21 +335,21 @@ func NewDeployService(
 				ID:       "run-migrations/v1",
 				Unwind:   true,
 				HasState: true,
-				Run: func(ctx context.Context, core *durable.Invocation) (proto.Message, error) {
+				Run: func(ctx context.Context, core durable.Invocation) (proto.Message, error) {
 					state, err := runMigrations.Run(ctx, RunMigrationsInvocation{core: core})
 					if state == nil {
 						return nil, err
 					}
 					return state, err
 				},
-				UnwindFunc: func(ctx context.Context, core *durable.Invocation, failure durable.Failure) error {
+				UnwindFunc: func(ctx context.Context, core durable.Invocation, failure durable.Failure) error {
 					return runMigrations.Unwind(ctx, RunMigrationsInvocation{core: core}, failure)
 				},
 			},
 			{
 				ID:       "canary-analysis/v1",
 				HasState: true,
-				Run: func(ctx context.Context, core *durable.Invocation) (proto.Message, error) {
+				Run: func(ctx context.Context, core durable.Invocation) (proto.Message, error) {
 					state, err := canaryAnalysis.Run(ctx, CanaryAnalysisInvocation{core: core})
 					if state == nil {
 						return nil, err
@@ -360,7 +360,7 @@ func NewDeployService(
 			{
 				ID:       "shift-traffic/v1",
 				HasState: true,
-				Run: func(ctx context.Context, core *durable.Invocation) (proto.Message, error) {
+				Run: func(ctx context.Context, core durable.Invocation) (proto.Message, error) {
 					state, err := shiftTraffic.Run(ctx, ShiftTrafficInvocation{core: core})
 					if state == nil {
 						return nil, err
@@ -523,7 +523,7 @@ var AnnounceStep = durable.NewStateStepRef("announce/v1", func() *Announce { ret
 
 // PlanReleaseInvocation is passed to PlanReleaseHandler methods.
 type PlanReleaseInvocation struct {
-	core *durable.Invocation
+	core durable.Invocation
 }
 
 func (inv PlanReleaseInvocation) PipelineID() durable.PipelineID { return inv.core.PipelineID() }
@@ -577,7 +577,7 @@ func (f PlanReleaseFunc) Run(ctx context.Context, inv PlanReleaseInvocation) err
 
 // ShipWebInvocation is passed to ShipWebHandler methods.
 type ShipWebInvocation struct {
-	core *durable.Invocation
+	core durable.Invocation
 }
 
 func (inv ShipWebInvocation) PipelineID() durable.PipelineID { return inv.core.PipelineID() }
@@ -629,7 +629,7 @@ func (f ShipWebFunc) Run(ctx context.Context, inv ShipWebInvocation) error { ret
 
 // ShipApiInvocation is passed to ShipApiHandler methods.
 type ShipApiInvocation struct {
-	core *durable.Invocation
+	core durable.Invocation
 }
 
 func (inv ShipApiInvocation) PipelineID() durable.PipelineID { return inv.core.PipelineID() }
@@ -681,7 +681,7 @@ func (f ShipApiFunc) Run(ctx context.Context, inv ShipApiInvocation) error { ret
 
 // AnnounceInvocation is passed to AnnounceHandler methods.
 type AnnounceInvocation struct {
-	core *durable.Invocation
+	core durable.Invocation
 }
 
 func (inv AnnounceInvocation) PipelineID() durable.PipelineID { return inv.core.PipelineID() }
@@ -735,12 +735,12 @@ func (f AnnounceFunc) Run(ctx context.Context, inv AnnounceInvocation) (*Announc
 
 var releaseTrainViews sync.Map
 
-func (x *ReleaseTrain) durableView() *durable.ReduceView {
+func (x *ReleaseTrain) durableView() durable.ReduceView {
 	v, ok := releaseTrainViews.Load(x)
 	if !ok {
 		panic("releasepb: ReleaseTrain is only usable as a reducer view during reduction")
 	}
-	return v.(*durable.ReduceView)
+	return v.(durable.ReduceView)
 }
 
 // Input returns a defensive caller-owned copy of the immutable pipeline input.
@@ -774,26 +774,26 @@ func NewReleaseTrain(
 		Steps: []durable.StepConfig{
 			{
 				ID: "plan/v1",
-				Run: func(ctx context.Context, core *durable.Invocation) (proto.Message, error) {
+				Run: func(ctx context.Context, core durable.Invocation) (proto.Message, error) {
 					return nil, planRelease.Run(ctx, PlanReleaseInvocation{core: core})
 				},
 			},
 			{
 				ID: "ship-web/v1",
-				Run: func(ctx context.Context, core *durable.Invocation) (proto.Message, error) {
+				Run: func(ctx context.Context, core durable.Invocation) (proto.Message, error) {
 					return nil, shipWeb.Run(ctx, ShipWebInvocation{core: core})
 				},
 			},
 			{
 				ID: "ship-api/v1",
-				Run: func(ctx context.Context, core *durable.Invocation) (proto.Message, error) {
+				Run: func(ctx context.Context, core durable.Invocation) (proto.Message, error) {
 					return nil, shipApi.Run(ctx, ShipApiInvocation{core: core})
 				},
 			},
 			{
 				ID:       "announce/v1",
 				HasState: true,
-				Run: func(ctx context.Context, core *durable.Invocation) (proto.Message, error) {
+				Run: func(ctx context.Context, core durable.Invocation) (proto.Message, error) {
 					state, err := announce.Run(ctx, AnnounceInvocation{core: core})
 					if state == nil {
 						return nil, err

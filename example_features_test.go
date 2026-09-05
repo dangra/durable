@@ -24,17 +24,17 @@ func ExampleFail() {
 			{
 				ID:     "create-tenant/v1",
 				Unwind: true,
-				Run: func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+				Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 					return nil, nil
 				},
-				UnwindFunc: func(ctx context.Context, inv *durable.Invocation, f durable.Failure) error {
+				UnwindFunc: func(ctx context.Context, inv durable.Invocation, f durable.Failure) error {
 					fmt.Printf("removing tenant record (unwinding: %s)\n", f.Root.Reason)
 					return nil
 				},
 			},
 			{
 				ID: "configure-billing/v1",
-				Run: func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+				Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 					return nil, durable.Fail(errors.New("VAT id rejected by billing provider"),
 						durable.WithUserKind(), durable.WithReason("invalid-vat-id"))
 				},
@@ -84,18 +84,18 @@ func ExampleRun_Cancel() {
 			{
 				ID:     "provision-env/v1",
 				Unwind: true,
-				Run: func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+				Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 					fmt.Println("provisioned staging env")
 					return nil, nil
 				},
-				UnwindFunc: func(ctx context.Context, inv *durable.Invocation, f durable.Failure) error {
+				UnwindFunc: func(ctx context.Context, inv durable.Invocation, f durable.Failure) error {
 					fmt.Println("tearing down staging env")
 					return nil
 				},
 			},
 			{
 				ID: "verify/v1",
-				Run: func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+				Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 					if inv.CancelRequested() {
 						fmt.Println("verify: cancel requested; yielding")
 						return nil, nil // resolve, the engine unwinds from here
@@ -151,7 +151,7 @@ func ExampleAwaitRun() {
 		ID: "deploy-service",
 		Steps: []durable.StepConfig{{
 			ID: "rollout/v1",
-			Run: func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				fmt.Println("deploying", inv.ResourceID())
 				return nil, nil
 			},
@@ -166,7 +166,7 @@ func ExampleAwaitRun() {
 		ID: "release-train",
 		Steps: []durable.StepConfig{{
 			ID: "ship-services/v1",
-			Run: func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				if _, woken := inv.AwaitedRunID(); woken {
 					fmt.Println("child deploy finished; release complete")
 					return nil, nil
@@ -215,7 +215,7 @@ func ExamplePipeline_Schedule() {
 		ID: "deploy-service",
 		Steps: []durable.StepConfig{{
 			ID: "rollout/v1",
-			Run: func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				<-release
 				return nil, nil
 			},
@@ -265,7 +265,7 @@ func ExampleWithConcurrencyClass() {
 		ConcurrencyClass: "cluster",
 		Steps: []durable.StepConfig{{
 			ID: "rollout/v1",
-			Run: func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				fmt.Println("start", inv.ResourceID())
 				if inv.ResourceID() == "service-web" {
 					close(webRunning)
@@ -320,7 +320,7 @@ func ExampleStartAfter() {
 		ID: "renew-certificate",
 		Steps: []durable.StepConfig{{
 			ID: "renew/v1",
-			Run: func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				return nil, nil
 			},
 		}},
@@ -368,7 +368,7 @@ func ExampleEngine_Stats() {
 		ConcurrencyClass: "cluster",
 		Steps: []durable.StepConfig{{
 			ID: "rollout/v1",
-			Run: func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				if inv.ResourceID() == "service-web" {
 					close(webRunning)
 					<-finishWeb

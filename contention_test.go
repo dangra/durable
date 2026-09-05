@@ -22,7 +22,7 @@ func TestDuplicateScheduling(t *testing.T) {
 	def := durable.NewDefinition(durable.DefinitionConfig{
 		ID: "dedup",
 		Steps: []durable.StepConfig{
-			stateless("wait/v1", func(ctx context.Context, inv *durable.Invocation) error {
+			stateless("wait/v1", func(ctx context.Context, inv durable.Invocation) error {
 				select {
 				case <-release:
 					return nil
@@ -85,7 +85,7 @@ func TestExclusionGroupSemantics(t *testing.T) {
 			ID:             id,
 			ExclusionGroup: group,
 			Steps: []durable.StepConfig{
-				stateless("s-"+durable.StepID(id)+"/v1", func(ctx context.Context, inv *durable.Invocation) error {
+				stateless("s-"+durable.StepID(id)+"/v1", func(ctx context.Context, inv durable.Invocation) error {
 					select {
 					case <-release:
 						return nil
@@ -144,7 +144,7 @@ func TestActiveRun(t *testing.T) {
 	def := durable.NewDefinition(durable.DefinitionConfig{
 		ID: "observed",
 		Steps: []durable.StepConfig{
-			stateless("s/v1", func(ctx context.Context, inv *durable.Invocation) error {
+			stateless("s/v1", func(ctx context.Context, inv durable.Invocation) error {
 				select {
 				case <-release:
 					return nil
@@ -191,7 +191,7 @@ func TestSupersedeReconcile(t *testing.T) {
 			{
 				ID:     "apply/v1",
 				Unwind: true,
-				Run: func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+				Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 					in := inv.InputMessage().(*wrapperspb.StringValue)
 					if in.GetValue() == "v1" {
 						// The stale run holds the slot until preempted,
@@ -205,7 +205,7 @@ func TestSupersedeReconcile(t *testing.T) {
 					}
 					return nil, nil
 				},
-				UnwindFunc: func(ctx context.Context, inv *durable.Invocation, f durable.Failure) error {
+				UnwindFunc: func(ctx context.Context, inv durable.Invocation, f durable.Failure) error {
 					in := inv.InputMessage().(*wrapperspb.StringValue)
 					mu.Lock()
 					unwound = append(unwound, in.GetValue())
@@ -281,7 +281,7 @@ func TestConcurrencyClassLimitsExecution(t *testing.T) {
 		ID:               "throttled-pipe",
 		ConcurrencyClass: "snapshots",
 		Steps: []durable.StepConfig{
-			stateless("s/v1", func(ctx context.Context, inv *durable.Invocation) error {
+			stateless("s/v1", func(ctx context.Context, inv durable.Invocation) error {
 				n := concurrent.Add(1)
 				defer concurrent.Add(-1)
 				for {
@@ -368,7 +368,7 @@ func TestUnconfiguredClassIsUnlimited(t *testing.T) {
 		ID:               "unlimited-pipe",
 		ConcurrencyClass: "never-configured",
 		Steps: []durable.StepConfig{
-			stateless("s/v1", func(ctx context.Context, inv *durable.Invocation) error {
+			stateless("s/v1", func(ctx context.Context, inv durable.Invocation) error {
 				n := concurrent.Add(1)
 				defer concurrent.Add(-1)
 				for {
@@ -420,7 +420,7 @@ func TestCancelBypassesThrottle(t *testing.T) {
 		ID:               "throttle-cancel",
 		ConcurrencyClass: "narrow",
 		Steps: []durable.StepConfig{
-			stateless("s/v1", func(ctx context.Context, inv *durable.Invocation) error {
+			stateless("s/v1", func(ctx context.Context, inv durable.Invocation) error {
 				if inv.CancelRequested() {
 					return nil
 				}

@@ -554,7 +554,7 @@ This differs from Reducer panic because a handler operation explicitly supports 
 The uniform type-erased operation is exposed as:
 
 ```go
-type Handler func(ctx context.Context, inv *Invocation) (proto.Message, error)
+type Handler func(ctx context.Context, inv Invocation) (proto.Message, error)
 
 type Middleware func(next Handler) Handler
 ```

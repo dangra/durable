@@ -23,7 +23,7 @@ var ShiftTrafficStep = durable.NewStateStepRef("shift-traffic/v1", func() *Shift
 
 // ProvisionEnvInvocation is passed to ProvisionEnvHandler methods.
 type ProvisionEnvInvocation struct {
-	core *durable.Invocation
+	core durable.Invocation
 }
 
 func (inv ProvisionEnvInvocation) PipelineID() durable.PipelineID { return inv.core.PipelineID() }
@@ -87,7 +87,7 @@ func (f ProvisionEnvFuncs) Unwind(ctx context.Context, inv ProvisionEnvInvocatio
 
 // RunMigrationsInvocation is passed to RunMigrationsHandler methods.
 type RunMigrationsInvocation struct {
-	core *durable.Invocation
+	core durable.Invocation
 }
 
 func (inv RunMigrationsInvocation) PipelineID() durable.PipelineID { return inv.core.PipelineID() }
@@ -151,7 +151,7 @@ func (f RunMigrationsFuncs) Unwind(ctx context.Context, inv RunMigrationsInvocat
 
 // ShiftTrafficInvocation is passed to ShiftTrafficHandler methods.
 type ShiftTrafficInvocation struct {
-	core *durable.Invocation
+	core durable.Invocation
 }
 
 func (inv ShiftTrafficInvocation) PipelineID() durable.PipelineID { return inv.core.PipelineID() }
@@ -212,12 +212,12 @@ type DeployServiceReducer func(*DeployService) *DeployServiceOutput
 
 var deployServiceViews sync.Map
 
-func (x *DeployService) durableView() *durable.ReduceView {
+func (x *DeployService) durableView() durable.ReduceView {
 	v, ok := deployServiceViews.Load(x)
 	if !ok {
 		panic("legacypb: DeployService is only usable as a reducer view during reduction")
 	}
-	return v.(*durable.ReduceView)
+	return v.(durable.ReduceView)
 }
 
 // Input returns a defensive caller-owned copy of the immutable pipeline input.
@@ -248,7 +248,7 @@ func NewDeployService(
 	return &DeployServiceDefinition{def: durable.NewDefinition(durable.DefinitionConfig{
 		ID:       "deploy-service",
 		NewInput: func() proto.Message { return &DeployServiceInput{} },
-		Reduce: func(view *durable.ReduceView) proto.Message {
+		Reduce: func(view durable.ReduceView) proto.Message {
 			x := &DeployService{}
 			deployServiceViews.Store(x, view)
 			defer deployServiceViews.Delete(x)
@@ -259,14 +259,14 @@ func NewDeployService(
 				ID:       "provision-env/v1",
 				Unwind:   true,
 				HasState: true,
-				Run: func(ctx context.Context, core *durable.Invocation) (proto.Message, error) {
+				Run: func(ctx context.Context, core durable.Invocation) (proto.Message, error) {
 					state, err := provisionEnv.Run(ctx, ProvisionEnvInvocation{core: core})
 					if state == nil {
 						return nil, err
 					}
 					return state, err
 				},
-				UnwindFunc: func(ctx context.Context, core *durable.Invocation, failure durable.Failure) error {
+				UnwindFunc: func(ctx context.Context, core durable.Invocation, failure durable.Failure) error {
 					return provisionEnv.Unwind(ctx, ProvisionEnvInvocation{core: core}, failure)
 				},
 			},
@@ -274,21 +274,21 @@ func NewDeployService(
 				ID:       "run-migrations/v1",
 				Unwind:   true,
 				HasState: true,
-				Run: func(ctx context.Context, core *durable.Invocation) (proto.Message, error) {
+				Run: func(ctx context.Context, core durable.Invocation) (proto.Message, error) {
 					state, err := runMigrations.Run(ctx, RunMigrationsInvocation{core: core})
 					if state == nil {
 						return nil, err
 					}
 					return state, err
 				},
-				UnwindFunc: func(ctx context.Context, core *durable.Invocation, failure durable.Failure) error {
+				UnwindFunc: func(ctx context.Context, core durable.Invocation, failure durable.Failure) error {
 					return runMigrations.Unwind(ctx, RunMigrationsInvocation{core: core}, failure)
 				},
 			},
 			{
 				ID:       "shift-traffic/v1",
 				HasState: true,
-				Run: func(ctx context.Context, core *durable.Invocation) (proto.Message, error) {
+				Run: func(ctx context.Context, core durable.Invocation) (proto.Message, error) {
 					state, err := shiftTraffic.Run(ctx, ShiftTrafficInvocation{core: core})
 					if state == nil {
 						return nil, err

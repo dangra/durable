@@ -26,11 +26,11 @@ type StepConfig struct {
 	// Run invokes the application forward handler. For a state-producing
 	// Step it returns the State to commit; for a stateless Step it returns
 	// (nil, err).
-	Run func(context.Context, *Invocation) (proto.Message, error)
+	Run func(context.Context, Invocation) (proto.Message, error)
 
 	// UnwindFunc invokes the application unwind handler. It is set exactly
 	// when Unwind is true.
-	UnwindFunc func(context.Context, *Invocation, Failure) error
+	UnwindFunc func(context.Context, Invocation, Failure) error
 }
 
 // DefinitionConfig is the type-erased pipeline description produced by
@@ -55,7 +55,7 @@ type DefinitionConfig struct {
 
 	// Reduce invokes the application Reducer; nil for an Output-less
 	// pipeline. It must be pure.
-	Reduce func(*ReduceView) proto.Message
+	Reduce func(ReduceView) proto.Message
 }
 
 // Definition is a registered-but-unbound pipeline definition: identity,

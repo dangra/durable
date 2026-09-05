@@ -30,7 +30,7 @@ func failingRun(t *testing.T, id durable.PipelineID, fail error) durable.Result 
 	def := durable.NewDefinition(durable.DefinitionConfig{
 		ID: id,
 		Steps: []durable.StepConfig{
-			stateless("s/v1", func(ctx context.Context, inv *durable.Invocation) error {
+			stateless("s/v1", func(ctx context.Context, inv durable.Invocation) error {
 				return fail
 			}),
 		},
@@ -84,14 +84,14 @@ func TestUnwindFailureAttribution(t *testing.T) {
 			{
 				ID:     "a/v1",
 				Unwind: true,
-				Run: func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+				Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 					return nil, nil
 				},
-				UnwindFunc: func(ctx context.Context, inv *durable.Invocation, f durable.Failure) error {
+				UnwindFunc: func(ctx context.Context, inv durable.Invocation, f durable.Failure) error {
 					return durable.Fail(errors.New("release rejected"), durable.WithReason("release-rejected"))
 				},
 			},
-			stateless("b/v1", func(ctx context.Context, inv *durable.Invocation) error {
+			stateless("b/v1", func(ctx context.Context, inv durable.Invocation) error {
 				return durable.Fail(errors.New("nope"))
 			}),
 		},
@@ -119,13 +119,13 @@ func TestInvalidUTF8ErrorsDoNotWedge(t *testing.T) {
 	def := durable.NewDefinition(durable.DefinitionConfig{
 		ID: "utf8",
 		Steps: []durable.StepConfig{
-			stateless("flaky/v1", func(ctx context.Context, inv *durable.Invocation) error {
+			stateless("flaky/v1", func(ctx context.Context, inv durable.Invocation) error {
 				if inv.Attempt() == 1 {
 					return errors.New(raw) // ordinary error -> LastError
 				}
 				return nil
 			}),
-			stateless("explode/v1", func(ctx context.Context, inv *durable.Invocation) error {
+			stateless("explode/v1", func(ctx context.Context, inv durable.Invocation) error {
 				return durable.Fail(errors.New(raw), durable.WithReason(raw))
 			}),
 		},

@@ -89,17 +89,17 @@ func TestObserverLifecycle(t *testing.T) {
 			{
 				ID:     "flaky/v1",
 				Unwind: true,
-				Run: func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+				Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 					if inv.Attempt() == 1 {
 						return nil, errors.New("transient boom")
 					}
 					return nil, nil
 				},
-				UnwindFunc: func(ctx context.Context, inv *durable.Invocation, f durable.Failure) error {
+				UnwindFunc: func(ctx context.Context, inv durable.Invocation, f durable.Failure) error {
 					return nil
 				},
 			},
-			stateless("explode/v1", func(ctx context.Context, inv *durable.Invocation) error {
+			stateless("explode/v1", func(ctx context.Context, inv durable.Invocation) error {
 				return durable.Fail(errors.New("permanent boom"), durable.WithUserKind(), durable.WithReason("bad-request"))
 			}),
 		},
@@ -196,7 +196,7 @@ func TestObserverCancel(t *testing.T) {
 	def := durable.NewDefinition(durable.DefinitionConfig{
 		ID: "observed-cancel",
 		Steps: []durable.StepConfig{
-			stateless("never/v1", func(ctx context.Context, inv *durable.Invocation) error { return nil }),
+			stateless("never/v1", func(ctx context.Context, inv durable.Invocation) error { return nil }),
 		},
 	})
 	log := &eventLog{}
@@ -241,7 +241,7 @@ func TestObserverAwaitWake(t *testing.T) {
 	target := durable.NewDefinition(durable.DefinitionConfig{
 		ID: "await-target",
 		Steps: []durable.StepConfig{
-			stateless("hold/v1", func(ctx context.Context, inv *durable.Invocation) error {
+			stateless("hold/v1", func(ctx context.Context, inv durable.Invocation) error {
 				select {
 				case <-release:
 					return nil
@@ -255,7 +255,7 @@ func TestObserverAwaitWake(t *testing.T) {
 	waiter := durable.NewDefinition(durable.DefinitionConfig{
 		ID: "await-waiter",
 		Steps: []durable.StepConfig{
-			stateless("wait/v1", func(ctx context.Context, inv *durable.Invocation) error {
+			stateless("wait/v1", func(ctx context.Context, inv durable.Invocation) error {
 				if _, ok := inv.AwaitedRunID(); ok {
 					return nil
 				}
@@ -317,7 +317,7 @@ func TestObserverClassWaitAndStats(t *testing.T) {
 		Steps: []durable.StepConfig{{
 			ID:               "gated/v1",
 			ConcurrencyClass: "boot",
-			Run: func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				entered <- struct{}{}
 				select {
 				case <-release:
@@ -378,7 +378,7 @@ func TestObserverCancelThrottledRun(t *testing.T) {
 		Steps: []durable.StepConfig{{
 			ID:               "gated/v1",
 			ConcurrencyClass: "boot",
-			Run: func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				entered <- struct{}{}
 				select {
 				case <-release:
@@ -448,7 +448,7 @@ func TestObserverCancelAwaitingRun(t *testing.T) {
 	target := durable.NewDefinition(durable.DefinitionConfig{
 		ID: "cancel-await-target",
 		Steps: []durable.StepConfig{
-			stateless("hold/v1", func(ctx context.Context, inv *durable.Invocation) error {
+			stateless("hold/v1", func(ctx context.Context, inv durable.Invocation) error {
 				select {
 				case <-release:
 					return nil
@@ -462,7 +462,7 @@ func TestObserverCancelAwaitingRun(t *testing.T) {
 	waiter := durable.NewDefinition(durable.DefinitionConfig{
 		ID: "cancel-await-waiter",
 		Steps: []durable.StepConfig{
-			stateless("wait/v1", func(ctx context.Context, inv *durable.Invocation) error {
+			stateless("wait/v1", func(ctx context.Context, inv durable.Invocation) error {
 				if _, ok := inv.AwaitedRunID(); ok {
 					return nil
 				}
@@ -526,7 +526,7 @@ func TestObserverCancelHandsOnWake(t *testing.T) {
 		Steps: []durable.StepConfig{{
 			ID:               "gated/v1",
 			ConcurrencyClass: "boot",
-			Run: func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				entered <- inv.ResourceID()
 				select {
 				case <-release:
@@ -600,7 +600,7 @@ func invalidStateDef(id durable.PipelineID, gate chan struct{}) *durable.Definit
 		Steps: []durable.StepConfig{{
 			ID:       "nil-state/v1",
 			HasState: true,
-			Run: func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				if gate != nil {
 					select {
 					case <-gate:
@@ -653,7 +653,7 @@ func TestObserverInvalidTargetNoSpuriousWake(t *testing.T) {
 	waiter := durable.NewDefinition(durable.DefinitionConfig{
 		ID: "invalid-target-waiter",
 		Steps: []durable.StepConfig{
-			stateless("wait/v1", func(ctx context.Context, inv *durable.Invocation) error {
+			stateless("wait/v1", func(ctx context.Context, inv durable.Invocation) error {
 				if _, ok := inv.AwaitedRunID(); ok {
 					return nil
 				}
@@ -723,7 +723,7 @@ func TestObserverReapedPerBatch(t *testing.T) {
 	def := durable.NewDefinition(durable.DefinitionConfig{
 		ID: "observed-reap",
 		Steps: []durable.StepConfig{
-			stateless("noop/v1", func(ctx context.Context, inv *durable.Invocation) error { return nil }),
+			stateless("noop/v1", func(ctx context.Context, inv durable.Invocation) error { return nil }),
 		},
 	})
 
@@ -797,7 +797,7 @@ func TestObserverPanicIsolated(t *testing.T) {
 	def := durable.NewDefinition(durable.DefinitionConfig{
 		ID: "observed-panic",
 		Steps: []durable.StepConfig{
-			stateless("ok/v1", func(ctx context.Context, inv *durable.Invocation) error { return nil }),
+			stateless("ok/v1", func(ctx context.Context, inv durable.Invocation) error { return nil }),
 		},
 	})
 	log := &eventLog{}

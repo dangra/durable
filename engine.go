@@ -1283,7 +1283,7 @@ func (e *Engine) runUnwind(rec *storedriver.RunRecord, def *Definition, stepID S
 // It returns false when the Run became invalid or the store failed.
 func (e *Engine) reduceAndComplete(rec *storedriver.RunRecord, def *Definition) bool {
 	if def.cfg.Reduce != nil {
-		view := &ReduceView{
+		view := &reduceView{
 			input:    rec.Input,
 			newInput: def.cfg.NewInput,
 			states:   committedStates(rec),
@@ -1318,8 +1318,8 @@ func (e *Engine) reduceAndComplete(rec *storedriver.RunRecord, def *Definition) 
 	return true
 }
 
-func (e *Engine) invocation(rec *storedriver.RunRecord, def *Definition, stepID StepID, attempt uint64, phase Phase) *Invocation {
-	return &Invocation{
+func (e *Engine) invocation(rec *storedriver.RunRecord, def *Definition, stepID StepID, attempt uint64, phase Phase) *attemptInvocation {
+	return &attemptInvocation{
 		pipelineID:      rec.PipelineID,
 		resourceID:      rec.ResourceID,
 		runID:           rec.RunID,
@@ -1351,7 +1351,7 @@ func committedStates(rec *storedriver.RunRecord) map[StepID][]byte {
 	return states
 }
 
-func (e *Engine) invokeForward(sc *StepConfig, inv *Invocation) (state proto.Message, panicked bool, err error) {
+func (e *Engine) invokeForward(sc *StepConfig, inv *attemptInvocation) (state proto.Message, panicked bool, err error) {
 	defer func() {
 		if p := recover(); p != nil {
 			panicked = true
@@ -1367,7 +1367,7 @@ func (e *Engine) invokeForward(sc *StepConfig, inv *Invocation) (state proto.Mes
 	return state, false, err
 }
 
-func (e *Engine) invokeUnwind(sc *StepConfig, inv *Invocation, failure Failure) (panicked bool, err error) {
+func (e *Engine) invokeUnwind(sc *StepConfig, inv *attemptInvocation, failure Failure) (panicked bool, err error) {
 	defer func() {
 		if p := recover(); p != nil {
 			panicked = true
@@ -1377,7 +1377,7 @@ func (e *Engine) invokeUnwind(sc *StepConfig, inv *Invocation, failure Failure) 
 				"panic", p, "stack", string(debug.Stack()))
 		}
 	}()
-	h := e.wrap(func(ctx context.Context, in *Invocation) (proto.Message, error) {
+	h := e.wrap(func(ctx context.Context, in Invocation) (proto.Message, error) {
 		return nil, sc.UnwindFunc(ctx, in, failure)
 	})
 	ctx, done := e.attemptContext(inv.runID)
@@ -1386,7 +1386,7 @@ func (e *Engine) invokeUnwind(sc *StepConfig, inv *Invocation, failure Failure) 
 	return false, err
 }
 
-func (e *Engine) invokeReduce(def *Definition, view *ReduceView) (out proto.Message, err error) {
+func (e *Engine) invokeReduce(def *Definition, view *reduceView) (out proto.Message, err error) {
 	defer func() {
 		if p := recover(); p != nil {
 			err = fmt.Errorf("reducer panic: %v", p)

@@ -25,7 +25,7 @@ func TestMiddlewareOrderingAndPhases(t *testing.T) {
 	}
 	mw := func(name string) durable.Middleware {
 		return func(next durable.Handler) durable.Handler {
-			return func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+			return func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				record(fmt.Sprintf("%s:in:%v:%s:%d", name, inv.Phase(), inv.StepID(), inv.Attempt()))
 				state, err := next(ctx, inv)
 				record(name + ":out")
@@ -42,14 +42,14 @@ func TestMiddlewareOrderingAndPhases(t *testing.T) {
 			{
 				ID:     "a/v1",
 				Unwind: true,
-				Run: func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+				Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 					return nil, nil
 				},
-				UnwindFunc: func(ctx context.Context, inv *durable.Invocation, f durable.Failure) error {
+				UnwindFunc: func(ctx context.Context, inv durable.Invocation, f durable.Failure) error {
 					return nil
 				},
 			},
-			stateless("b/v1", func(ctx context.Context, inv *durable.Invocation) error {
+			stateless("b/v1", func(ctx context.Context, inv durable.Invocation) error {
 				if inv.Attempt() == 1 {
 					return errors.New("transient")
 				}
@@ -94,7 +94,7 @@ func TestMiddlewareOrderingAndPhases(t *testing.T) {
 
 func TestMiddlewareCanEscalateToFail(t *testing.T) {
 	escalate := func(next durable.Handler) durable.Handler {
-		return func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+		return func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 			state, err := next(ctx, inv)
 			if err != nil {
 				return state, durable.Fail(err)
@@ -106,7 +106,7 @@ func TestMiddlewareCanEscalateToFail(t *testing.T) {
 	def := durable.NewDefinition(durable.DefinitionConfig{
 		ID: "escalating",
 		Steps: []durable.StepConfig{
-			stateless("s/v1", func(ctx context.Context, inv *durable.Invocation) error {
+			stateless("s/v1", func(ctx context.Context, inv durable.Invocation) error {
 				attempts.Store(inv.Attempt())
 				return errors.New("would ordinarily retry")
 			}),
@@ -133,14 +133,14 @@ type ctxKey struct{}
 
 func TestMiddlewareContextReachesHandlers(t *testing.T) {
 	inject := func(next durable.Handler) durable.Handler {
-		return func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+		return func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 			return next(context.WithValue(ctx, ctxKey{}, "present"), inv)
 		}
 	}
 	def := durable.NewDefinition(durable.DefinitionConfig{
 		ID: "ctxpipe",
 		Steps: []durable.StepConfig{
-			stateless("s/v1", func(ctx context.Context, inv *durable.Invocation) error {
+			stateless("s/v1", func(ctx context.Context, inv durable.Invocation) error {
 				if ctx.Value(ctxKey{}) != "present" {
 					return durable.Fail(errors.New("middleware context value missing"))
 				}

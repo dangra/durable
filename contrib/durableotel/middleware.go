@@ -100,7 +100,7 @@ func Middleware(opts ...Option) durable.Middleware {
 	cfg := newConfig(opts)
 	tracer := cfg.tracerProvider.Tracer(ScopeName)
 	return func(next durable.Handler) durable.Handler {
-		return func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+		return func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 			annotations := inv.Annotations()
 			ctx = cfg.propagator.Extract(ctx, propagation.MapCarrier(annotations))
 			origin := trace.SpanContextFromContext(ctx)

@@ -33,10 +33,10 @@ func refFor(id durable.StepID) durable.StateStepRef[*wrapperspb.StringValue] {
 	return durable.NewStateStepRef(id, newString)
 }
 
-func stateless(id durable.StepID, run func(context.Context, *durable.Invocation) error) durable.StepConfig {
+func stateless(id durable.StepID, run func(context.Context, durable.Invocation) error) durable.StepConfig {
 	return durable.StepConfig{
 		ID: id,
-		Run: func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+		Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 			return nil, run(ctx, inv)
 		},
 	}
@@ -105,7 +105,7 @@ func trivialChild(id durable.PipelineID) *durable.Definition {
 	return durable.NewDefinition(durable.DefinitionConfig{
 		ID: id,
 		Steps: []durable.StepConfig{
-			stateless("c/v1", func(ctx context.Context, inv *durable.Invocation) error { return nil }),
+			stateless("c/v1", func(ctx context.Context, inv durable.Invocation) error { return nil }),
 		},
 	})
 }
@@ -139,7 +139,7 @@ func gatedChild(id durable.PipelineID, g *gates) *durable.Definition {
 	return durable.NewDefinition(durable.DefinitionConfig{
 		ID: id,
 		Steps: []durable.StepConfig{
-			stateless("c/v1", func(ctx context.Context, inv *durable.Invocation) error {
+			stateless("c/v1", func(ctx context.Context, inv durable.Invocation) error {
 				if inv.CancelRequested() {
 					return nil
 				}

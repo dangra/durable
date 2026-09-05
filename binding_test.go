@@ -19,7 +19,7 @@ func TestStepOwnershipIsExclusive(t *testing.T) {
 		return durable.NewDefinition(durable.DefinitionConfig{
 			ID: pipeline,
 			Steps: []durable.StepConfig{
-				stateless("shared/v1", func(context.Context, *durable.Invocation) error { return nil }),
+				stateless("shared/v1", func(context.Context, durable.Invocation) error { return nil }),
 			},
 		})
 	}
@@ -41,7 +41,7 @@ func TestBindAfterStartRejected(t *testing.T) {
 	def := durable.NewDefinition(durable.DefinitionConfig{
 		ID: "frozen",
 		Steps: []durable.StepConfig{
-			stateless("step/v1", func(ctx context.Context, inv *durable.Invocation) error { return nil }),
+			stateless("step/v1", func(ctx context.Context, inv durable.Invocation) error { return nil }),
 		},
 	})
 	e, pipes := startEngine(t, durabletest.NewMemStore(), def)
@@ -49,7 +49,7 @@ func TestBindAfterStartRejected(t *testing.T) {
 	latecomer := durable.NewDefinition(durable.DefinitionConfig{
 		ID: "latecomer",
 		Steps: []durable.StepConfig{
-			stateless("late/v1", func(ctx context.Context, inv *durable.Invocation) error { return nil }),
+			stateless("late/v1", func(ctx context.Context, inv durable.Invocation) error { return nil }),
 		},
 	})
 

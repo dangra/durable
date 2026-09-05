@@ -28,7 +28,7 @@ func TestTracePropagationPattern(t *testing.T) {
 		seen []string // one traceparent observation per middleware pass
 	)
 	tracing := func(next durable.Handler) durable.Handler {
-		return func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+		return func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 			mu.Lock()
 			seen = append(seen, inv.Annotations()["traceparent"])
 			mu.Unlock()
@@ -42,17 +42,17 @@ func TestTracePropagationPattern(t *testing.T) {
 			{
 				ID:     "prepare/v1",
 				Unwind: true,
-				Run: func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+				Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 					if inv.Attempt() == 1 {
 						return nil, errors.New("transient")
 					}
 					return nil, nil
 				},
-				UnwindFunc: func(ctx context.Context, inv *durable.Invocation, f durable.Failure) error {
+				UnwindFunc: func(ctx context.Context, inv durable.Invocation, f durable.Failure) error {
 					return nil
 				},
 			},
-			stateless("explode/v1", func(ctx context.Context, inv *durable.Invocation) error {
+			stateless("explode/v1", func(ctx context.Context, inv durable.Invocation) error {
 				return durable.Fail(errors.New("boom"))
 			}),
 		},
@@ -150,7 +150,7 @@ func TestAnnotationsDedupAndValidation(t *testing.T) {
 	def := durable.NewDefinition(durable.DefinitionConfig{
 		ID: "annotated",
 		Steps: []durable.StepConfig{
-			stateless("hold/v1", func(ctx context.Context, inv *durable.Invocation) error {
+			stateless("hold/v1", func(ctx context.Context, inv durable.Invocation) error {
 				select {
 				case <-hold:
 					return nil

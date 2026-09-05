@@ -126,7 +126,7 @@ func TestLogCorrelationEndToEnd(t *testing.T) {
 		ID: "logged",
 		Steps: []durable.StepConfig{{
 			ID: "work/v1",
-			Run: func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				mu.Lock()
 				defer mu.Unlock()
 				inv.Logger().InfoContext(ctx, "working")

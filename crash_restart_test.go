@@ -63,7 +63,7 @@ func crashPipeline(seed uint64) *durable.Definition {
 		sc := durable.StepConfig{
 			ID:     id,
 			Unwind: i < crashSteps-1,
-			Run: func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				s := scriptOf(seed, inv.ResourceID(), inv.StepID())
 				select {
 				case <-time.After(time.Duration(s.napMicros) * time.Microsecond):
@@ -80,7 +80,7 @@ func crashPipeline(seed uint64) *durable.Definition {
 			},
 		}
 		if sc.Unwind {
-			sc.UnwindFunc = func(ctx context.Context, inv *durable.Invocation, f durable.Failure) error {
+			sc.UnwindFunc = func(ctx context.Context, inv durable.Invocation, f durable.Failure) error {
 				select {
 				case <-time.After(200 * time.Microsecond):
 				case <-ctx.Done():
@@ -101,7 +101,7 @@ func waiterPipeline(target func(durable.ResourceID) durable.RunID) *durable.Defi
 		ID: "crash-waiter",
 		Steps: []durable.StepConfig{{
 			ID: "await/v1",
-			Run: func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				if _, ok := inv.AwaitedRunID(); ok {
 					return nil, nil
 				}

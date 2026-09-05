@@ -20,7 +20,7 @@ import (
 func TestScheduleValidation(t *testing.T) {
 	withInput := durable.NewDefinition(durable.DefinitionConfig{
 		ID:       "with-input",
-		Steps:    []durable.StepConfig{stateless("s/v1", func(context.Context, *durable.Invocation) error { return nil })},
+		Steps:    []durable.StepConfig{stateless("s/v1", func(context.Context, durable.Invocation) error { return nil })},
 		NewInput: func() proto.Message { return &wrapperspb.StringValue{} },
 	})
 
@@ -50,7 +50,7 @@ func TestDelayedStart(t *testing.T) {
 	def := durable.NewDefinition(durable.DefinitionConfig{
 		ID: "delayed",
 		Steps: []durable.StepConfig{
-			stateless("s/v1", func(ctx context.Context, inv *durable.Invocation) error {
+			stateless("s/v1", func(ctx context.Context, inv durable.Invocation) error {
 				ranAt.Store(time.Now().UnixNano())
 				return nil
 			}),
@@ -96,7 +96,7 @@ func TestRunIDsAreULIDs(t *testing.T) {
 	def := durable.NewDefinition(durable.DefinitionConfig{
 		ID: "ulids",
 		Steps: []durable.StepConfig{
-			stateless("s/v1", func(context.Context, *durable.Invocation) error { return nil }),
+			stateless("s/v1", func(context.Context, durable.Invocation) error { return nil }),
 		},
 	})
 	_, pipes := startEngine(t, durabletest.NewMemStore(), def)
@@ -141,7 +141,7 @@ func TestRetentionReapsOnlyOldTerminalRuns(t *testing.T) {
 	def := durable.NewDefinition(durable.DefinitionConfig{
 		ID: "retained",
 		Steps: []durable.StepConfig{
-			stateless("s/v1", func(ctx context.Context, inv *durable.Invocation) error {
+			stateless("s/v1", func(ctx context.Context, inv durable.Invocation) error {
 				if inv.ResourceID() == "stuck" {
 					select {
 					case <-blocked:

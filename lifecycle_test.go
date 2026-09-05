@@ -24,7 +24,7 @@ func TestForwardSuccessWithReducer(t *testing.T) {
 	def := durable.NewDefinition(durable.DefinitionConfig{
 		ID: "provision",
 		Steps: []durable.StepConfig{
-			stateless("validate/v1", func(ctx context.Context, inv *durable.Invocation) error {
+			stateless("validate/v1", func(ctx context.Context, inv durable.Invocation) error {
 				in, ok := inv.InputMessage().(*wrapperspb.StringValue)
 				if !ok || in.GetValue() != "ord" {
 					return durable.Fail(errors.New("unexpected input"))
@@ -34,13 +34,13 @@ func TestForwardSuccessWithReducer(t *testing.T) {
 			{
 				ID:       "select-host/v1",
 				HasState: true,
-				Run: func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+				Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 					return str("host-7"), nil
 				},
 			},
 		},
 		NewInput: func() proto.Message { return &wrapperspb.StringValue{} },
-		Reduce: func(v *durable.ReduceView) proto.Message {
+		Reduce: func(v durable.ReduceView) proto.Message {
 			host, ok := durable.LookupState(v, selectRef)
 			if !ok {
 				panic("select-host state unavailable")
@@ -80,7 +80,7 @@ func TestRetryUntilSuccess(t *testing.T) {
 	def := durable.NewDefinition(durable.DefinitionConfig{
 		ID: "retrying",
 		Steps: []durable.StepConfig{
-			stateless("flaky/v1", func(ctx context.Context, inv *durable.Invocation) error {
+			stateless("flaky/v1", func(ctx context.Context, inv durable.Invocation) error {
 				attempts.Store(inv.Attempt())
 				if inv.Attempt() < 3 {
 					return errors.New("transient")
@@ -107,7 +107,7 @@ func TestHandlerPanicIsRetried(t *testing.T) {
 	def := durable.NewDefinition(durable.DefinitionConfig{
 		ID: "panicky",
 		Steps: []durable.StepConfig{
-			stateless("boom/v1", func(ctx context.Context, inv *durable.Invocation) error {
+			stateless("boom/v1", func(ctx context.Context, inv durable.Invocation) error {
 				if inv.Attempt() == 1 {
 					panic("kaboom")
 				}
@@ -135,10 +135,10 @@ func TestPermanentFailureUnwinds(t *testing.T) {
 			{
 				ID:     "a/v1",
 				Unwind: true,
-				Run: func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+				Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 					return nil, nil
 				},
-				UnwindFunc: func(ctx context.Context, inv *durable.Invocation, f durable.Failure) error {
+				UnwindFunc: func(ctx context.Context, inv durable.Invocation, f durable.Failure) error {
 					mu.Lock()
 					unwoundSteps = append(unwoundSteps, inv.StepID())
 					failureSeenByA = f
@@ -150,10 +150,10 @@ func TestPermanentFailureUnwinds(t *testing.T) {
 				ID:       "reserve/v1",
 				Unwind:   true,
 				HasState: true,
-				Run: func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+				Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 					return str("res-42"), nil
 				},
-				UnwindFunc: func(ctx context.Context, inv *durable.Invocation, f durable.Failure) error {
+				UnwindFunc: func(ctx context.Context, inv durable.Invocation, f durable.Failure) error {
 					state, ok := durable.LookupState(inv, reserveRef)
 					if !ok || state.GetValue() != "res-42" {
 						return durable.Fail(errors.New("own state unavailable during unwind"))
@@ -164,7 +164,7 @@ func TestPermanentFailureUnwinds(t *testing.T) {
 					return durable.Fail(errors.New("release rejected"))
 				},
 			},
-			stateless("create/v1", func(ctx context.Context, inv *durable.Invocation) error {
+			stateless("create/v1", func(ctx context.Context, inv durable.Invocation) error {
 				return durable.Fail(errors.New("quota exceeded"))
 			}),
 		},
@@ -213,7 +213,7 @@ func TestLastErrorSurfacedDuringRetries(t *testing.T) {
 	def := durable.NewDefinition(durable.DefinitionConfig{
 		ID: "lasterr",
 		Steps: []durable.StepConfig{
-			stateless("s/v1", func(ctx context.Context, inv *durable.Invocation) error {
+			stateless("s/v1", func(ctx context.Context, inv durable.Invocation) error {
 				select {
 				case <-release:
 					return nil

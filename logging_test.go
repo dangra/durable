@@ -96,18 +96,18 @@ func TestLoggingLifecycle(t *testing.T) {
 			{
 				ID:     "flaky/v1",
 				Unwind: true,
-				Run: func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+				Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 					if inv.Attempt() == 1 {
 						return nil, errors.New("transient boom")
 					}
 					inv.Logger().Info("hello from handler")
 					return nil, nil
 				},
-				UnwindFunc: func(ctx context.Context, inv *durable.Invocation, f durable.Failure) error {
+				UnwindFunc: func(ctx context.Context, inv durable.Invocation, f durable.Failure) error {
 					return durable.Fail(errors.New("cleanup broken"))
 				},
 			},
-			stateless("explode/v1", func(ctx context.Context, inv *durable.Invocation) error {
+			stateless("explode/v1", func(ctx context.Context, inv durable.Invocation) error {
 				return durable.Fail(errors.New("permanent boom"))
 			}),
 		},
@@ -145,7 +145,7 @@ func TestLoggingCancel(t *testing.T) {
 	def := durable.NewDefinition(durable.DefinitionConfig{
 		ID: "logging-cancel",
 		Steps: []durable.StepConfig{
-			stateless("never-runs/v1", func(ctx context.Context, inv *durable.Invocation) error {
+			stateless("never-runs/v1", func(ctx context.Context, inv durable.Invocation) error {
 				return nil
 			}),
 		},

@@ -10,17 +10,10 @@ package storedriver
 
 import (
 	"context"
-	"errors"
 	"time"
+
+	"github.com/dangra/durable/kernel"
 )
-
-// ErrRunNotFound is returned when no Run exists for a RunID. The root
-// durable package aliases it.
-var ErrRunNotFound = errors.New("durable: run not found")
-
-// ErrRunTerminal is returned by cancellation paths when the Run already
-// has a committed terminal outcome. The root durable package aliases it.
-var ErrRunTerminal = errors.New("durable: run already terminal")
 
 // OpStatus is the durable resolution status of one logical operation
 // (a Step's forward execution or its unwind).
@@ -55,85 +48,25 @@ type CancelRequest struct {
 	At    time.Time
 }
 
-// Await is a park of the in-flight operation: it waits on Targets until
-// they resolve per Mode — or until Deadline, when set.
-type Await struct {
-	Mode    AwaitMode
-	Targets []RunID
-	// Deadline is the absolute time the park expires; zero when it has
-	// none.
-	Deadline time.Time
-}
-
-// Clone returns a deep copy.
-func (a *Await) Clone() *Await {
-	if a == nil {
-		return nil
-	}
-	c := *a
-	c.Targets = append([]RunID(nil), a.Targets...)
-	return &c
-}
-
-// Wake is the resolved memory of a park: what the operation parked on and
-// what it found on waking. Done holds the Targets that were terminal or
-// missing at wake time; Expired reports that the park's deadline passed
-// first. A cancellation request bypassing the park also produces a Wake,
-// with Done reflecting the targets' state at that moment.
-type Wake struct {
-	Targets []RunID
-	Done    []RunID
-	Expired bool
-}
-
-// Pending returns the Targets not in Done, in Targets order.
-func (w Wake) Pending() []RunID {
-	if len(w.Done) == 0 {
-		return append([]RunID(nil), w.Targets...)
-	}
-	done := make(map[RunID]struct{}, len(w.Done))
-	for _, id := range w.Done {
-		done[id] = struct{}{}
-	}
-	var out []RunID
-	for _, id := range w.Targets {
-		if _, ok := done[id]; !ok {
-			out = append(out, id)
-		}
-	}
-	return out
-}
-
-// Clone returns a deep copy.
-func (w *Wake) Clone() *Wake {
-	if w == nil {
-		return nil
-	}
-	c := *w
-	c.Targets = append([]RunID(nil), w.Targets...)
-	c.Done = append([]RunID(nil), w.Done...)
-	return &c
-}
-
 // Cursor is the per-Run scheduling state rewritten on every durable
 // transition. It is deliberately small: per-attempt write volume is
 // bounded by the Cursor, independent of Input and State sizes.
 type Cursor struct {
-	Phase Phase
+	Phase kernel.Phase
 
 	// The single in-flight operation; StepID is empty when none. Whether
 	// it is a forward or unwind operation follows from Phase.
-	StepID   StepID
+	StepID   kernel.StepID
 	Attempts uint64
 
 	// Awaiting parks the in-flight operation; nil when not parked.
-	Awaiting *Await
+	Awaiting *kernel.Await
 
 	// Awaited is the memory of the in-flight operation's last park, once
 	// resolved. It persists across the operation's retries and restarts
 	// and is cleared when the operation resolves or parks again; nil when
 	// no park has resolved.
-	Awaited *Wake
+	Awaited *kernel.Wake
 
 	NextAttemptAt time.Time
 	LastError     string
@@ -144,7 +77,7 @@ type Cursor struct {
 
 // StepWrite upserts the durable facts of one Step.
 type StepWrite struct {
-	StepID StepID
+	StepID kernel.StepID
 	Record StepRecord
 }
 
@@ -157,23 +90,23 @@ type Transition struct {
 	Steps []StepWrite
 
 	// RootFailure is set at most once per Run.
-	RootFailure *RootFailure
+	RootFailure *kernel.RootFailure
 	// UnwindFailure is appended.
-	UnwindFailure *UnwindFailure
+	UnwindFailure *kernel.UnwindFailure
 
 	// Outcome commits terminality; Output accompanies a successful
 	// outcome for Output-producing pipelines. Committing an Outcome
 	// releases the Run's resource slot.
 	Output  []byte
-	Outcome *Outcome
+	Outcome *kernel.Outcome
 }
 
 // RunRecord is the durable representation of a Run: execution facts, not a
 // materialized topology. Stores persist it opaquely.
 type RunRecord struct {
-	RunID      RunID
-	PipelineID PipelineID
-	ResourceID ResourceID
+	RunID      kernel.RunID
+	PipelineID kernel.PipelineID
+	ResourceID kernel.ResourceID
 
 	// Group is the namespaced exclusion scope this Run's slot belongs to
 	// ("pipeline/<id>" or "group/<name>"), set by the engine at
@@ -189,15 +122,15 @@ type RunRecord struct {
 
 	Input []byte
 
-	Phase Phase
-	Steps map[StepID]*StepRecord
+	Phase kernel.Phase
+	Steps map[kernel.StepID]*StepRecord
 
-	RootFailure    *RootFailure
-	UnwindFailures []UnwindFailure
+	RootFailure    *kernel.RootFailure
+	UnwindFailures []kernel.UnwindFailure
 
 	Output []byte
 	// Outcome is set only once the Run is terminal.
-	Outcome *Outcome
+	Outcome *kernel.Outcome
 
 	// NextAttemptAt gates execution eligibility of the next operation
 	// attempt — a retry, or the first attempt of a delayed Run. It
@@ -205,11 +138,11 @@ type RunRecord struct {
 	NextAttemptAt time.Time
 
 	// Awaiting mirrors Cursor.Awaiting: the in-flight operation's park.
-	Awaiting *Await
+	Awaiting *kernel.Await
 
 	// Awaited mirrors Cursor.Awaited: the resolved memory of the
 	// in-flight operation's last park.
-	Awaited *Wake
+	Awaited *kernel.Wake
 
 	// LastError, LastReason, and LastErrorAt describe the most recent
 	// ordinary-error attempt of the current unresolved operation. They are
@@ -240,9 +173,9 @@ func (r *RunRecord) SlotGroup() string {
 }
 
 // Step returns the StepRecord for id, creating it if absent.
-func (r *RunRecord) Step(id StepID) *StepRecord {
+func (r *RunRecord) Step(id kernel.StepID) *StepRecord {
 	if r.Steps == nil {
-		r.Steps = make(map[StepID]*StepRecord)
+		r.Steps = make(map[kernel.StepID]*StepRecord)
 	}
 	sr, ok := r.Steps[id]
 	if !ok {
@@ -255,7 +188,7 @@ func (r *RunRecord) Step(id StepID) *StepRecord {
 // Clone returns a deep copy of the record.
 func (r *RunRecord) Clone() *RunRecord {
 	c := *r
-	c.Steps = make(map[StepID]*StepRecord, len(r.Steps))
+	c.Steps = make(map[kernel.StepID]*StepRecord, len(r.Steps))
 	for id, sr := range r.Steps {
 		sc := *sr
 		sc.State = append([]byte(nil), sr.State...)
@@ -273,7 +206,7 @@ func (r *RunRecord) Clone() *RunRecord {
 		rf := *r.RootFailure
 		c.RootFailure = &rf
 	}
-	c.UnwindFailures = append([]UnwindFailure(nil), r.UnwindFailures...)
+	c.UnwindFailures = append([]kernel.UnwindFailure(nil), r.UnwindFailures...)
 	if r.Outcome != nil {
 		o := *r.Outcome
 		c.Outcome = &o
@@ -311,15 +244,15 @@ type Store interface {
 	// record with created=false and does not persist rec.
 	CreateRun(ctx context.Context, rec *RunRecord) (existing *RunRecord, created bool, err error)
 
-	// GetRun returns the record for id, or ErrRunNotFound.
-	GetRun(ctx context.Context, id RunID) (*RunRecord, error)
+	// GetRun returns the record for id, or kernel.ErrRunNotFound.
+	GetRun(ctx context.Context, id kernel.RunID) (*RunRecord, error)
 
 	// ApplyTransition atomically applies one durable state change to the
 	// Run: the Cursor is written, step facts are upserted, failures
 	// recorded, and a Transition carrying an Outcome commits terminality
 	// and releases the resource slot. A missing Run returns
-	// ErrRunNotFound.
-	ApplyTransition(ctx context.Context, id RunID, t Transition) error
+	// kernel.ErrRunNotFound.
+	ApplyTransition(ctx context.Context, id kernel.RunID, t Transition) error
 
 	// ReapTerminal deletes up to limit Runs whose terminal outcome was
 	// committed before the cutoff, returning how many were deleted. It
@@ -329,16 +262,16 @@ type Store interface {
 
 	// RequestCancel durably records a cancellation request for the Run.
 	// The first request wins: a later request returns accepted=false with
-	// the stored request unchanged. A missing Run returns ErrRunNotFound;
-	// a terminal Run returns ErrRunTerminal.
-	RequestCancel(ctx context.Context, id RunID, req CancelRequest) (accepted bool, err error)
+	// the stored request unchanged. A missing Run returns kernel.ErrRunNotFound;
+	// a terminal Run returns kernel.ErrRunTerminal.
+	RequestCancel(ctx context.Context, id kernel.RunID, req CancelRequest) (accepted bool, err error)
 
 	// ListNonterminal returns all Runs without a terminal outcome.
 	ListNonterminal(ctx context.Context) ([]*RunRecord, error)
 
 	// ListRuns returns all Runs (terminal and nonterminal) for a slot,
 	// oldest first.
-	ListRuns(ctx context.Context, pipeline PipelineID, resource ResourceID) ([]*RunRecord, error)
+	ListRuns(ctx context.Context, pipeline kernel.PipelineID, resource kernel.ResourceID) ([]*RunRecord, error)
 
 	Close() error
 }

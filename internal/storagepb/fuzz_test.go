@@ -1,13 +1,12 @@
 package storagepb
 
 import (
+	"github.com/dangra/durable/kernel"
 	"github.com/dangra/durable/storedriver"
 	"slices"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/dangra/durable"
 )
 
 // FuzzRoundTrip exercises the storage converters both ways: every value
@@ -30,20 +29,20 @@ func FuzzRoundTrip(f *testing.F) {
 		if sec != 0 {
 			when = time.Unix(sec%4_000_000_000, int64(n%1_000_000_000))
 		}
-		phase := durable.Phase(a%3 + 1)
+		phase := kernel.Phase(a%3 + 1)
 		sameTime := func(x, y time.Time) bool { return x.Equal(y) }
 
 		// Cursor.
 		cur := storedriver.Cursor{
-			Phase: phase, StepID: durable.StepID(s1), Attempts: n,
+			Phase: phase, StepID: kernel.StepID(s1), Attempts: n,
 			NextAttemptAt: when, LastError: s2, LastReason: s1, LastErrorAt: when,
 			UpdatedAt: when,
 		}
 		if s2 != "" {
-			cur.Awaiting = &storedriver.Await{
-				Mode: storedriver.AwaitMode(b%2 + 1), Targets: []durable.RunID{durable.RunID(s2), durable.RunID(s1)}, Deadline: when}
-			cur.Awaited = &storedriver.Wake{
-				Targets: []durable.RunID{durable.RunID(s1)}, Done: []durable.RunID{durable.RunID(s1)}, Expired: a%2 == 1}
+			cur.Awaiting = &kernel.Await{
+				Mode: kernel.AwaitMode(b%2 + 1), Targets: []kernel.RunID{kernel.RunID(s2), kernel.RunID(s1)}, Deadline: when}
+			cur.Awaited = &kernel.Wake{
+				Targets: []kernel.RunID{kernel.RunID(s1)}, Done: []kernel.RunID{kernel.RunID(s1)}, Expired: a%2 == 1}
 		}
 		cb, err := MarshalCursor(cur)
 		if err != nil {
@@ -94,15 +93,15 @@ func FuzzRoundTrip(f *testing.F) {
 		}
 
 		// Failures.
-		var root *durable.RootFailure
+		var root *kernel.RootFailure
 		if a%2 == 0 {
-			root = &durable.RootFailure{FailureRecord: durable.FailureRecord{
-				StepID: durable.StepID(s1), Phase: phase, Attempt: n,
-				Message: s2, At: when, Kind: durable.FailureKind(b % 3), Reason: s1,
+			root = &kernel.RootFailure{FailureRecord: kernel.FailureRecord{
+				StepID: kernel.StepID(s1), Phase: phase, Attempt: n,
+				Message: s2, At: when, Kind: kernel.FailureKind(b % 3), Reason: s1,
 			}}
 		}
-		unwind := []durable.UnwindFailure{{FailureRecord: durable.FailureRecord{
-			StepID: durable.StepID(s2), Phase: phase, Attempt: n / 3, Message: s1, At: when,
+		unwind := []kernel.UnwindFailure{{FailureRecord: kernel.FailureRecord{
+			StepID: kernel.StepID(s2), Phase: phase, Attempt: n / 3, Message: s1, At: when,
 		}}}
 		fb, err := MarshalFailures(root, unwind)
 		if err != nil {
@@ -121,7 +120,7 @@ func FuzzRoundTrip(f *testing.F) {
 		}
 
 		// Terminal.
-		oc := durable.Outcome(a%2 + 1)
+		oc := kernel.Outcome(a%2 + 1)
 		tb, err := MarshalTerminal(oc, blob)
 		if err != nil {
 			t.Fatalf("MarshalTerminal: %v", err)
@@ -149,8 +148,8 @@ func FuzzRoundTrip(f *testing.F) {
 
 		// RunMeta.
 		rec := &storedriver.RunRecord{
-			RunID: durable.RunID(s1), PipelineID: durable.PipelineID(s2),
-			ResourceID: durable.ResourceID(s1), Group: s2,
+			RunID: kernel.RunID(s1), PipelineID: kernel.PipelineID(s2),
+			ResourceID: kernel.ResourceID(s1), Group: s2,
 			Input: append([]byte(nil), blob...), CreatedAt: when,
 		}
 		if a%2 == 0 {

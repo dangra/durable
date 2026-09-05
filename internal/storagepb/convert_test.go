@@ -1,14 +1,13 @@
 package storagepb
 
 import (
+	"github.com/dangra/durable/kernel"
 	"github.com/dangra/durable/storedriver"
 	"reflect"
 	"testing"
 	"time"
 
 	"google.golang.org/protobuf/proto"
-
-	"github.com/dangra/durable"
 )
 
 // Times constructed via time.Unix in UTC survive the Timestamp conversion
@@ -40,7 +39,7 @@ func TestRunMetaRoundTrip(t *testing.T) {
 func TestCursorRoundTrip(t *testing.T) {
 	cases := []storedriver.Cursor{
 		{
-			Phase:         durable.PhaseForward,
+			Phase:         kernel.PhaseForward,
 			StepID:        "reserve/v1",
 			Attempts:      7,
 			NextAttemptAt: at(100),
@@ -50,36 +49,36 @@ func TestCursorRoundTrip(t *testing.T) {
 			UpdatedAt:     at(101),
 		},
 		{
-			Phase:    durable.PhaseForward,
+			Phase:    kernel.PhaseForward,
 			StepID:   "ship/v1",
 			Attempts: 2,
-			Awaiting: &storedriver.Await{
-				Mode:     storedriver.AwaitModeAny,
-				Targets:  []durable.RunID{"01ARZ3NDEKTSV4RRFFQ69G5FAV", "01ARZ3NDEKTSV4RRFFQ69G5FAW"},
+			Awaiting: &kernel.Await{
+				Mode:     kernel.AwaitModeAny,
+				Targets:  []kernel.RunID{"01ARZ3NDEKTSV4RRFFQ69G5FAV", "01ARZ3NDEKTSV4RRFFQ69G5FAW"},
 				Deadline: at(500),
 			},
 			UpdatedAt: at(150),
 		},
 		{
-			Phase:    durable.PhaseUnwind,
+			Phase:    kernel.PhaseUnwind,
 			StepID:   "ship/v1",
 			Attempts: 3,
-			Awaited: &storedriver.Wake{
-				Targets: []durable.RunID{"01ARZ3NDEKTSV4RRFFQ69G5FAV", "01ARZ3NDEKTSV4RRFFQ69G5FAW"},
-				Done:    []durable.RunID{"01ARZ3NDEKTSV4RRFFQ69G5FAW"},
+			Awaited: &kernel.Wake{
+				Targets: []kernel.RunID{"01ARZ3NDEKTSV4RRFFQ69G5FAV", "01ARZ3NDEKTSV4RRFFQ69G5FAW"},
+				Done:    []kernel.RunID{"01ARZ3NDEKTSV4RRFFQ69G5FAW"},
 				Expired: true,
 			},
 			UpdatedAt: at(160),
 		},
 		{
 			// A single-target park with no deadline: the common case.
-			Phase:     durable.PhaseForward,
+			Phase:     kernel.PhaseForward,
 			StepID:    "ship/v1",
 			Attempts:  1,
-			Awaiting:  &storedriver.Await{Mode: storedriver.AwaitModeAll, Targets: []durable.RunID{"01ARZ3NDEKTSV4RRFFQ69G5FAV"}},
+			Awaiting:  &kernel.Await{Mode: kernel.AwaitModeAll, Targets: []kernel.RunID{"01ARZ3NDEKTSV4RRFFQ69G5FAV"}},
 			UpdatedAt: at(170),
 		},
-		{Phase: durable.PhaseDone, UpdatedAt: at(200)}, // idle, zero times preserved
+		{Phase: kernel.PhaseDone, UpdatedAt: at(200)}, // idle, zero times preserved
 	}
 	for _, c := range cases {
 		b, err := MarshalCursor(c)
@@ -107,7 +106,7 @@ func TestCursorDecodesLegacyPark(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UnmarshalCursor: %v", err)
 	}
-	want := &storedriver.Await{Mode: storedriver.AwaitModeAll, Targets: []durable.RunID{"01ARZ3NDEKTSV4RRFFQ69G5FAV"}}
+	want := &kernel.Await{Mode: kernel.AwaitModeAll, Targets: []kernel.RunID{"01ARZ3NDEKTSV4RRFFQ69G5FAV"}}
 	if !reflect.DeepEqual(got.Awaiting, want) {
 		t.Fatalf("Awaiting = %+v, want %+v", got.Awaiting, want)
 	}
@@ -147,22 +146,22 @@ func TestStepRecordRoundTrip(t *testing.T) {
 }
 
 func TestFailuresRoundTrip(t *testing.T) {
-	root := &durable.RootFailure{FailureRecord: durable.FailureRecord{
+	root := &kernel.RootFailure{FailureRecord: kernel.FailureRecord{
 		StepID:  "create/v1",
-		Phase:   durable.PhaseForward,
+		Phase:   kernel.PhaseForward,
 		Attempt: 5,
 		Message: "no capacity",
 		At:      at(100),
-		Kind:    durable.FailureKindUser,
+		Kind:    kernel.FailureKindUser,
 		Reason:  "insufficient-capacity",
 	}}
-	unwind := []durable.UnwindFailure{{FailureRecord: durable.FailureRecord{
+	unwind := []kernel.UnwindFailure{{FailureRecord: kernel.FailureRecord{
 		StepID:  "reserve/v1",
-		Phase:   durable.PhaseUnwind,
+		Phase:   kernel.PhaseUnwind,
 		Attempt: 1,
 		Message: "release rejected",
 		At:      at(200),
-		Kind:    durable.FailureKindSystem,
+		Kind:    kernel.FailureKindSystem,
 		Reason:  "release-rejected",
 	}}}
 	b, err := MarshalFailures(root, unwind)
@@ -177,25 +176,25 @@ func TestFailuresRoundTrip(t *testing.T) {
 		t.Fatalf("round trip mismatch:\n got: %+v %+v\nwant: %+v %+v", gotRoot, gotUnwind, root, unwind)
 	}
 	// Cancellation roots have no StepID and no unwind failures yet.
-	b, err = MarshalFailures(&durable.RootFailure{FailureRecord: durable.FailureRecord{
-		Message: "canceled", At: at(1), Kind: durable.FailureKindCanceled,
+	b, err = MarshalFailures(&kernel.RootFailure{FailureRecord: kernel.FailureRecord{
+		Message: "canceled", At: at(1), Kind: kernel.FailureKindCanceled,
 	}}, nil)
 	if err != nil {
 		t.Fatalf("MarshalFailures: %v", err)
 	}
 	gotRoot, gotUnwind, err = UnmarshalFailures(b)
-	if err != nil || gotRoot == nil || gotRoot.Kind != durable.FailureKindCanceled || gotUnwind != nil {
+	if err != nil || gotRoot == nil || gotRoot.Kind != kernel.FailureKindCanceled || gotUnwind != nil {
 		t.Fatalf("cancel root round trip = %+v %+v %v", gotRoot, gotUnwind, err)
 	}
 }
 
 func TestTerminalRoundTrip(t *testing.T) {
-	b, err := MarshalTerminal(durable.OutcomeSuccess, []byte{9, 9})
+	b, err := MarshalTerminal(kernel.OutcomeSuccess, []byte{9, 9})
 	if err != nil {
 		t.Fatalf("MarshalTerminal: %v", err)
 	}
 	oc, out, err := UnmarshalTerminal(b)
-	if err != nil || oc != durable.OutcomeSuccess || len(out) != 2 {
+	if err != nil || oc != kernel.OutcomeSuccess || len(out) != 2 {
 		t.Fatalf("round trip = %v %v %v", oc, out, err)
 	}
 }

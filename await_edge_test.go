@@ -1143,7 +1143,7 @@ func TestAwaitEmptyParkFromStoreIsInvalid(t *testing.T) {
 	}
 	if err := store.ApplyTransition(context.Background(), rec.RunID, storedriver.Transition{Cursor: storedriver.Cursor{
 		Phase: durable.PhaseForward, StepID: "s/v1", Attempts: 1, UpdatedAt: now,
-		Awaiting: &storedriver.Await{Mode: storedriver.AwaitModeAny},
+		Awaiting: &durable.Await{Mode: durable.AwaitModeAny},
 	}}); err != nil {
 		t.Fatalf("ApplyTransition: %v", err)
 	}

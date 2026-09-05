@@ -92,6 +92,9 @@
 // code plus NewDefinition for hand-rolled ones), running an engine, and
 // writing handlers. The rest of the module serves narrower audiences:
 //
+//   - kernel is the shared vocabulary — identities, phases, outcomes,
+//     parks, failure records — that every other package builds on. This
+//     package aliases all of it, so user code never imports kernel.
 //   - observe holds the lifecycle event surface — Observer and its
 //     typed events — for telemetry-adapter authors; contrib/durableotel
 //     is the packaged adapter most applications install instead.

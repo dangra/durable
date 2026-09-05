@@ -615,7 +615,8 @@ volume is bounded by the Cursor, independent of Input and State sizes
 application choice).
 
 The contract is the `storedriver` package: `Store`, `RunRecord`,
-`Cursor`, `Transition`, and the identity and outcome vocabulary the
+`Cursor`, and `Transition`, built from the identity, phase, outcome,
+park, and failure-record vocabulary of the `kernel` package, which the
 `durable` package aliases. Store implementations persist every Cursor
 field; the in-memory `durabletest.MemStore` is the executable reference,
 and the bbolt store is checked against it.

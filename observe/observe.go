@@ -10,7 +10,7 @@ package observe
 import (
 	"time"
 
-	"github.com/dangra/durable/storedriver"
+	"github.com/dangra/durable/kernel"
 )
 
 // Observer receives engine lifecycle events for metrics. Nil fields are
@@ -60,9 +60,9 @@ type Observer struct {
 // Run was scheduled with a delayed start. Annotations is a copy shared
 // by this event's observers; the engine's own state is never exposed.
 type RunEvent struct {
-	PipelineID  storedriver.PipelineID
-	ResourceID  storedriver.ResourceID
-	RunID       storedriver.RunID
+	PipelineID  kernel.PipelineID
+	ResourceID  kernel.ResourceID
+	RunID       kernel.RunID
 	StartAt     time.Time
 	Annotations map[string]string
 }
@@ -99,11 +99,11 @@ func (r AttemptResult) String() string {
 
 // AttemptEvent reports one resolved, retried, or parked operation attempt.
 type AttemptEvent struct {
-	PipelineID storedriver.PipelineID
-	ResourceID storedriver.ResourceID
-	RunID      storedriver.RunID
-	StepID     storedriver.StepID
-	Phase      storedriver.Phase
+	PipelineID kernel.PipelineID
+	ResourceID kernel.ResourceID
+	RunID      kernel.RunID
+	StepID     kernel.StepID
+	Phase      kernel.Phase
 	Attempt    uint64
 	// Duration is the handler execution time of this attempt.
 	Duration time.Duration
@@ -119,14 +119,14 @@ type AttemptEvent struct {
 
 // RunFailureEvent reports a RootFailure being established (RunUnwinding)
 // or a Run turning invalid for the current deployment (RunInvalid, where
-// only Reason is populated besides the identity, and storedriver.StepID when the
+// only Reason is populated besides the identity, and kernel.StepID when the
 // problem is step-scoped).
 type RunFailureEvent struct {
-	PipelineID storedriver.PipelineID
-	ResourceID storedriver.ResourceID
-	RunID      storedriver.RunID
-	StepID     storedriver.StepID
-	Kind       storedriver.FailureKind
+	PipelineID kernel.PipelineID
+	ResourceID kernel.ResourceID
+	RunID      kernel.RunID
+	StepID     kernel.StepID
+	Kind       kernel.FailureKind
 	Reason     string
 	Message    string
 }
@@ -137,26 +137,26 @@ type RunFailureEvent struct {
 // observers — it carries the acceptance-time metadata (tenant tags)
 // metric adapters label by; the engine's own state is never exposed.
 type RunTerminalEvent struct {
-	PipelineID  storedriver.PipelineID
-	ResourceID  storedriver.ResourceID
-	RunID       storedriver.RunID
-	Outcome     storedriver.Outcome
-	Kind        storedriver.FailureKind
+	PipelineID  kernel.PipelineID
+	ResourceID  kernel.ResourceID
+	RunID       kernel.RunID
+	Outcome     kernel.Outcome
+	Kind        kernel.FailureKind
 	Reason      string
 	Duration    time.Duration
 	Annotations map[string]string
 }
 
 // WakeEvent reports a park resolving: Duration is how long
-// storedriver.RunID was parked on Targets, Done lists the Targets terminal
+// kernel.RunID was parked on Targets, Done lists the Targets terminal
 // or missing at wake time, and Expired reports that the park's deadline
 // fired before it resolved per its mode.
 type WakeEvent struct {
-	PipelineID storedriver.PipelineID
-	ResourceID storedriver.ResourceID
-	RunID      storedriver.RunID
-	Targets    []storedriver.RunID
-	Done       []storedriver.RunID
+	PipelineID kernel.PipelineID
+	ResourceID kernel.ResourceID
+	RunID      kernel.RunID
+	Targets    []kernel.RunID
+	Done       []kernel.RunID
 	Expired    bool
 	Duration   time.Duration
 }
@@ -164,9 +164,9 @@ type WakeEvent struct {
 // ClassWaitEvent reports a Run proceeding after being throttled on a
 // concurrency class for Duration.
 type ClassWaitEvent struct {
-	PipelineID storedriver.PipelineID
-	ResourceID storedriver.ResourceID
-	RunID      storedriver.RunID
+	PipelineID kernel.PipelineID
+	ResourceID kernel.ResourceID
+	RunID      kernel.RunID
 	Class      string
 	Duration   time.Duration
 }

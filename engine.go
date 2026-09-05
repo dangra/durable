@@ -933,8 +933,8 @@ func (e *Engine) awaitGate(rec *storedriver.RunRecord) bool {
 
 // awaitNeed is the park's mode as a threshold: how many targets must be
 // done before it resolves.
-func awaitNeed(park *storedriver.Await) int {
-	if park.Mode == storedriver.AwaitModeAny {
+func awaitNeed(park *Await) int {
+	if park.Mode == AwaitModeAny {
 		return 1
 	}
 	return len(park.Targets)
@@ -997,7 +997,7 @@ func (e *Engine) targetDone(target RunID) (bool, error) {
 // it, so it outlives ordinary-error retries and restarts until the
 // operation resolves or parks again.
 func settleAwait(rec *storedriver.RunRecord, done []RunID, expired bool) {
-	rec.Awaited = &storedriver.Wake{Targets: rec.Awaiting.Targets, Done: done, Expired: expired}
+	rec.Awaited = &Wake{Targets: rec.Awaiting.Targets, Done: done, Expired: expired}
 	rec.Awaiting = nil
 }
 

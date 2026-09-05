@@ -8,19 +8,19 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dangra/durable"
+	"github.com/dangra/durable/kernel"
 )
 
 // MemStore is an in-memory storedriver.Store for tests. It is safe for
 // concurrent use and returns defensive copies of all records.
 type MemStore struct {
 	mu   sync.Mutex
-	runs map[durable.RunID]*storedriver.RunRecord
+	runs map[kernel.RunID]*storedriver.RunRecord
 }
 
 // NewMemStore constructs an empty MemStore.
 func NewMemStore() *MemStore {
-	return &MemStore{runs: make(map[durable.RunID]*storedriver.RunRecord)}
+	return &MemStore{runs: make(map[kernel.RunID]*storedriver.RunRecord)}
 }
 
 func (s *MemStore) CreateRun(_ context.Context, rec *storedriver.RunRecord) (*storedriver.RunRecord, bool, error) {
@@ -35,22 +35,22 @@ func (s *MemStore) CreateRun(_ context.Context, rec *storedriver.RunRecord) (*st
 	return nil, true, nil
 }
 
-func (s *MemStore) GetRun(_ context.Context, id durable.RunID) (*storedriver.RunRecord, error) {
+func (s *MemStore) GetRun(_ context.Context, id kernel.RunID) (*storedriver.RunRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	r, ok := s.runs[id]
 	if !ok {
-		return nil, durable.ErrRunNotFound
+		return nil, kernel.ErrRunNotFound
 	}
 	return r.Clone(), nil
 }
 
-func (s *MemStore) ApplyTransition(_ context.Context, id durable.RunID, t storedriver.Transition) error {
+func (s *MemStore) ApplyTransition(_ context.Context, id kernel.RunID, t storedriver.Transition) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	rec, ok := s.runs[id]
 	if !ok {
-		return durable.ErrRunNotFound
+		return kernel.ErrRunNotFound
 	}
 
 	// Step fact rows.
@@ -73,7 +73,7 @@ func (s *MemStore) ApplyTransition(_ context.Context, id durable.RunID, t stored
 	rec.UpdatedAt = c.UpdatedAt
 	if c.StepID != "" {
 		sr := rec.Step(c.StepID)
-		if c.Phase == durable.PhaseUnwind && sr.ForwardStatus == storedriver.OpSucceeded {
+		if c.Phase == kernel.PhaseUnwind && sr.ForwardStatus == storedriver.OpSucceeded {
 			sr.UnwindStatus = storedriver.OpUnresolved
 			sr.UnwindAttempts = c.Attempts
 		} else {
@@ -113,15 +113,15 @@ func (s *MemStore) ReapTerminal(_ context.Context, before time.Time, limit int) 
 	return deleted, nil
 }
 
-func (s *MemStore) RequestCancel(_ context.Context, id durable.RunID, req storedriver.CancelRequest) (bool, error) {
+func (s *MemStore) RequestCancel(_ context.Context, id kernel.RunID, req storedriver.CancelRequest) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	rec, ok := s.runs[id]
 	switch {
 	case !ok:
-		return false, durable.ErrRunNotFound
+		return false, kernel.ErrRunNotFound
 	case rec.Terminal():
-		return false, durable.ErrRunTerminal
+		return false, kernel.ErrRunTerminal
 	case rec.Cancel != nil:
 		return false, nil
 	}
@@ -141,7 +141,7 @@ func (s *MemStore) ListNonterminal(_ context.Context) ([]*storedriver.RunRecord,
 	return out, nil
 }
 
-func (s *MemStore) ListRuns(_ context.Context, pipeline durable.PipelineID, resource durable.ResourceID) ([]*storedriver.RunRecord, error) {
+func (s *MemStore) ListRuns(_ context.Context, pipeline kernel.PipelineID, resource kernel.ResourceID) ([]*storedriver.RunRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var out []*storedriver.RunRecord

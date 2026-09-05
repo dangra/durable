@@ -282,6 +282,64 @@ func TestFailFastShortCircuit(t *testing.T) {
 	}
 }
 
+// TestFailFastExcept pins the per-step escape hatch: an excepted step
+// stays on the cooperative path — its preempted attempt is retried and
+// the handler itself observes CancelRequested — while the Run still
+// terminates canceled.
+func TestFailFastExcept(t *testing.T) {
+	var (
+		sawCancel atomic.Bool
+		attempts  atomic.Int64
+	)
+	running := make(chan struct{})
+	def := durable.NewDefinition(durable.DefinitionConfig{
+		ID: "excepted",
+		Steps: []durable.StepConfig{stateless("careful/v1", func(ctx context.Context, inv *durable.Invocation) error {
+			attempts.Add(1)
+			if inv.CancelRequested() {
+				sawCancel.Store(true)
+				return nil // cooperative resolution
+			}
+			close(running)
+			<-ctx.Done()
+			return ctx.Err()
+		})},
+	})
+	e := durable.NewEngine(durabletest.NewMemStore(), fastRetry,
+		durable.WithLogger(discardTestLogger()),
+		durable.WithMiddleware(durable.FailFastOnCancel(durable.FailFastExcept("careful/v1"))))
+	pipe, err := def.Bind(e)
+	if err != nil {
+		t.Fatalf("Bind: %v", err)
+	}
+	if err := e.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer e.Stop(context.Background())
+
+	run, _, err := pipe.Schedule(context.Background(), "res-1", nil)
+	if err != nil {
+		t.Fatalf("Schedule: %v", err)
+	}
+	<-running
+	if err := run.Cancel(context.Background(), "careful shutdown"); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	res, err := run.Wait(context.Background())
+	if err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	if !res.Canceled() {
+		t.Fatalf("result = %+v, want canceled", res)
+	}
+	if !sawCancel.Load() {
+		t.Fatal("excepted step never observed CancelRequested; it must stay cooperative")
+	}
+	if n := attempts.Load(); n < 2 {
+		t.Fatalf("excepted step attempts = %d, want the cooperative retry", n)
+	}
+}
+
 // TestFabricatedPreemptionNotCanceled pins the masquerade guard: a Fail
 // wrapping *PreemptedError with no cancel anywhere is attributed as an
 // ordinary failure, never as canceled.

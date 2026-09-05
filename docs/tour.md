@@ -304,7 +304,13 @@ state, and a step that never commits state is invisible to unwind —
 partial external effects (a charge that landed, a half-created
 resource) get no compensation hook. The cooperative default lets each
 handler finish or clean up first; `FailFastOnCancel` trades that
-safety for immediacy.
+safety for immediacy. For a mixed pipeline, `FailFastExcept` keeps the
+steps that can't make the preemption-safety claim on the cooperative
+path:
+
+```go
+durable.FailFastOnCancel(durable.FailFastExcept("charge-payment/v1"))
+```
 
 ## Composing runs: AwaitRun
 

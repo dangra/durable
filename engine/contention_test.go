@@ -12,9 +12,9 @@ import (
 	"time"
 
 	"github.com/dangra/durable"
-	"github.com/dangra/durable/durabletest"
 	"github.com/dangra/durable/engine"
 	"github.com/dangra/durable/pipelinedef"
+	"github.com/dangra/durable/store/mem"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
@@ -35,7 +35,7 @@ func TestDuplicateScheduling(t *testing.T) {
 		},
 		NewInput: func() proto.Message { return &wrapperspb.StringValue{} },
 	})
-	_, pipes := startEngine(t, durabletest.NewMemStore(), def)
+	_, pipes := startEngine(t, mem.New(), def)
 	p := pipes[0]
 
 	run1, created, err := p.Schedule(context.Background(), "res-1", str("in"))
@@ -99,7 +99,7 @@ func TestExclusionGroupSemantics(t *testing.T) {
 			NewInput: func() proto.Message { return &wrapperspb.StringValue{} },
 		})
 	}
-	_, pipes := startEngine(t, durabletest.NewMemStore(),
+	_, pipes := startEngine(t, mem.New(),
 		blocking("grp-a", "lifecycle"),
 		blocking("grp-b", "lifecycle"),
 		blocking("solo", ""),
@@ -156,7 +156,7 @@ func TestActiveRun(t *testing.T) {
 			}),
 		},
 	})
-	_, pipes := startEngine(t, durabletest.NewMemStore(), def)
+	_, pipes := startEngine(t, mem.New(), def)
 	p := pipes[0]
 
 	if _, ok, err := p.ActiveRun(context.Background(), "r"); err != nil || ok {
@@ -218,7 +218,7 @@ func TestSupersedeReconcile(t *testing.T) {
 		},
 		NewInput: func() proto.Message { return &wrapperspb.StringValue{} },
 	})
-	_, pipes := startEngine(t, durabletest.NewMemStore(), def)
+	_, pipes := startEngine(t, mem.New(), def)
 	p := pipes[0]
 
 	stale, _, err := p.Schedule(context.Background(), "res", str("v1"))
@@ -301,7 +301,7 @@ func TestConcurrencyClassLimitsExecution(t *testing.T) {
 			}),
 		},
 	})
-	e := engine.New(durabletest.NewMemStore(), fastRetry,
+	e := engine.New(mem.New(), fastRetry,
 		engine.WithConcurrencyClass("snapshots", 1))
 	p, err := e.Bind(def)
 	if err != nil {
@@ -388,7 +388,7 @@ func TestUnconfiguredClassIsUnlimited(t *testing.T) {
 			}),
 		},
 	})
-	_, pipes := startEngine(t, durabletest.NewMemStore(), def)
+	_, pipes := startEngine(t, mem.New(), def)
 
 	var runs []engine.Run
 	for i := range parallel {
@@ -438,7 +438,7 @@ func TestCancelBypassesThrottle(t *testing.T) {
 			}),
 		},
 	})
-	e := engine.New(durabletest.NewMemStore(), fastRetry,
+	e := engine.New(mem.New(), fastRetry,
 		engine.WithConcurrencyClass("narrow", 1))
 	p, _ := e.Bind(def)
 	if err := e.Start(context.Background()); err != nil {

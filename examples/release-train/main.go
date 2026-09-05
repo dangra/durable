@@ -36,9 +36,10 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/dangra/durable/bboltstore"
 	"github.com/dangra/durable/engine"
 	"github.com/dangra/durable/examples/release-train/releasepb"
+	"github.com/dangra/durable/store"
+	_ "github.com/dangra/durable/store/bbolt"
 )
 
 // story runs the whole demo against dir and returns the world plus the
@@ -49,14 +50,14 @@ func story(ctx context.Context, dir string) (*world, engine.Result, releasepb.De
 		return nil, engine.Result{}, releasepb.DeployServiceResult{}, err
 	}
 
-	store, err := bboltstore.Open(filepath.Join(dir, "release.db"))
+	st, err := store.Open("bbolt:" + filepath.Join(dir, "release.db"))
 	if err != nil {
 		return fail(err)
 	}
-	defer store.Close()
+	defer st.Close()
 
 	// ---- yesterday: the train leaves the station ----
-	engine1, train1, err := yesterdaysBuild(ctx, store, w)
+	engine1, train1, err := yesterdaysBuild(ctx, st, w)
 	if err != nil {
 		return fail(err)
 	}
@@ -71,7 +72,7 @@ func story(ctx context.Context, dir string) (*world, engine.Result, releasepb.De
 	}
 
 	// ---- today: same store, evolved definition ----
-	engine2, train2, deploy2, err := todaysBuild(ctx, store, w)
+	engine2, train2, deploy2, err := todaysBuild(ctx, st, w)
 	if err != nil {
 		return fail(err)
 	}

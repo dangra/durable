@@ -13,7 +13,8 @@ import (
 	"github.com/dangra/durable/durabletest"
 	"github.com/dangra/durable/engine"
 	"github.com/dangra/durable/pipelinedef"
-	"github.com/dangra/durable/storedriver"
+	"github.com/dangra/durable/store/driver"
+	"github.com/dangra/durable/store/mem"
 	"github.com/oklog/ulid/v2"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/wrapperspb"
@@ -27,7 +28,7 @@ func TestScheduleValidation(t *testing.T) {
 	})
 
 	// Before Start.
-	e := engine.New(durabletest.NewMemStore())
+	e := engine.New(mem.New())
 	p, err := e.Bind(withInput)
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
@@ -58,7 +59,7 @@ func TestDelayedStart(t *testing.T) {
 			}),
 		},
 	})
-	_, pipes := startEngine(t, durabletest.NewMemStore(), def)
+	_, pipes := startEngine(t, mem.New(), def)
 	p := pipes[0]
 
 	scheduledAt := time.Now()
@@ -101,7 +102,7 @@ func TestRunIDsAreULIDs(t *testing.T) {
 			stateless("s/v1", func(context.Context, durable.Invocation) error { return nil }),
 		},
 	})
-	_, pipes := startEngine(t, durabletest.NewMemStore(), def)
+	_, pipes := startEngine(t, mem.New(), def)
 
 	before := time.Now().Add(-time.Second)
 	run1, _, err := pipes[0].Schedule(context.Background(), "r1", nil)
@@ -131,12 +132,12 @@ func TestRunIDsAreULIDs(t *testing.T) {
 
 func TestRetentionReapsOnlyOldTerminalRuns(t *testing.T) {
 	fake := durabletest.NewFakeClock(time.Now())
-	store := durabletest.NewMemStore()
+	store := mem.New()
 
 	// A nonterminal seeded run belonging to an unregistered pipeline: it
 	// will be invalid under this deployment and must survive any sweep.
-	invalidID := seedRun(t, store, "ghost-pipeline", map[durable.StepID]*storedriver.StepRecord{
-		"g/v1": {ForwardStatus: storedriver.OpUnresolved, ForwardAttempts: 1},
+	invalidID := seedRun(t, store, "ghost-pipeline", map[durable.StepID]*driver.StepRecord{
+		"g/v1": {ForwardStatus: driver.OpUnresolved, ForwardAttempts: 1},
 	})
 
 	blocked := make(chan struct{})

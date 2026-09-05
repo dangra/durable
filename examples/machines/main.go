@@ -7,15 +7,15 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/dangra/durable/durabletest"
 	"github.com/dangra/durable/engine"
 	"github.com/dangra/durable/examples/machines/machinespb"
+	"github.com/dangra/durable/store/mem"
 )
 
 func main() {
 	ctx := context.Background()
 
-	eng := engine.New(durabletest.NewMemStore(),
+	eng := engine.New(mem.New(),
 		engine.WithConcurrencyClass("host-capacity-api", 2))
 	provision, err := newProvisionMachine(newCloud()).Bind(eng)
 	if err != nil {

@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"github.com/dangra/durable"
-	"github.com/dangra/durable/durabletest"
 	"github.com/dangra/durable/pipelinedef"
+	"github.com/dangra/durable/store/mem"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
@@ -51,7 +51,7 @@ func TestForwardSuccessWithReducer(t *testing.T) {
 		},
 	})
 
-	_, pipes := startEngine(t, durabletest.NewMemStore(), def)
+	_, pipes := startEngine(t, mem.New(), def)
 	run, created, err := pipes[0].Schedule(context.Background(), "machine-1", str("ord"))
 	if err != nil || !created {
 		t.Fatalf("Schedule = created=%v err=%v", created, err)
@@ -90,7 +90,7 @@ func TestRetryUntilSuccess(t *testing.T) {
 			}),
 		},
 	})
-	_, pipes := startEngine(t, durabletest.NewMemStore(), def)
+	_, pipes := startEngine(t, mem.New(), def)
 	run, _, err := pipes[0].Schedule(context.Background(), "r", nil)
 	if err != nil {
 		t.Fatalf("Schedule: %v", err)
@@ -116,7 +116,7 @@ func TestHandlerPanicIsRetried(t *testing.T) {
 			}),
 		},
 	})
-	_, pipes := startEngine(t, durabletest.NewMemStore(), def)
+	_, pipes := startEngine(t, mem.New(), def)
 	run, _, _ := pipes[0].Schedule(context.Background(), "r", nil)
 	res, err := run.Wait(context.Background())
 	if err != nil || !res.Succeeded() {
@@ -171,7 +171,7 @@ func TestPermanentFailureUnwinds(t *testing.T) {
 		},
 	})
 
-	_, pipes := startEngine(t, durabletest.NewMemStore(), def)
+	_, pipes := startEngine(t, mem.New(), def)
 	run, _, _ := pipes[0].Schedule(context.Background(), "r", nil)
 	res, err := run.Wait(context.Background())
 	if err != nil {
@@ -224,7 +224,7 @@ func TestLastErrorSurfacedDuringRetries(t *testing.T) {
 			}),
 		},
 	})
-	_, pipes := startEngine(t, durabletest.NewMemStore(), def)
+	_, pipes := startEngine(t, mem.New(), def)
 	run, _, err := pipes[0].Schedule(context.Background(), "r", nil)
 	if err != nil {
 		t.Fatalf("Schedule: %v", err)

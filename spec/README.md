@@ -114,13 +114,13 @@ one:
 ```text
 kernel        identities, phases, outcomes, parks, failure records
    ^               ^                ^
-durable       storedriver        observe
+durable       store/driver       observe
    ^          (store SPI)        (lifecycle events)
-pipelinedef   type-erased definitions built by generated code
-   ^
-engine        the runtime: New, Bind, Schedule, Run, Result, Status
-   ^
-bboltstore, durabletest, contrib/durableotel, generated code
+pipelinedef        ^
+   ^          store            Open(uri) + driver registry
+engine             ^
+   ^          store/bbolt, store/mem, store/sqlite (later)
+contrib/durableotel, generated code, applications
 ```
 
 - `durable` is the handler contract and nothing else: `Invocation`,
@@ -134,7 +134,11 @@ bboltstore, durabletest, contrib/durableotel, generated code
   `durable` aliases, so a `Status.RunID` reads as `durable.RunID`.
 - `pipelinedef` is what generated code builds and `Engine.Bind`
   validates. Application code does not import it.
-- `kernel` has no audience of its own; it exists so that `storedriver`
+- `store` opens a store from a URI through drivers that register their
+  scheme in `init`, so a binary links only the drivers it blank-imports;
+  `store/driver` is the SPI they implement. `store/mem` is a real driver
+  for ephemeral runs, not a test double.
+- `kernel` has no audience of its own; it exists so that `store/driver`
   and `observe` do not depend on the handler contract, and the handler
   contract does not depend on the store SPI.
 

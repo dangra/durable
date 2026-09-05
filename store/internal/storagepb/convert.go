@@ -11,7 +11,7 @@ package storagepb
 import (
 	"fmt"
 	"github.com/dangra/durable/kernel"
-	"github.com/dangra/durable/storedriver"
+	"github.com/dangra/durable/store/driver"
 	"time"
 
 	"google.golang.org/protobuf/proto"
@@ -34,7 +34,7 @@ func unmarshal(what string, b []byte, m proto.Message) error {
 }
 
 // MarshalRunMeta encodes the write-once identity fields of rec.
-func MarshalRunMeta(rec *storedriver.RunRecord) ([]byte, error) {
+func MarshalRunMeta(rec *driver.RunRecord) ([]byte, error) {
 	return marshal("run meta", &RunMeta{
 		RunId:       string(rec.RunID),
 		PipelineId:  string(rec.PipelineID),
@@ -47,7 +47,7 @@ func MarshalRunMeta(rec *storedriver.RunRecord) ([]byte, error) {
 }
 
 // UnmarshalRunMetaInto decodes identity fields into rec.
-func UnmarshalRunMetaInto(b []byte, rec *storedriver.RunRecord) error {
+func UnmarshalRunMetaInto(b []byte, rec *driver.RunRecord) error {
 	pb := &RunMeta{}
 	if err := unmarshal("run meta", b, pb); err != nil {
 		return err
@@ -64,7 +64,7 @@ func UnmarshalRunMetaInto(b []byte, rec *storedriver.RunRecord) error {
 	return nil
 }
 
-func MarshalCursor(c storedriver.Cursor) ([]byte, error) {
+func MarshalCursor(c driver.Cursor) ([]byte, error) {
 	return marshal("cursor", &Cursor{
 		Phase:         phaseToProto(c.Phase),
 		StepId:        string(c.StepID),
@@ -79,12 +79,12 @@ func MarshalCursor(c storedriver.Cursor) ([]byte, error) {
 	})
 }
 
-func UnmarshalCursor(b []byte) (storedriver.Cursor, error) {
+func UnmarshalCursor(b []byte) (driver.Cursor, error) {
 	pb := &Cursor{}
 	if err := unmarshal("cursor", b, pb); err != nil {
-		return storedriver.Cursor{}, err
+		return driver.Cursor{}, err
 	}
-	return storedriver.Cursor{
+	return driver.Cursor{
 		Phase:         phaseFromProto(pb.GetPhase()),
 		StepID:        kernel.StepID(pb.GetStepId()),
 		Attempts:      pb.GetAttempts(),
@@ -190,7 +190,7 @@ func awaitModeFromProto(m AwaitMode) kernel.AwaitMode {
 	}
 }
 
-func MarshalStepRecord(sr *storedriver.StepRecord) ([]byte, error) {
+func MarshalStepRecord(sr *driver.StepRecord) ([]byte, error) {
 	return marshal("step record", &StepRecord{
 		ForwardStatus:   opStatusToProto(sr.ForwardStatus),
 		ForwardAttempts: sr.ForwardAttempts,
@@ -200,12 +200,12 @@ func MarshalStepRecord(sr *storedriver.StepRecord) ([]byte, error) {
 	})
 }
 
-func UnmarshalStepRecord(b []byte) (*storedriver.StepRecord, error) {
+func UnmarshalStepRecord(b []byte) (*driver.StepRecord, error) {
 	pb := &StepRecord{}
 	if err := unmarshal("step record", b, pb); err != nil {
 		return nil, err
 	}
-	return &storedriver.StepRecord{
+	return &driver.StepRecord{
 		ForwardStatus:   opStatusFromProto(pb.GetForwardStatus()),
 		ForwardAttempts: pb.GetForwardAttempts(),
 		State:           pb.GetState(),
@@ -255,16 +255,16 @@ func UnmarshalTerminal(b []byte) (kernel.Outcome, []byte, error) {
 	return outcomeFromProto(pb.GetOutcome()), pb.GetOutput(), nil
 }
 
-func MarshalCancel(c *storedriver.CancelRequest) ([]byte, error) {
+func MarshalCancel(c *driver.CancelRequest) ([]byte, error) {
 	return marshal("cancel request", &CancelRequest{Cause: c.Cause, At: ts(c.At)})
 }
 
-func UnmarshalCancel(b []byte) (*storedriver.CancelRequest, error) {
+func UnmarshalCancel(b []byte) (*driver.CancelRequest, error) {
 	pb := &CancelRequest{}
 	if err := unmarshal("cancel request", b, pb); err != nil {
 		return nil, err
 	}
-	return &storedriver.CancelRequest{Cause: pb.GetCause(), At: fromTS(pb.GetAt())}, nil
+	return &driver.CancelRequest{Cause: pb.GetCause(), At: fromTS(pb.GetAt())}, nil
 }
 
 func failureRecordToProto(f *kernel.FailureRecord) *FailureRecord {
@@ -353,29 +353,29 @@ func outcomeFromProto(o Outcome) kernel.Outcome {
 	}
 }
 
-func opStatusToProto(s storedriver.OpStatus) OpStatus {
+func opStatusToProto(s driver.OpStatus) OpStatus {
 	switch s {
-	case storedriver.OpUnresolved:
+	case driver.OpUnresolved:
 		return OpStatus_OP_STATUS_UNRESOLVED
-	case storedriver.OpSucceeded:
+	case driver.OpSucceeded:
 		return OpStatus_OP_STATUS_SUCCEEDED
-	case storedriver.OpFailed:
+	case driver.OpFailed:
 		return OpStatus_OP_STATUS_FAILED
 	default:
 		return OpStatus_OP_STATUS_UNSPECIFIED
 	}
 }
 
-func opStatusFromProto(s OpStatus) storedriver.OpStatus {
+func opStatusFromProto(s OpStatus) driver.OpStatus {
 	switch s {
 	case OpStatus_OP_STATUS_UNRESOLVED:
-		return storedriver.OpUnresolved
+		return driver.OpUnresolved
 	case OpStatus_OP_STATUS_SUCCEEDED:
-		return storedriver.OpSucceeded
+		return driver.OpSucceeded
 	case OpStatus_OP_STATUS_FAILED:
-		return storedriver.OpFailed
+		return driver.OpFailed
 	default:
-		return storedriver.OpNone
+		return driver.OpNone
 	}
 }
 

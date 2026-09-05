@@ -9,9 +9,9 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/dangra/durable"
-	"github.com/dangra/durable/durabletest"
 	"github.com/dangra/durable/engine"
 	"github.com/dangra/durable/pipelinedef"
+	"github.com/dangra/durable/store/mem"
 )
 
 // ExampleFail declares a permanent failure with attribution: a SaaS
@@ -44,7 +44,7 @@ func ExampleFail() {
 		},
 	})
 
-	eng := engine.New(durabletest.NewMemStore())
+	eng := engine.New(mem.New())
 	pipeline, err := eng.Bind(def)
 	if err != nil {
 		panic(err)
@@ -110,7 +110,7 @@ func ExampleRun_Cancel() {
 		},
 	})
 
-	eng := engine.New(durabletest.NewMemStore(),
+	eng := engine.New(mem.New(),
 		engine.WithRetryPolicy(engine.RetryPolicy{Initial: time.Millisecond, Max: time.Millisecond, Multiplier: 1}))
 	pipeline, err := eng.Bind(def)
 	if err != nil {
@@ -147,7 +147,7 @@ func ExampleRun_Cancel() {
 // the park survives restarts. The woken attempt re-executes fresh,
 // distinguishing "woken after completion" through AwaitedRunID.
 func ExampleAwaitRun() {
-	eng := engine.New(durabletest.NewMemStore())
+	eng := engine.New(mem.New())
 
 	deploy := pipelinedef.New(pipelinedef.Config{
 		ID: "deploy-service",
@@ -224,7 +224,7 @@ func ExamplePipeline_Schedule() {
 		}},
 	})
 
-	eng := engine.New(durabletest.NewMemStore())
+	eng := engine.New(mem.New())
 	pipeline, err := eng.Bind(def)
 	if err != nil {
 		panic(err)
@@ -279,7 +279,7 @@ func ExampleWithConcurrencyClass() {
 		}},
 	})
 
-	eng := engine.New(durabletest.NewMemStore(),
+	eng := engine.New(mem.New(),
 		engine.WithConcurrencyClass("cluster", 1))
 	pipeline, err := eng.Bind(def)
 	if err != nil {
@@ -328,7 +328,7 @@ func ExampleStartAfter() {
 		}},
 	})
 
-	eng := engine.New(durabletest.NewMemStore())
+	eng := engine.New(mem.New())
 	pipeline, err := eng.Bind(def)
 	if err != nil {
 		panic(err)
@@ -380,7 +380,7 @@ func ExampleEngine_Stats() {
 		}},
 	})
 
-	eng := engine.New(durabletest.NewMemStore(),
+	eng := engine.New(mem.New(),
 		engine.WithConcurrencyClass("cluster", 1))
 	pipeline, err := eng.Bind(def)
 	if err != nil {

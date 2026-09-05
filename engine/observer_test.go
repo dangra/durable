@@ -13,10 +13,10 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/dangra/durable"
-	"github.com/dangra/durable/durabletest"
 	"github.com/dangra/durable/engine"
 	"github.com/dangra/durable/observe"
 	"github.com/dangra/durable/pipelinedef"
+	"github.com/dangra/durable/store/mem"
 )
 
 func discardTestLogger() *slog.Logger { return slog.New(slog.DiscardHandler) }
@@ -62,7 +62,7 @@ func startObservedEngine(t *testing.T, log *eventLog, defs []*pipelinedef.Defini
 		fastRetry, engine.WithRecoveryBackoff(0), engine.WithObserver(log.observer()),
 		engine.WithLogger(discardTestLogger()),
 	}, opts...)
-	e := engine.New(durabletest.NewMemStore(), opts...)
+	e := engine.New(mem.New(), opts...)
 	var pipes []*engine.Pipeline
 	for _, def := range defs {
 		pipe, err := e.Bind(def)
@@ -721,7 +721,7 @@ func TestObserverInvalidTargetNoSpuriousWake(t *testing.T) {
 // later batch were to fail.
 func TestObserverReapedPerBatch(t *testing.T) {
 	const runs = 300 // > one 256-run reap batch
-	store := durabletest.NewMemStore()
+	store := mem.New()
 	def := pipelinedef.New(pipelinedef.Config{
 		ID: "observed-reap",
 		Steps: []pipelinedef.Step{
@@ -806,7 +806,7 @@ func TestObserverPanicIsolated(t *testing.T) {
 	panicky := observe.Observer{
 		RunTerminal: func(observe.RunTerminalEvent) { panic("observer bug") },
 	}
-	e := engine.New(durabletest.NewMemStore(),
+	e := engine.New(mem.New(),
 		fastRetry, engine.WithRecoveryBackoff(0), engine.WithLogger(discardTestLogger()),
 		engine.WithObserver(panicky), engine.WithObserver(log.observer()))
 	pipe, err := e.Bind(def)

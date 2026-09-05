@@ -1,10 +1,10 @@
-package bboltstore
+package bbolt
 
 import (
 	"bytes"
 	"context"
 	"errors"
-	"github.com/dangra/durable/storedriver"
+	"github.com/dangra/durable/store/driver"
 	"path/filepath"
 	"testing"
 	"time"
@@ -31,7 +31,7 @@ func TestSlotSemantics(t *testing.T) {
 	s := open(t, filepath.Join(t.TempDir(), "durable.db"))
 	ctx := context.Background()
 
-	rec := &storedriver.RunRecord{
+	rec := &driver.RunRecord{
 		RunID:      "run-1",
 		PipelineID: "p",
 		ResourceID: "r",
@@ -43,7 +43,7 @@ func TestSlotSemantics(t *testing.T) {
 	}
 
 	// The slot is occupied.
-	dup := &storedriver.RunRecord{RunID: "run-2", PipelineID: "p", ResourceID: "r", Phase: durable.PhaseForward}
+	dup := &driver.RunRecord{RunID: "run-2", PipelineID: "p", ResourceID: "r", Phase: durable.PhaseForward}
 	existing, created, err := s.CreateRun(ctx, dup)
 	if err != nil || created {
 		t.Fatalf("second CreateRun = created=%v err=%v", created, err)
@@ -53,10 +53,10 @@ func TestSlotSemantics(t *testing.T) {
 	}
 
 	// Facts round-trip.
-	err = s.ApplyTransition(ctx, "run-1", storedriver.Transition{
-		Cursor: storedriver.Cursor{Phase: durable.PhaseForward},
-		Steps: []storedriver.StepWrite{{StepID: "a", Record: storedriver.StepRecord{
-			ForwardStatus: storedriver.OpSucceeded, ForwardAttempts: 1, State: []byte{1, 2, 3},
+	err = s.ApplyTransition(ctx, "run-1", driver.Transition{
+		Cursor: driver.Cursor{Phase: durable.PhaseForward},
+		Steps: []driver.StepWrite{{StepID: "a", Record: driver.StepRecord{
+			ForwardStatus: driver.OpSucceeded, ForwardAttempts: 1, State: []byte{1, 2, 3},
 		}}},
 	})
 	if err != nil {
@@ -66,7 +66,7 @@ func TestSlotSemantics(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetRun: %v", err)
 	}
-	if sr := got.Steps["a"]; sr == nil || sr.ForwardStatus != storedriver.OpSucceeded || len(sr.State) != 3 {
+	if sr := got.Steps["a"]; sr == nil || sr.ForwardStatus != driver.OpSucceeded || len(sr.State) != 3 {
 		t.Fatalf("round-tripped step record = %+v", got.Steps["a"])
 	}
 
@@ -76,8 +76,8 @@ func TestSlotSemantics(t *testing.T) {
 
 	// Terminal completion frees the slot.
 	oc := durable.OutcomeSuccess
-	err = s.ApplyTransition(ctx, "run-1", storedriver.Transition{
-		Cursor:  storedriver.Cursor{Phase: durable.PhaseDone},
+	err = s.ApplyTransition(ctx, "run-1", driver.Transition{
+		Cursor:  driver.Cursor{Phase: durable.PhaseDone},
 		Outcome: &oc,
 	})
 	if err != nil {
@@ -181,28 +181,28 @@ func TestRequestCancel(t *testing.T) {
 	s := open(t, filepath.Join(t.TempDir(), "durable.db"))
 	ctx := context.Background()
 
-	rec := &storedriver.RunRecord{RunID: "run-c", PipelineID: "p", ResourceID: "r", Phase: durable.PhaseForward}
+	rec := &driver.RunRecord{RunID: "run-c", PipelineID: "p", ResourceID: "r", Phase: durable.PhaseForward}
 	if _, created, err := s.CreateRun(ctx, rec); err != nil || !created {
 		t.Fatalf("CreateRun = created=%v err=%v", created, err)
 	}
 
-	if _, err := s.RequestCancel(ctx, "missing", storedriver.CancelRequest{}); !errors.Is(err, durable.ErrRunNotFound) {
+	if _, err := s.RequestCancel(ctx, "missing", driver.CancelRequest{}); !errors.Is(err, durable.ErrRunNotFound) {
 		t.Fatalf("RequestCancel(missing) = %v, want ErrRunNotFound", err)
 	}
 
-	accepted, err := s.RequestCancel(ctx, "run-c", storedriver.CancelRequest{Cause: "first", At: time.Now()})
+	accepted, err := s.RequestCancel(ctx, "run-c", driver.CancelRequest{Cause: "first", At: time.Now()})
 	if err != nil || !accepted {
 		t.Fatalf("RequestCancel = accepted=%v err=%v", accepted, err)
 	}
 	// First cancel wins.
-	accepted, err = s.RequestCancel(ctx, "run-c", storedriver.CancelRequest{Cause: "second"})
+	accepted, err = s.RequestCancel(ctx, "run-c", driver.CancelRequest{Cause: "second"})
 	if err != nil || accepted {
 		t.Fatalf("second RequestCancel = accepted=%v err=%v", accepted, err)
 	}
 
 	// The request survives later transitions untouched.
-	err = s.ApplyTransition(ctx, "run-c", storedriver.Transition{
-		Cursor: storedriver.Cursor{Phase: durable.PhaseForward, StepID: "s/v1", Attempts: 1},
+	err = s.ApplyTransition(ctx, "run-c", driver.Transition{
+		Cursor: driver.Cursor{Phase: durable.PhaseForward, StepID: "s/v1", Attempts: 1},
 	})
 	if err != nil {
 		t.Fatalf("ApplyTransition: %v", err)
@@ -217,14 +217,14 @@ func TestRequestCancel(t *testing.T) {
 
 	// Terminal runs reject cancellation.
 	oc := durable.OutcomeFailure
-	err = s.ApplyTransition(ctx, "run-c", storedriver.Transition{
-		Cursor:  storedriver.Cursor{Phase: durable.PhaseDone},
+	err = s.ApplyTransition(ctx, "run-c", driver.Transition{
+		Cursor:  driver.Cursor{Phase: durable.PhaseDone},
 		Outcome: &oc,
 	})
 	if err != nil {
 		t.Fatalf("terminal ApplyTransition: %v", err)
 	}
-	if _, err := s.RequestCancel(ctx, "run-c", storedriver.CancelRequest{}); !errors.Is(err, durable.ErrRunTerminal) {
+	if _, err := s.RequestCancel(ctx, "run-c", driver.CancelRequest{}); !errors.Is(err, durable.ErrRunTerminal) {
 		t.Fatalf("RequestCancel(terminal) = %v, want ErrRunTerminal", err)
 	}
 }
@@ -233,25 +233,25 @@ func TestExclusionGroupSlot(t *testing.T) {
 	s := open(t, filepath.Join(t.TempDir(), "durable.db"))
 	ctx := context.Background()
 
-	recA := &storedriver.RunRecord{RunID: "ga-1", PipelineID: "pa", ResourceID: "r", Group: "group/g", Phase: durable.PhaseForward}
+	recA := &driver.RunRecord{RunID: "ga-1", PipelineID: "pa", ResourceID: "r", Group: "group/g", Phase: durable.PhaseForward}
 	if _, created, err := s.CreateRun(ctx, recA); err != nil || !created {
 		t.Fatalf("CreateRun = created=%v err=%v", created, err)
 	}
 	// A different pipeline in the same group hits the occupied slot.
-	recB := &storedriver.RunRecord{RunID: "gb-1", PipelineID: "pb", ResourceID: "r", Group: "group/g", Phase: durable.PhaseForward}
+	recB := &driver.RunRecord{RunID: "gb-1", PipelineID: "pb", ResourceID: "r", Group: "group/g", Phase: durable.PhaseForward}
 	existing, created, err := s.CreateRun(ctx, recB)
 	if err != nil || created || existing.RunID != "ga-1" {
 		t.Fatalf("group CreateRun = %+v created=%v err=%v", existing, created, err)
 	}
 	// A pipeline outside the group is unaffected.
-	recC := &storedriver.RunRecord{RunID: "gc-1", PipelineID: "pc", ResourceID: "r", Phase: durable.PhaseForward}
+	recC := &driver.RunRecord{RunID: "gc-1", PipelineID: "pc", ResourceID: "r", Phase: durable.PhaseForward}
 	if _, created, err := s.CreateRun(ctx, recC); err != nil || !created {
 		t.Fatalf("non-group CreateRun = created=%v err=%v", created, err)
 	}
 	// Terminal completion frees the group slot.
 	oc := durable.OutcomeSuccess
-	if err := s.ApplyTransition(ctx, "ga-1", storedriver.Transition{
-		Cursor:  storedriver.Cursor{Phase: durable.PhaseDone},
+	if err := s.ApplyTransition(ctx, "ga-1", driver.Transition{
+		Cursor:  driver.Cursor{Phase: durable.PhaseDone},
 		Outcome: &oc,
 	}); err != nil {
 		t.Fatalf("terminal ApplyTransition: %v", err)
@@ -268,17 +268,17 @@ func TestReapTerminal(t *testing.T) {
 	oc := durable.OutcomeSuccess
 
 	mkRun := func(id durable.RunID, resource durable.ResourceID, terminalAt time.Time, terminal bool) {
-		rec := &storedriver.RunRecord{
+		rec := &driver.RunRecord{
 			RunID: id, PipelineID: "p", ResourceID: resource,
 			Phase: durable.PhaseForward, CreatedAt: base,
 		}
 		if _, created, err := s.CreateRun(ctx, rec); err != nil || !created {
 			t.Fatalf("CreateRun %s: created=%v err=%v", id, created, err)
 		}
-		tr := storedriver.Transition{
-			Cursor: storedriver.Cursor{Phase: durable.PhaseForward, UpdatedAt: terminalAt},
-			Steps: []storedriver.StepWrite{{StepID: "a", Record: storedriver.StepRecord{
-				ForwardStatus: storedriver.OpSucceeded, ForwardAttempts: 1, State: []byte{1},
+		tr := driver.Transition{
+			Cursor: driver.Cursor{Phase: durable.PhaseForward, UpdatedAt: terminalAt},
+			Steps: []driver.StepWrite{{StepID: "a", Record: driver.StepRecord{
+				ForwardStatus: driver.OpSucceeded, ForwardAttempts: 1, State: []byte{1},
 			}}},
 		}
 		if terminal {
@@ -294,7 +294,7 @@ func TestReapTerminal(t *testing.T) {
 	mkRun("old-2", "r2", base.Add(-48*time.Hour), true)
 	mkRun("recent", "r3", base.Add(-time.Minute), true)
 	mkRun("alive", "r4", base.Add(-48*time.Hour), false)
-	if _, err := s.RequestCancel(ctx, "alive", storedriver.CancelRequest{Cause: "x", At: base}); err != nil {
+	if _, err := s.RequestCancel(ctx, "alive", driver.CancelRequest{Cause: "x", At: base}); err != nil {
 		t.Fatalf("RequestCancel: %v", err)
 	}
 

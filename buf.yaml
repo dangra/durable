@@ -11,3 +11,8 @@ lint:
 breaking:
   use:
     - FILE
+  except:
+    # go_package is a Go build concern, not a wire one: the internal
+    # storage schema moved under store/internal. Review catches accidental
+    # changes to the public durablepb path.
+    - FILE_SAME_GO_PACKAGE

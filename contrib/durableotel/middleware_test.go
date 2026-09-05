@@ -15,9 +15,9 @@ import (
 
 	"github.com/dangra/durable"
 	"github.com/dangra/durable/contrib/durableotel"
-	"github.com/dangra/durable/durabletest"
 	"github.com/dangra/durable/engine"
 	"github.com/dangra/durable/pipelinedef"
+	"github.com/dangra/durable/store/mem"
 )
 
 var fastRetry = engine.WithRetryPolicy(engine.RetryPolicy{
@@ -64,7 +64,7 @@ func sagaDef() *pipelinedef.Definition {
 // options and returns the schedule-side origin span context.
 func runSaga(t *testing.T, schedule []durable.ScheduleOption, opts ...engine.Option) {
 	t.Helper()
-	eng := engine.New(durabletest.NewMemStore(),
+	eng := engine.New(mem.New(),
 		append([]engine.Option{fastRetry, quietLogger()}, opts...)...)
 	pipe, err := eng.Bind(sagaDef())
 	if err != nil {
@@ -233,7 +233,7 @@ func TestMiddlewareAwaitIsNotAnError(t *testing.T) {
 			},
 		}},
 	})
-	eng := engine.New(durabletest.NewMemStore(), fastRetry, quietLogger(),
+	eng := engine.New(mem.New(), fastRetry, quietLogger(),
 		engine.WithMiddleware(durableotel.Middleware(durableotel.WithTracerProvider(tp))))
 	pipe, err := eng.Bind(def)
 	if err != nil {
@@ -295,7 +295,7 @@ func TestMiddlewarePanicRecordedAndRethrown(t *testing.T) {
 			},
 		}},
 	})
-	eng := engine.New(durabletest.NewMemStore(), fastRetry, quietLogger(),
+	eng := engine.New(mem.New(), fastRetry, quietLogger(),
 		engine.WithMiddleware(durableotel.Middleware(durableotel.WithTracerProvider(tp))))
 	pipe, err := eng.Bind(def)
 	if err != nil {
@@ -389,7 +389,7 @@ func TestWithTraceContextRoundTrip(t *testing.T) {
 	engineOpt := durableotel.WithTraceContext(ctx)
 	// The ScheduleOption is opaque; observe its effect through a real
 	// schedule.
-	eng := engine.New(durabletest.NewMemStore(), fastRetry, quietLogger(),
+	eng := engine.New(mem.New(), fastRetry, quietLogger(),
 		engine.WithMiddleware(func(next durable.Handler) durable.Handler {
 			return func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				for k, v := range inv.Annotations() {

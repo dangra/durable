@@ -10,7 +10,7 @@
 //
 // # The API in four groups
 //
-// Running an engine. New over a storedriver implementation, the With*
+// Running an engine. New over a store (store.Open, or a driver package's Open), the With*
 // Options (concurrency, classes, retry and recovery policy, retention,
 // clock, logger, observer, middleware, schedule annotator, drain
 // timeout), Start, Stop, and Stats.

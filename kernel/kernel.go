@@ -5,7 +5,7 @@
 //
 // Handler code never imports it: the root durable package aliases every
 // type here, so a durable.RunID is a kernel.RunID. The packages with a
-// narrower audience — storedriver for persistence backends, observe for
+// narrower audience — store/driver for persistence backends, observe for
 // telemetry adapters — use it directly.
 package kernel
 

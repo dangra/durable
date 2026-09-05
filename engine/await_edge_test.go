@@ -17,11 +17,11 @@ import (
 	"time"
 
 	"github.com/dangra/durable"
-	"github.com/dangra/durable/bboltstore"
-	"github.com/dangra/durable/durabletest"
 	"github.com/dangra/durable/engine"
 	"github.com/dangra/durable/pipelinedef"
-	"github.com/dangra/durable/storedriver"
+	"github.com/dangra/durable/store/bbolt"
+	"github.com/dangra/durable/store/driver"
+	"github.com/dangra/durable/store/mem"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -93,7 +93,7 @@ func TestAwaitWokenAttemptTransientErrorKeepsMemory(t *testing.T) {
 			})),
 		},
 	})
-	_, pipes := startEngine(t, durabletest.NewMemStore(), trivialChild("edge-child"), parent)
+	_, pipes := startEngine(t, mem.New(), trivialChild("edge-child"), parent)
 	childPipe = pipes[0]
 
 	pRun, _, err := pipes[1].Schedule(context.Background(), "parent-res", nil)
@@ -146,7 +146,7 @@ func TestAwaitWokenAttemptPermanentFailureUnwinds(t *testing.T) {
 			},
 		},
 	})
-	_, pipes := startEngine(t, durabletest.NewMemStore(), trivialChild("edge-child-fail"), parent)
+	_, pipes := startEngine(t, mem.New(), trivialChild("edge-child-fail"), parent)
 	childPipe = pipes[0]
 
 	pRun, _, err := pipes[1].Schedule(context.Background(), "parent-res", nil)
@@ -192,7 +192,7 @@ func TestAwaitTransientErrorBeforePark(t *testing.T) {
 			}),
 		},
 	})
-	_, pipes := startEngine(t, durabletest.NewMemStore(), trivialChild("edge-child-pre"), parent)
+	_, pipes := startEngine(t, mem.New(), trivialChild("edge-child-pre"), parent)
 	childPipe = pipes[0]
 
 	pRun, _, err := pipes[1].Schedule(context.Background(), "parent-res", nil)
@@ -248,7 +248,7 @@ func TestAwaitChainedParksReportLatestTarget(t *testing.T) {
 			}),
 		},
 	})
-	_, pipes := startEngine(t, durabletest.NewMemStore(), trivialChild("edge-child-chain"), parent)
+	_, pipes := startEngine(t, mem.New(), trivialChild("edge-child-chain"), parent)
 	childPipe = pipes[0]
 
 	pRun, _, err := pipes[1].Schedule(context.Background(), "parent-res", nil)
@@ -294,7 +294,7 @@ func TestAwaitUnwindParkThenTransientError(t *testing.T) {
 			}),
 		},
 	})
-	_, pipes := startEngine(t, durabletest.NewMemStore(), trivialChild("edge-child-unwind"), parent)
+	_, pipes := startEngine(t, mem.New(), trivialChild("edge-child-unwind"), parent)
 	childPipe = pipes[0]
 
 	pRun, _, err := pipes[1].Schedule(context.Background(), "parent-res", nil)
@@ -359,7 +359,7 @@ func TestAwaitCancelBypassReportsTargetAndCancel(t *testing.T) {
 			}),
 		},
 	})
-	_, pipes := startEngine(t, durabletest.NewMemStore(), target, waiter)
+	_, pipes := startEngine(t, mem.New(), target, waiter)
 	targetPipe = pipes[0]
 	tRun, _, err := targetPipe.Schedule(context.Background(), "res", nil)
 	if err != nil {
@@ -395,10 +395,10 @@ func TestAwaitCancelBypassReportsTargetAndCancel(t *testing.T) {
 // against both stores: the memory has to survive a real round trip.
 func TestAwaitRestartDuringWokenAttemptKeepsMemory(t *testing.T) {
 	t.Run("memstore", func(t *testing.T) {
-		testAwaitRestartDuringWokenAttempt(t, durabletest.NewMemStore())
+		testAwaitRestartDuringWokenAttempt(t, mem.New())
 	})
 	t.Run("bbolt", func(t *testing.T) {
-		store, err := bboltstore.Open(filepath.Join(t.TempDir(), "await.db"))
+		store, err := bbolt.Open(filepath.Join(t.TempDir(), "await.db"))
 		if err != nil {
 			t.Fatalf("Open: %v", err)
 		}
@@ -407,7 +407,7 @@ func TestAwaitRestartDuringWokenAttemptKeepsMemory(t *testing.T) {
 	})
 }
 
-func testAwaitRestartDuringWokenAttempt(t *testing.T, store storedriver.Store) {
+func testAwaitRestartDuringWokenAttempt(t *testing.T, store driver.Store) {
 	var childPipe *engine.Pipeline
 	var log awaitedLog
 	inWoken := make(chan struct{}, 1)
@@ -515,7 +515,7 @@ func TestAwaitAllWakesOnceEveryTargetIsDone(t *testing.T) {
 			}),
 		},
 	})
-	_, pipes := startEngine(t, durabletest.NewMemStore(), gatedChild("all-child", &g), parent)
+	_, pipes := startEngine(t, mem.New(), gatedChild("all-child", &g), parent)
 	childPipe = pipes[0]
 
 	pRun, _, err := pipes[1].Schedule(context.Background(), "parent-res", nil)
@@ -598,7 +598,7 @@ func TestAwaitAnySelectLoopDrainsChildren(t *testing.T) {
 			}),
 		},
 	})
-	_, pipes := startEngine(t, durabletest.NewMemStore(), gatedChild("any-child", &g), parent)
+	_, pipes := startEngine(t, mem.New(), gatedChild("any-child", &g), parent)
 	childPipe = pipes[0]
 
 	pRun, _, err := pipes[1].Schedule(context.Background(), "parent-res", nil)
@@ -671,7 +671,7 @@ func TestAwaitAnyRaceCancelsLosers(t *testing.T) {
 			}),
 		},
 	})
-	_, pipes := startEngine(t, durabletest.NewMemStore(), gatedChild("race-child", &g), parent)
+	_, pipes := startEngine(t, mem.New(), gatedChild("race-child", &g), parent)
 	childPipe = pipes[0]
 
 	pRun, _, err := pipes[1].Schedule(context.Background(), "parent-res", nil)
@@ -719,7 +719,7 @@ func TestAwaitAllCancelBypassReportsDone(t *testing.T) {
 			}),
 		},
 	})
-	_, pipes := startEngine(t, durabletest.NewMemStore(), gatedChild("bypass-child", &g), parent)
+	_, pipes := startEngine(t, mem.New(), gatedChild("bypass-child", &g), parent)
 	childPipe = pipes[0]
 
 	pRun, _, err := pipes[1].Schedule(context.Background(), "parent-res", nil)
@@ -751,7 +751,7 @@ func TestAwaitAllCancelBypassReportsDone(t *testing.T) {
 func TestAwaitAnyCycleIsInvalid(t *testing.T) {
 	var g gates
 	defer g.open("c")
-	store := durabletest.NewMemStore()
+	store := mem.New()
 	var pipeA, pipeB, pipeC *engine.Pipeline
 	defA := pipelinedef.New(pipelinedef.Config{
 		ID: "cycle-any-a",
@@ -862,7 +862,7 @@ func TestAwaitAllScheduleIsIdempotentAcrossRetry(t *testing.T) {
 			}),
 		},
 	})
-	_, pipes := startEngine(t, durabletest.NewMemStore(), gatedChild("idem-child", &g), parent)
+	_, pipes := startEngine(t, mem.New(), gatedChild("idem-child", &g), parent)
 	childPipe = pipes[0]
 	pRun, _, err := pipes[1].Schedule(context.Background(), "parent-res", nil)
 	if err != nil {
@@ -896,7 +896,7 @@ func TestAwaitAllWithNoTargetsIsInvalid(t *testing.T) {
 			}),
 		},
 	})
-	_, pipes := startEngine(t, durabletest.NewMemStore(), def)
+	_, pipes := startEngine(t, mem.New(), def)
 	run, _, _ := pipes[0].Schedule(context.Background(), "r", nil)
 	st := waitForState(t, run, engine.RunStateInvalid)
 	if !strings.Contains(st.InvalidReason, "no targets") {
@@ -932,7 +932,7 @@ func TestAwaitTimeoutExpiryIsAWake(t *testing.T) {
 			}),
 		},
 	})
-	_, pipes := startEngine(t, durabletest.NewMemStore(), gatedChild("timeout-child", &g), parent)
+	_, pipes := startEngine(t, mem.New(), gatedChild("timeout-child", &g), parent)
 	childPipe = pipes[0]
 
 	pRun, _, err := pipes[1].Schedule(context.Background(), "parent-res", nil)
@@ -988,7 +988,7 @@ func TestAwaitTimeoutExtendAndCompleteBeforeDeadline(t *testing.T) {
 			}),
 		},
 	})
-	_, pipes := startEngine(t, durabletest.NewMemStore(), gatedChild("extend-child", &g), parent)
+	_, pipes := startEngine(t, mem.New(), gatedChild("extend-child", &g), parent)
 	childPipe = pipes[0]
 
 	pRun, _, err := pipes[1].Schedule(context.Background(), "parent-res", nil)
@@ -1023,7 +1023,7 @@ func TestAwaitTimeoutExtendAndCompleteBeforeDeadline(t *testing.T) {
 // engine is running wakes expired on the next engine. Against bbolt, so
 // the timestamp survives a real round trip.
 func TestAwaitTimeoutSurvivesRestart(t *testing.T) {
-	store, err := bboltstore.Open(filepath.Join(t.TempDir(), "deadline.db"))
+	store, err := bbolt.Open(filepath.Join(t.TempDir(), "deadline.db"))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -1110,7 +1110,7 @@ func TestAwaitTimeoutNonPositiveIsNoDeadline(t *testing.T) {
 			}),
 		},
 	})
-	_, pipes := startEngine(t, durabletest.NewMemStore(), gatedChild("nodeadline-child", &g), parent)
+	_, pipes := startEngine(t, mem.New(), gatedChild("nodeadline-child", &g), parent)
 	childPipe = pipes[0]
 	pRun, _, err := pipes[1].Schedule(context.Background(), "parent-res", nil)
 	if err != nil {
@@ -1125,7 +1125,7 @@ func TestAwaitTimeoutNonPositiveIsNoDeadline(t *testing.T) {
 // a store could still hand one back. The gate marks the run invalid
 // rather than parking it on nothing.
 func TestAwaitEmptyParkFromStoreIsInvalid(t *testing.T) {
-	store := durabletest.NewMemStore()
+	store := mem.New()
 	def := pipelinedef.New(pipelinedef.Config{
 		ID: "corrupt-park",
 		Steps: []pipelinedef.Step{
@@ -1135,15 +1135,15 @@ func TestAwaitEmptyParkFromStoreIsInvalid(t *testing.T) {
 		},
 	})
 	now := time.Now()
-	rec := &storedriver.RunRecord{
+	rec := &driver.RunRecord{
 		RunID: "01ARZ3NDEKTSV4RRFFQ69G5FAV", PipelineID: "corrupt-park", ResourceID: "r",
-		Phase: durable.PhaseForward, Steps: map[durable.StepID]*storedriver.StepRecord{},
+		Phase: durable.PhaseForward, Steps: map[durable.StepID]*driver.StepRecord{},
 		CreatedAt: now, UpdatedAt: now,
 	}
 	if _, _, err := store.CreateRun(context.Background(), rec); err != nil {
 		t.Fatalf("CreateRun: %v", err)
 	}
-	if err := store.ApplyTransition(context.Background(), rec.RunID, storedriver.Transition{Cursor: storedriver.Cursor{
+	if err := store.ApplyTransition(context.Background(), rec.RunID, driver.Transition{Cursor: driver.Cursor{
 		Phase: durable.PhaseForward, StepID: "s/v1", Attempts: 1, UpdatedAt: now,
 		Awaiting: &durable.Await{Mode: durable.AwaitModeAny},
 	}}); err != nil {

@@ -3,7 +3,7 @@ package engine
 import (
 	"context"
 	"github.com/dangra/durable"
-	"github.com/dangra/durable/storedriver"
+	"github.com/dangra/durable/store/driver"
 )
 
 // Run is an in-process handle to one execution. The handle itself is not
@@ -96,7 +96,7 @@ func (r Run) Cancel(ctx context.Context, cause string) error {
 	if !e.isStarted() {
 		return ErrNotStarted
 	}
-	accepted, err := e.store.RequestCancel(ctx, r.id, storedriver.CancelRequest{Cause: sanitizeText(cause), At: e.clock.Now()})
+	accepted, err := e.store.RequestCancel(ctx, r.id, driver.CancelRequest{Cause: sanitizeText(cause), At: e.clock.Now()})
 	if err != nil {
 		return err
 	}
@@ -130,10 +130,10 @@ func (r Run) Status(ctx context.Context) (Status, error) {
 		st.CancelCause = rec.Cancel.Cause
 	}
 	for id, sr := range rec.Steps {
-		if sr.ForwardStatus == storedriver.OpUnresolved {
+		if sr.ForwardStatus == driver.OpUnresolved {
 			st.StepID, st.Attempt = id, sr.ForwardAttempts
 		}
-		if sr.UnwindStatus == storedriver.OpUnresolved {
+		if sr.UnwindStatus == driver.OpUnresolved {
 			st.StepID, st.Attempt = id, sr.UnwindAttempts
 		}
 	}
@@ -211,7 +211,7 @@ func (r Run) OutputBytes(ctx context.Context) ([]byte, error) {
 
 // started reports whether any operation attempt was ever reserved for the
 // Run, distinguishing a delayed start from a retry wait.
-func started(rec *storedriver.RunRecord) bool {
+func started(rec *driver.RunRecord) bool {
 	for _, sr := range rec.Steps {
 		if sr.ForwardAttempts > 0 || sr.UnwindAttempts > 0 {
 			return true
@@ -220,7 +220,7 @@ func started(rec *storedriver.RunRecord) bool {
 	return false
 }
 
-func resultOf(rec *storedriver.RunRecord) Result {
+func resultOf(rec *driver.RunRecord) Result {
 	res := Result{
 		Outcome:        *rec.Outcome,
 		UnwindFailures: append([]durable.UnwindFailure(nil), rec.UnwindFailures...),

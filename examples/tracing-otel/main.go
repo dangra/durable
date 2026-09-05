@@ -39,9 +39,9 @@ import (
 
 	"github.com/dangra/durable"
 	"github.com/dangra/durable/contrib/durableotel"
-	"github.com/dangra/durable/durabletest"
 	"github.com/dangra/durable/engine"
 	"github.com/dangra/durable/examples/tracing-otel/orderspb"
+	"github.com/dangra/durable/store/mem"
 )
 
 // warehouse is the fake order-fulfillment backend.
@@ -117,7 +117,7 @@ func run(ctx context.Context) (*tracetest.SpanRecorder, trace.SpanContext, order
 	// Propagation intent is declared once, here: the Annotator injects
 	// whatever trace context rides the ctx of every future Schedule
 	// call, so no call site has anything to remember.
-	eng := engine.New(durabletest.NewMemStore(),
+	eng := engine.New(mem.New(),
 		engine.WithRetryPolicy(engine.RetryPolicy{Initial: time.Millisecond, Max: 5 * time.Millisecond, Multiplier: 2}),
 		engine.WithLogger(slog.New(slog.DiscardHandler)),
 		engine.WithMiddleware(durableotel.Middleware(durableotel.WithTracerProvider(tp))),

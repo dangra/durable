@@ -10,13 +10,13 @@ import (
 	"testing"
 
 	"github.com/dangra/durable"
-	"github.com/dangra/durable/durabletest"
 	"github.com/dangra/durable/engine"
 	"github.com/dangra/durable/pipelinedef"
+	"github.com/dangra/durable/store/mem"
 )
 
 func TestStepOwnershipIsExclusive(t *testing.T) {
-	e := engine.New(durabletest.NewMemStore())
+	e := engine.New(mem.New())
 	mk := func(pipeline durable.PipelineID) *pipelinedef.Definition {
 		return pipelinedef.New(pipelinedef.Config{
 			ID: pipeline,
@@ -46,7 +46,7 @@ func TestBindAfterStartRejected(t *testing.T) {
 			stateless("step/v1", func(ctx context.Context, inv durable.Invocation) error { return nil }),
 		},
 	})
-	e, pipes := startEngine(t, durabletest.NewMemStore(), def)
+	e, pipes := startEngine(t, mem.New(), def)
 
 	latecomer := pipelinedef.New(pipelinedef.Config{
 		ID: "latecomer",

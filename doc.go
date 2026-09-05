@@ -109,13 +109,14 @@
 //   - observe holds the lifecycle event surface — Observer and its
 //     typed events — for telemetry-adapter authors; contrib/durableotel
 //     is the packaged adapter most applications install instead.
-//   - storedriver holds the store SPI — the Store interface and the
-//     durable record types — for implementers of persistence backends,
-//     in the spirit of database/sql/driver. Users pick an existing
-//     implementation and never import it.
-//   - bboltstore is the production bbolt-backed Store.
-//   - durabletest provides the in-memory Store, the fake Clock, and the
-//     fake Invocation for tests.
+//   - store opens a store from a URI (store.Open("bbolt:///path")) via
+//     drivers that register a scheme; store/bbolt is the persistent
+//     driver, store/mem the in-memory one for ephemeral runs and tests.
+//     store/driver is the SPI — the Store interface and the durable
+//     record types — for implementers of new backends, in the spirit of
+//     database/sql/driver; users never import it.
+//   - durabletest provides the fake Clock and the fake Invocation for
+//     engine-free tests.
 //   - durablepb and cmd/protoc-gen-durable are the protobuf options and
 //     the code generator behind the generated typed API.
 //   - contrib/durableotel (separate module) is the OpenTelemetry

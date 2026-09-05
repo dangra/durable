@@ -7,9 +7,9 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/dangra/durable"
-	"github.com/dangra/durable/durabletest"
 	"github.com/dangra/durable/engine"
 	"github.com/dangra/durable/pipelinedef"
+	"github.com/dangra/durable/store/mem"
 )
 
 // ExampleWithMiddleware installs a logging middleware around every
@@ -23,7 +23,7 @@ func ExampleWithMiddleware() {
 		}
 	}
 
-	eng := engine.New(durabletest.NewMemStore(), engine.WithMiddleware(logging))
+	eng := engine.New(mem.New(), engine.WithMiddleware(logging))
 	def := pipelinedef.New(pipelinedef.Config{
 		ID: "greeter",
 		Steps: []pipelinedef.Step{{

@@ -13,9 +13,9 @@ import (
 
 	"github.com/dangra/durable"
 	"github.com/dangra/durable/contrib/durableotel"
-	"github.com/dangra/durable/durabletest"
 	"github.com/dangra/durable/engine"
 	"github.com/dangra/durable/pipelinedef"
+	"github.com/dangra/durable/store/mem"
 )
 
 // TestAnnotatorEngineWide is the declare-once DX story: with Annotator
@@ -45,7 +45,7 @@ func TestAnnotatorEngineWide(t *testing.T) {
 			},
 		}},
 	})
-	eng := engine.New(durabletest.NewMemStore(), fastRetry, quietLogger(),
+	eng := engine.New(mem.New(), fastRetry, quietLogger(),
 		engine.WithMiddleware(durableotel.Middleware(
 			durableotel.WithTracerProvider(tp), durableotel.WithBaggage())),
 		engine.WithScheduleAnnotator(durableotel.Annotator(durableotel.WithBaggage())))

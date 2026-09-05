@@ -15,9 +15,9 @@ import (
 	"time"
 
 	"github.com/dangra/durable"
-	"github.com/dangra/durable/durabletest"
 	"github.com/dangra/durable/engine"
 	"github.com/dangra/durable/pipelinedef"
+	"github.com/dangra/durable/store/mem"
 )
 
 // A handler that calls Run.Wait with its attempt context must not block a
@@ -74,7 +74,7 @@ func TestWaitInsideHandlerFailsFast(t *testing.T) {
 		},
 	})
 
-	_, pipes := startEngine(t, durabletest.NewMemStore(), child, parent)
+	_, pipes := startEngine(t, mem.New(), child, parent)
 	childPipe = pipes[0]
 
 	run, _, err := pipes[1].Schedule(context.Background(), "train", nil)
@@ -162,7 +162,7 @@ func TestAwaitRunParksUntilTargetCompletes(t *testing.T) {
 			}),
 		},
 	})
-	_, pipes := startEngine(t, durabletest.NewMemStore(), target, waiterDef)
+	_, pipes := startEngine(t, mem.New(), target, waiterDef)
 	targetPipe = pipes[0]
 
 	tRun, _, err := targetPipe.Schedule(context.Background(), "res", nil)
@@ -233,7 +233,7 @@ func TestAwaitedRunIDPreventsChildRespawn(t *testing.T) {
 			}),
 		},
 	})
-	_, pipes := startEngine(t, durabletest.NewMemStore(), child, parent)
+	_, pipes := startEngine(t, mem.New(), child, parent)
 	childPipe = pipes[0]
 
 	pRun, _, err := pipes[1].Schedule(context.Background(), "parent-res", nil)
@@ -271,7 +271,7 @@ func TestAwaitRunResolvesImmediatelyForMissingTarget(t *testing.T) {
 			}),
 		},
 	})
-	_, pipes := startEngine(t, durabletest.NewMemStore(), def)
+	_, pipes := startEngine(t, mem.New(), def)
 	run, _, _ := pipes[0].Schedule(context.Background(), "r", nil)
 	if res, err := run.Wait(context.Background()); err != nil || !res.Succeeded() {
 		t.Fatalf("Wait = %+v, %v; want immediate resolution", res, err)
@@ -279,7 +279,7 @@ func TestAwaitRunResolvesImmediatelyForMissingTarget(t *testing.T) {
 }
 
 func TestAwaitCycleIsInvalid(t *testing.T) {
-	store := durabletest.NewMemStore()
+	store := mem.New()
 	var pipeA, pipeB *engine.Pipeline
 	mk := func(id durable.PipelineID, other **engine.Pipeline, otherRes durable.ResourceID) *pipelinedef.Definition {
 		return pipelinedef.New(pipelinedef.Config{
@@ -376,7 +376,7 @@ func TestCancelCutsThroughAwait(t *testing.T) {
 			}),
 		},
 	})
-	_, pipes := startEngine(t, durabletest.NewMemStore(), target, waiter)
+	_, pipes := startEngine(t, mem.New(), target, waiter)
 	targetPipe = pipes[0]
 
 	if _, _, err := targetPipe.Schedule(context.Background(), "res", nil); err != nil {

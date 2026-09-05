@@ -26,7 +26,7 @@ import (
 // crash between a commit and its callback loses the event, and a
 // redispatched at-least-once attempt can fire again. Treat counters
 // built from them as operational signal, not accounting — anything that
-// must be exact reads the storedriver.Store.
+// must be exact reads the driver.Store.
 type Observer struct {
 	// RunScheduled fires when Schedule accepts a new Run (created=true).
 	RunScheduled func(RunEvent)
@@ -51,8 +51,8 @@ type Observer struct {
 	ClassWait func(ClassWaitEvent)
 	// RunsReaped fires after each retention sweep that deleted anything.
 	RunsReaped func(count int)
-	// StoreOp fires after every storedriver.Store call, reads included. Installing
-	// it wraps the storedriver.Store at engine.New time.
+	// StoreOp fires after every driver.Store call, reads included. Installing
+	// it wraps the driver.Store at engine.New time.
 	StoreOp func(StoreOpEvent)
 }
 
@@ -171,9 +171,9 @@ type ClassWaitEvent struct {
 	Duration   time.Duration
 }
 
-// StoreOpEvent reports one storedriver.Store call: Op is the method name, and Write
+// StoreOpEvent reports one driver.Store call: Op is the method name, and Write
 // marks methods that durably write. Write is declared by the engine's
-// store decorator method-by-method, so a storedriver.Store method added later cannot
+// store decorator method-by-method, so a driver.Store method added later cannot
 // reach observers unclassified — the decorator will not compile without
 // an implementation stating it.
 type StoreOpEvent struct {

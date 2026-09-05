@@ -13,9 +13,9 @@ import (
 
 	"github.com/dangra/durable"
 	"github.com/dangra/durable/contrib/durableotel"
-	"github.com/dangra/durable/durabletest"
 	"github.com/dangra/durable/engine"
 	"github.com/dangra/durable/pipelinedef"
+	"github.com/dangra/durable/store/mem"
 )
 
 // baggageCtx is a scheduling-side ctx carrying two baggage members, the
@@ -61,7 +61,7 @@ func runBaggageProbe(t *testing.T, tp *sdktrace.TracerProvider, schedule []durab
 			},
 		}},
 	})
-	eng := engine.New(durabletest.NewMemStore(), fastRetry, quietLogger(),
+	eng := engine.New(mem.New(), fastRetry, quietLogger(),
 		engine.WithMiddleware(durableotel.Middleware(
 			append([]durableotel.Option{durableotel.WithTracerProvider(tp)}, mwOpts...)...)))
 	pipe, err := eng.Bind(def)

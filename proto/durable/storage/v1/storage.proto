@@ -15,7 +15,7 @@ package durable.storage.v1;
 
 import "google/protobuf/timestamp.proto";
 
-option go_package = "github.com/dangra/durable/internal/storagepb;storagepb";
+option go_package = "github.com/dangra/durable/store/internal/storagepb;storagepb";
 
 enum Phase {
   PHASE_UNSPECIFIED = 0;

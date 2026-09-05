@@ -146,17 +146,29 @@ cmd_prepare() {
 	gh pr create --title "Release $v" --body "$(printf 'Bumps VERSION and every in-tree require to %s.\n\nAfter merge, run the **tag-release** workflow with version `%s` to tag every module at the merge commit, publish the GitHub release, and verify the modules resolve for consumers.' "$v" "$v")"
 }
 
-# ci_green SHA: every completed GitHub Actions check run on SHA succeeded
-# (or was skipped), excluding this workflow's own run, and at least one
-# exists.
+# ci_green SHA: every GitHub Actions check run on SHA succeeded (or was
+# skipped), excluding this workflow's own run, and at least one exists.
+# Runs still in flight are waited for, bounded: a squash merge starts a
+# fresh CI run on the merge commit, and tagging right after the merge is
+# the normal case.
 ci_green() {
 	local repo; repo=${GITHUB_REPOSITORY:-$(gh repo view --json nameWithOwner --jq .nameWithOwner)}
-	local runs
-	runs=$(gh api --paginate "repos/$repo/commits/$1/check-runs?per_page=100" \
-		--jq '.check_runs[] | select(.name != "Tag release") | "\(.status)\t\(.conclusion)\t\(.name)"')
-	[[ -n $runs ]] || { note "no check runs found for $1"; return 1; }
+	local deadline=$((SECONDS + ${CI_WAIT_SECONDS:-1200})) runs pending
+	while :; do
+		runs=$(gh api --paginate "repos/$repo/commits/$1/check-runs?per_page=100" \
+			--jq '.check_runs[] | select(.name != "Tag release") | "\(.status)\t\(.conclusion)\t\(.name)"')
+		[[ -n $runs ]] || { note "no check runs found for $1"; return 1; }
+		pending=$(printf '%s\n' "$runs" | awk -F'\t' '$1 != "completed"')
+		[[ -z $pending ]] && break
+		if ((SECONDS >= deadline)); then
+			note "check runs still in flight for $1 after ${CI_WAIT_SECONDS:-1200}s:"; printf '%s\n' "$pending" >&2
+			return 1
+		fi
+		note "waiting for check runs on $1: $(printf '%s\n' "$pending" | wc -l) in flight"
+		sleep 20
+	done
 	local bad
-	bad=$(printf '%s\n' "$runs" | awk -F'\t' '$1 != "completed" || ($2 != "success" && $2 != "skipped" && $2 != "neutral")')
+	bad=$(printf '%s\n' "$runs" | awk -F'\t' '$2 != "success" && $2 != "skipped" && $2 != "neutral"')
 	if [[ -n $bad ]]; then
 		note "check runs not green for $1:"; printf '%s\n' "$bad" >&2
 		return 1

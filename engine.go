@@ -821,6 +821,13 @@ func (e *Engine) awaitGate(rec *storedriver.RunRecord) bool {
 	if park == nil {
 		return false
 	}
+	if len(park.Targets) == 0 {
+		// parkAwait never records one; a store handed back a park it
+		// could not have been given. Under AwaitModeAny it would wait on
+		// nothing forever, so refuse it like the handler-side case.
+		e.markInvalid(rec, "", "await with no targets")
+		return true
+	}
 	if rec.Cancel != nil {
 		// A cancellation is bypassing the park: the Run proceeds now, so
 		// it is no longer awaiting. The stale watcher goroutine sees the

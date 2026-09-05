@@ -1221,3 +1221,42 @@ func TestAwaitTimeoutNonPositiveIsNoDeadline(t *testing.T) {
 		t.Fatalf("Status = %+v; want no deadline", st)
 	}
 }
+
+// A park with no targets cannot be requested (parkAwait refuses it), but
+// a store could still hand one back. The gate marks the run invalid
+// rather than parking it on nothing.
+func TestAwaitEmptyParkFromStoreIsInvalid(t *testing.T) {
+	store := durabletest.NewMemStore()
+	def := durable.NewDefinition(durable.DefinitionConfig{
+		ID: "corrupt-park",
+		Steps: []durable.StepConfig{
+			stateless("s/v1", func(ctx context.Context, inv *durable.Invocation) error {
+				return durable.Fail(errors.New("must not run: the park is refused first"))
+			}),
+		},
+	})
+	now := time.Now()
+	rec := &storedriver.RunRecord{
+		RunID: "01ARZ3NDEKTSV4RRFFQ69G5FAV", PipelineID: "corrupt-park", ResourceID: "r",
+		Phase: durable.PhaseForward, Steps: map[durable.StepID]*storedriver.StepRecord{},
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if _, _, err := store.CreateRun(context.Background(), rec); err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	if err := store.ApplyTransition(context.Background(), rec.RunID, storedriver.Transition{Cursor: storedriver.Cursor{
+		Phase: durable.PhaseForward, StepID: "s/v1", Attempts: 1, UpdatedAt: now,
+		Awaiting: &storedriver.Await{Mode: storedriver.AwaitModeAny},
+	}}); err != nil {
+		t.Fatalf("ApplyTransition: %v", err)
+	}
+	_, pipes := startEngine(t, store, def)
+	run, err := pipes[0].Run(context.Background(), rec.RunID)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	st := waitForState(t, run, durable.RunStateInvalid)
+	if !strings.Contains(st.InvalidReason, "no targets") {
+		t.Fatalf("InvalidReason = %q", st.InvalidReason)
+	}
+}

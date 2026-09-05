@@ -64,7 +64,7 @@ func scheduleThenAwait(childPipe **engine.Pipeline, log *awaitedLog, onWoken fun
 			return onWoken(e)
 		}
 		run, _, err := (*childPipe).Schedule(ctx, "child-res", nil)
-		if conflict, ok := errors.AsType[*engine.ScheduleConflictError](err); ok {
+		if conflict, ok := errors.AsType[*durable.ScheduleConflictError](err); ok {
 			return durable.AwaitRun(conflict.RunID)
 		}
 		if err != nil {
@@ -657,7 +657,7 @@ func TestAwaitAnyRaceCancelsLosers(t *testing.T) {
 						if err != nil {
 							return err
 						}
-						if err := run.Cancel(ctx, "lost the race"); err != nil && !errors.Is(err, engine.ErrRunTerminal) {
+						if err := run.Cancel(ctx, "lost the race"); err != nil && !errors.Is(err, durable.ErrRunTerminal) {
 							return err
 						}
 					}

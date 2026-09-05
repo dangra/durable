@@ -64,7 +64,7 @@ func TestScheduleAnnotator(t *testing.T) {
 
 	ctx := context.WithValue(context.Background(), tenantKey{}, "acme")
 	run, _, err := pipe.Schedule(ctx, "res-1", nil,
-		engine.WithAnnotations(map[string]string{"shared": "explicit"}))
+		durable.WithAnnotations(map[string]string{"shared": "explicit"}))
 	if err != nil {
 		t.Fatalf("Schedule: %v", err)
 	}

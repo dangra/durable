@@ -370,7 +370,7 @@ type ProvisionMachinePipeline struct {
 }
 
 // Schedule creates a run for the resource slot or returns the active one.
-func (p *ProvisionMachinePipeline) Schedule(ctx context.Context, resource durable.ResourceID, input *ProvisionMachineInput, opts ...engine.ScheduleOption) (ProvisionMachineRun, bool, error) {
+func (p *ProvisionMachinePipeline) Schedule(ctx context.Context, resource durable.ResourceID, input *ProvisionMachineInput, opts ...durable.ScheduleOption) (ProvisionMachineRun, bool, error) {
 	run, created, err := p.pipeline.Schedule(ctx, resource, input, opts...)
 	if err != nil {
 		return ProvisionMachineRun{}, created, err
@@ -598,7 +598,7 @@ type DecommissionMachinePipeline struct {
 }
 
 // Schedule creates a run for the resource slot or returns the active one.
-func (p *DecommissionMachinePipeline) Schedule(ctx context.Context, resource durable.ResourceID, opts ...engine.ScheduleOption) (engine.Run, bool, error) {
+func (p *DecommissionMachinePipeline) Schedule(ctx context.Context, resource durable.ResourceID, opts ...durable.ScheduleOption) (engine.Run, bool, error) {
 	run, created, err := p.pipeline.Schedule(ctx, resource, nil, opts...)
 	return run, created, err
 }

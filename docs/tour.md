@@ -106,11 +106,11 @@ result, err := run.Wait(ctx)
 
 Two packages appear here and they stay apart throughout: `durable` is
 the handler contract (`durable.Fail`, `durable.AwaitRun`, the
-`Invocation` a handler receives), and `engine` is the wiring side
-(`engine.New`, the `With*` options, `Bind`, `Schedule`, `Wait`). A file
-that implements steps imports `durable`; the file that starts the
-daemon imports `engine`; nothing else imports the generated package's
-dependencies.
+`Invocation` a handler receives, and the `Schedule` options a step
+uses to fan out children), and `engine` is the wiring side
+(`engine.New`, the `With*` options, `Bind`, `Wait`). A file that
+implements steps imports `durable`, even when it schedules child runs;
+the file that starts the daemon imports `engine`.
 
 `"service-web"` is the **resource**: the thing the run is about. At
 most one run of a pipeline is active per resource at a time — more on
@@ -464,7 +464,7 @@ immediately but attempts nothing until the hour:
 
 ```go
 run, _, err := deploy.Schedule(ctx, "service-web", input,
-    engine.StartAt(window))          // or engine.StartAfter(4 * time.Hour)
+    durable.StartAt(window))          // or durable.StartAfter(4 * time.Hour)
 ```
 
 The delay is durable — it survives restarts, like retry backoffs do.

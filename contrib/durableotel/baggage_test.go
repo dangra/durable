@@ -39,7 +39,7 @@ func baggageCtx(t *testing.T) context.Context {
 
 // runBaggageProbe schedules a one-step pipeline and returns what the
 // handler observed: its ctx baggage and the Run's annotations.
-func runBaggageProbe(t *testing.T, tp *sdktrace.TracerProvider, schedule []engine.ScheduleOption, mwOpts ...durableotel.Option) (seen map[string]string, annotations map[string]string) {
+func runBaggageProbe(t *testing.T, tp *sdktrace.TracerProvider, schedule []durable.ScheduleOption, mwOpts ...durableotel.Option) (seen map[string]string, annotations map[string]string) {
 	t.Helper()
 	var mu sync.Mutex
 	seen, annotations = map[string]string{}, map[string]string{}
@@ -94,7 +94,7 @@ func TestBaggageRoundTrip(t *testing.T) {
 
 	ctx := baggageCtx(t)
 	seen, annotations := runBaggageProbe(t, tp,
-		[]engine.ScheduleOption{durableotel.WithTraceContext(ctx, durableotel.WithBaggage())},
+		[]durable.ScheduleOption{durableotel.WithTraceContext(ctx, durableotel.WithBaggage())},
 		durableotel.WithBaggage(), durableotel.WithSpanBaggage("tenant"))
 
 	if seen["tenant"] != "acme" || seen["machine_id"] != "m-42" {
@@ -125,7 +125,7 @@ func TestSpanBaggageAllMembers(t *testing.T) {
 
 	ctx := baggageCtx(t)
 	_, _ = runBaggageProbe(t, tp,
-		[]engine.ScheduleOption{durableotel.WithTraceContext(ctx, durableotel.WithBaggage())},
+		[]durable.ScheduleOption{durableotel.WithTraceContext(ctx, durableotel.WithBaggage())},
 		durableotel.WithBaggage(), durableotel.WithSpanBaggage())
 
 	spans := recorder.Ended()
@@ -147,7 +147,7 @@ func TestBaggageIsOptIn(t *testing.T) {
 
 	ctx := baggageCtx(t)
 	seen, annotations := runBaggageProbe(t, tp,
-		[]engine.ScheduleOption{durableotel.WithTraceContext(ctx)})
+		[]durable.ScheduleOption{durableotel.WithTraceContext(ctx)})
 
 	if len(seen) != 0 {
 		t.Fatalf("handler baggage = %v, want none without WithBaggage", seen)

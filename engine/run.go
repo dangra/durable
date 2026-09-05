@@ -88,7 +88,7 @@ func (r Run) Wait(ctx context.Context) (Result, error) {
 // Invocation.CancelRequested) until it resolves. FailFastOnCancel opts
 // preemption-safe handlers out of that cooperative loop.
 //
-// A terminal Run returns ErrRunTerminal; a missing Run ErrRunNotFound. The
+// A terminal Run returns durable.ErrRunTerminal; a missing Run durable.ErrRunNotFound. The
 // request survives restart, and on an invalid Run it takes effect when a
 // corrected deployment makes the Run reconcilable again.
 func (r Run) Cancel(ctx context.Context, cause string) error {

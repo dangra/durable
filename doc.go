@@ -33,6 +33,13 @@
 // park back through Awaited). Unwind handlers additionally receive the
 // Failure being unwound.
 //
+// Scheduling children. A step that fans out schedules child Runs through
+// a bound pipeline handle and parks on them; everything that call needs
+// is here: the ScheduleOptions (WithAnnotations, StartAt, StartAfter),
+// ScheduleConflictError with the blocking RunID to park on, and the
+// ErrRunNotFound and ErrRunTerminal sentinels. Handler files import only
+// this package.
+//
 // Middleware. Handler and Middleware are the net/http-shaped operation
 // layer every attempt passes through (installed with
 // engine.WithMiddleware). AwaitRequest, AwaitTimeout, FailureInfo,

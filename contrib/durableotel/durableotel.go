@@ -175,7 +175,7 @@ func WithSpanBaggage(keys ...string) Option {
 // the attribute name. It surfaces domain identity persisted at Schedule
 // time (a machine ID, a tenant) on every span of the Run:
 //
-//	pipe.Schedule(ctx, res, input, engine.WithAnnotations(
+//	pipe.Schedule(ctx, res, input, durable.WithAnnotations(
 //		map[string]string{"machine.id": id}))
 //	durableotel.Middleware(durableotel.WithSpanAnnotations("machine.id"))
 //

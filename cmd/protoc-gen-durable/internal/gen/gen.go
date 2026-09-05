@@ -560,7 +560,7 @@ func emitBoundPipeline(g *protogen.GeneratedFile, pl *pipelineDecl) {
 	g.P("}")
 	g.P()
 
-	scheduleOpt := g.QualifiedGoIdent(enginePkg.Ident("ScheduleOption"))
+	scheduleOpt := g.QualifiedGoIdent(durablePkg.Ident("ScheduleOption"))
 	g.P("// Schedule creates a run for the resource slot or returns the active one.")
 	if pl.input != nil {
 		g.P("func (p *", name, "Pipeline) Schedule(ctx ", ctx, ", resource ", resourceID, ", input *", g.QualifiedGoIdent(pl.input.GoIdent), ", opts ...", scheduleOpt, ") (", runType, ", bool, error) {")

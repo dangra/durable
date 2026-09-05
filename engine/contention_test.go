@@ -51,7 +51,7 @@ func TestDuplicateScheduling(t *testing.T) {
 	}
 
 	_, created, err = p.Schedule(context.Background(), "res-1", str("different"))
-	var conflict *engine.ScheduleConflictError
+	var conflict *durable.ScheduleConflictError
 	if !errors.As(err, &conflict) || created {
 		t.Fatalf("conflicting Schedule = created=%v err=%v, want ScheduleConflictError", created, err)
 	}
@@ -119,7 +119,7 @@ func TestExclusionGroupSemantics(t *testing.T) {
 
 	// Group sibling: always a conflict, even with equivalent input.
 	_, created, err = b.Schedule(context.Background(), "res", str("in"))
-	var conflict *engine.ScheduleConflictError
+	var conflict *durable.ScheduleConflictError
 	if !errors.As(err, &conflict) || created {
 		t.Fatalf("b.Schedule = created=%v err=%v, want conflict", created, err)
 	}
@@ -229,7 +229,7 @@ func TestSupersedeReconcile(t *testing.T) {
 
 	// The reconcile loop delivers newer intent.
 	_, _, err = p.Schedule(context.Background(), "res", str("v2"))
-	var conflict *engine.ScheduleConflictError
+	var conflict *durable.ScheduleConflictError
 	if !errors.As(err, &conflict) {
 		t.Fatalf("Schedule v2 = %v, want conflict", err)
 	}

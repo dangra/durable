@@ -249,8 +249,8 @@ run, created, err := cleanup.Schedule(
 `Schedule` accepts start options:
 
 ```go
-provision.Schedule(ctx, resourceID, input, engine.StartAt(t))
-provision.Schedule(ctx, resourceID, input, engine.StartAfter(d))
+provision.Schedule(ctx, resourceID, input, durable.StartAt(t))
+provision.Schedule(ctx, resourceID, input, durable.StartAfter(d))
 ```
 
 `StartAfter(d)` is sugar for `StartAt(now.Add(d))`, measured by the engine

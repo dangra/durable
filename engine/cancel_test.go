@@ -12,7 +12,6 @@ import (
 
 	"github.com/dangra/durable"
 	"github.com/dangra/durable/durabletest"
-	"github.com/dangra/durable/engine"
 	"github.com/dangra/durable/pipelinedef"
 	"google.golang.org/protobuf/proto"
 )
@@ -30,7 +29,7 @@ func TestCancelScheduledRunFreesSlot(t *testing.T) {
 	_, pipes := startEngine(t, durabletest.NewMemStore(), def)
 	p := pipes[0]
 
-	run, _, err := p.Schedule(context.Background(), "r", nil, engine.StartAfter(time.Hour))
+	run, _, err := p.Schedule(context.Background(), "r", nil, durable.StartAfter(time.Hour))
 	if err != nil {
 		t.Fatalf("Schedule: %v", err)
 	}
@@ -48,7 +47,7 @@ func TestCancelScheduledRunFreesSlot(t *testing.T) {
 		t.Fatalf("RootFailure = %+v", res.RootFailure)
 	}
 	// The slot is free again immediately.
-	if _, created, err := p.Schedule(context.Background(), "r", nil, engine.StartAfter(time.Hour)); err != nil || !created {
+	if _, created, err := p.Schedule(context.Background(), "r", nil, durable.StartAfter(time.Hour)); err != nil || !created {
 		t.Fatalf("post-cancel Schedule = created=%v err=%v", created, err)
 	}
 }
@@ -149,7 +148,7 @@ func TestCancelTerminalRun(t *testing.T) {
 	if res, err := run.Wait(context.Background()); err != nil || !res.Succeeded() {
 		t.Fatalf("Wait = %+v, %v", res, err)
 	}
-	if err := run.Cancel(context.Background(), "too late"); !errors.Is(err, engine.ErrRunTerminal) {
+	if err := run.Cancel(context.Background(), "too late"); !errors.Is(err, durable.ErrRunTerminal) {
 		t.Fatalf("Cancel = %v, want ErrRunTerminal", err)
 	}
 }

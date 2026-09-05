@@ -14,7 +14,9 @@ import "errors"
 // or does not exist (e.g. reaped by retention) — the operation re-executes
 // as a fresh attempt, whose Invocation reports the park target through
 // AwaitedRunID so handlers can distinguish "woken after completion" from a
-// first execution.
+// first execution. That memory belongs to the operation: it survives the
+// woken attempt's ordinary-error retries and engine restarts, and clears
+// only when the operation resolves or parks again.
 //
 // Awaiting must not form a cycle; a Run whose park would close a cycle of
 // awaits becomes invalid for the current deployment.

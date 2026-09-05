@@ -352,6 +352,9 @@ type Cursor struct {
 	UpdatedAt     *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
 	// Parks the in-flight operation until this run terminates.
 	AwaitingRunId string `protobuf:"bytes,9,opt,name=awaiting_run_id,json=awaitingRunId,proto3" json:"awaiting_run_id,omitempty"`
+	// The run an earlier attempt of the in-flight operation parked on, once
+	// that park resolved; survives the operation's retries and restarts.
+	AwaitedRunId  string `protobuf:"bytes,10,opt,name=awaited_run_id,json=awaitedRunId,proto3" json:"awaited_run_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -445,6 +448,13 @@ func (x *Cursor) GetUpdatedAt() *timestamppb.Timestamp {
 func (x *Cursor) GetAwaitingRunId() string {
 	if x != nil {
 		return x.AwaitingRunId
+	}
+	return ""
+}
+
+func (x *Cursor) GetAwaitedRunId() string {
+	if x != nil {
+		return x.AwaitedRunId
 	}
 	return ""
 }
@@ -793,7 +803,7 @@ const file_durable_storage_v1_storage_proto_rawDesc = "" +
 	"\vannotations\x18\a \x03(\v2,.durable.storage.v1.RunMeta.AnnotationsEntryR\vannotations\x1a>\n" +
 	"\x10AnnotationsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x95\x03\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xbb\x03\n" +
 	"\x06Cursor\x12/\n" +
 	"\x05phase\x18\x01 \x01(\x0e2\x19.durable.storage.v1.PhaseR\x05phase\x12\x17\n" +
 	"\astep_id\x18\x02 \x01(\tR\x06stepId\x12\x1a\n" +
@@ -806,7 +816,9 @@ const file_durable_storage_v1_storage_proto_rawDesc = "" +
 	"\rlast_error_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\vlastErrorAt\x129\n" +
 	"\n" +
 	"updated_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12&\n" +
-	"\x0fawaiting_run_id\x18\t \x01(\tR\rawaitingRunId\"\xfe\x01\n" +
+	"\x0fawaiting_run_id\x18\t \x01(\tR\rawaitingRunId\x12$\n" +
+	"\x0eawaited_run_id\x18\n" +
+	" \x01(\tR\fawaitedRunId\"\xfe\x01\n" +
 	"\n" +
 	"StepRecord\x12C\n" +
 	"\x0eforward_status\x18\x01 \x01(\x0e2\x1c.durable.storage.v1.OpStatusR\rforwardStatus\x12)\n" +

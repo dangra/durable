@@ -70,6 +70,12 @@ type Cursor struct {
 	// Run terminates; empty when not parked.
 	AwaitingRunID RunID
 
+	// AwaitedRunID is the Run an earlier attempt of the in-flight
+	// operation parked on, once that park resolved. It persists across the
+	// operation's retries and restarts and is cleared when the operation
+	// resolves or parks again; empty when no park has resolved.
+	AwaitedRunID RunID
+
 	NextAttemptAt time.Time
 	LastError     string
 	LastReason    string
@@ -142,6 +148,10 @@ type RunRecord struct {
 	// AwaitingRunID mirrors Cursor.AwaitingRunID: the in-flight operation
 	// is parked until that Run terminates.
 	AwaitingRunID RunID
+
+	// AwaitedRunID mirrors Cursor.AwaitedRunID: the resolved park an
+	// earlier attempt of the in-flight operation made.
+	AwaitedRunID RunID
 
 	// LastError, LastReason, and LastErrorAt describe the most recent
 	// ordinary-error attempt of the current unresolved operation. They are

@@ -74,6 +74,9 @@ message Cursor {
   google.protobuf.Timestamp updated_at = 8;
   // Parks the in-flight operation until this run terminates.
   string awaiting_run_id = 9;
+  // The run an earlier attempt of the in-flight operation parked on, once
+  // that park resolved; survives the operation's retries and restarts.
+  string awaited_run_id = 10;
 }
 
 message StepRecord {

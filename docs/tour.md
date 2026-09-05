@@ -348,7 +348,10 @@ stays unresolved, the worker is released immediately (no goroutine or
 token is held while parked — a park can outlive many restarts), and the
 moment the target terminates the operation re-executes as a fresh
 attempt. `AwaitedRunID` is the memory that distinguishes "woken" from
-"first execution", so the handler doesn't re-schedule the child.
+"first execution", so the handler doesn't re-schedule the child. The
+memory belongs to the operation, not to one attempt: if the woken
+attempt returns an ordinary error, or the process restarts while it is
+running, the retry still sees it.
 Awaits must not form a cycle; a cycle-closing park makes the run
 invalid. Runnable:
 [`ExampleAwaitRun`](https://pkg.go.dev/github.com/dangra/durable#example-AwaitRun).

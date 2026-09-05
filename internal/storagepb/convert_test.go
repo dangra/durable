@@ -47,6 +47,20 @@ func TestCursorRoundTrip(t *testing.T) {
 			LastErrorAt:   at(90),
 			UpdatedAt:     at(101),
 		},
+		{
+			Phase:         durable.PhaseForward,
+			StepID:        "ship/v1",
+			Attempts:      2,
+			AwaitingRunID: "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+			UpdatedAt:     at(150),
+		},
+		{
+			Phase:        durable.PhaseUnwind,
+			StepID:       "ship/v1",
+			Attempts:     3,
+			AwaitedRunID: "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+			UpdatedAt:    at(160),
+		},
 		{Phase: durable.PhaseDone, UpdatedAt: at(200)}, // idle, zero times preserved
 	}
 	for _, c := range cases {

@@ -901,7 +901,8 @@ func (e *Engine) parkAwait(rec *storedriver.RunRecord, stepID StepID, attempts u
 		e.markInvalid(rec, stepID, "AwaitRun with empty RunID")
 		return false, 0, false
 	}
-	rec.AwaitingRunID = target
+	// A new park supersedes the memory of the previous one.
+	rec.AwaitingRunID, rec.AwaitedRunID = target, ""
 	if !e.apply(rec, storedriver.Transition{Cursor: activeCursor(rec, stepID, attempts)}) {
 		return false, time.Second, true
 	}
@@ -926,6 +927,17 @@ func (e *Engine) parkAwait(rec *storedriver.RunRecord, stepID StepID, attempts u
 		StepID: stepID, Phase: rec.Phase, Attempt: attempts,
 		Duration: elapsed, Result: observe.AttemptAwaiting})
 	return true, 0, false
+}
+
+// settleAwait converts a park the await gate let through into the
+// operation's durable memory of it. The memory rides the attempt
+// reservation and every later cursor write, so it outlives ordinary-error
+// retries and restarts until the operation resolves or parks again.
+func settleAwait(rec *storedriver.RunRecord) {
+	if rec.AwaitingRunID != "" {
+		rec.AwaitedRunID = rec.AwaitingRunID
+		rec.AwaitingRunID = ""
+	}
 }
 
 // awaitCycle walks the await chain from target looking for self.
@@ -969,8 +981,7 @@ func (e *Engine) runForward(rec *storedriver.RunRecord, def *Definition, stepID 
 	sr := rec.Step(stepID)
 
 	// Durably reserve the attempt before invoking application code.
-	awaited := rec.AwaitingRunID
-	rec.AwaitingRunID = ""
+	settleAwait(rec)
 	sr.ForwardStatus = storedriver.OpUnresolved
 	sr.ForwardAttempts++
 	rec.NextAttemptAt = time.Time{}
@@ -979,7 +990,7 @@ func (e *Engine) runForward(rec *storedriver.RunRecord, def *Definition, stepID 
 	}
 
 	inv := e.invocation(rec, def, stepID, sr.ForwardAttempts, PhaseForward)
-	inv.awaitedRunID = awaited
+	inv.awaitedRunID = rec.AwaitedRunID
 	opStart := e.clock.Now()
 	state, panicked, err := e.invokeForward(sc, inv)
 	preemptCause, wasPreempted := e.takePreempted(rec.RunID)
@@ -1012,6 +1023,7 @@ func (e *Engine) runForward(rec *storedriver.RunRecord, def *Definition, stepID 
 		// State commit and forward success are one durable transition.
 		sr.ForwardStatus = storedriver.OpSucceeded
 		sr.State = stateBytes
+		rec.AwaitedRunID = ""
 		clearLastError(rec)
 		if !e.apply(rec, storedriver.Transition{Cursor: idleCursor(rec), Steps: []storedriver.StepWrite{{StepID: stepID, Record: *sr}}}) {
 			return false, time.Second, true
@@ -1049,6 +1061,7 @@ func (e *Engine) runForward(rec *storedriver.RunRecord, def *Definition, stepID 
 			rec.RootFailure.Message = sanitizeText(cause)
 		}
 		rec.Phase = PhaseUnwind
+		rec.AwaitedRunID = ""
 		clearLastError(rec)
 		if !e.apply(rec, storedriver.Transition{Cursor: idleCursor(rec), Steps: []storedriver.StepWrite{{StepID: stepID, Record: *sr}}, RootFailure: rec.RootFailure}) {
 			return false, time.Second, true
@@ -1077,8 +1090,7 @@ func (e *Engine) runUnwind(rec *storedriver.RunRecord, def *Definition, stepID S
 	sc := def.step(stepID)
 	sr := rec.Step(stepID)
 
-	awaited := rec.AwaitingRunID
-	rec.AwaitingRunID = ""
+	settleAwait(rec)
 	sr.UnwindStatus = storedriver.OpUnresolved
 	sr.UnwindAttempts++
 	rec.NextAttemptAt = time.Time{}
@@ -1087,7 +1099,7 @@ func (e *Engine) runUnwind(rec *storedriver.RunRecord, def *Definition, stepID S
 	}
 
 	inv := e.invocation(rec, def, stepID, sr.UnwindAttempts, PhaseUnwind)
-	inv.awaitedRunID = awaited
+	inv.awaitedRunID = rec.AwaitedRunID
 	opStart := e.clock.Now()
 	failure := Failure{
 		UnwindFailures: append([]UnwindFailure(nil), rec.UnwindFailures...),
@@ -1111,6 +1123,7 @@ func (e *Engine) runUnwind(rec *storedriver.RunRecord, def *Definition, stepID S
 	switch pe, permanent := asPermanent(err); {
 	case err == nil:
 		sr.UnwindStatus = storedriver.OpSucceeded
+		rec.AwaitedRunID = ""
 		clearLastError(rec)
 		if !e.apply(rec, storedriver.Transition{Cursor: idleCursor(rec), Steps: []storedriver.StepWrite{{StepID: stepID, Record: *sr}}}) {
 			return false, time.Second, true
@@ -1128,6 +1141,7 @@ func (e *Engine) runUnwind(rec *storedriver.RunRecord, def *Definition, stepID S
 			At:      now,
 			Kind:    pe.failureKind(),
 			Reason:  sanitizeText(pe.failureReason())})
+		rec.AwaitedRunID = ""
 		clearLastError(rec)
 		uf := rec.UnwindFailures[len(rec.UnwindFailures)-1]
 		if !e.apply(rec, storedriver.Transition{Cursor: idleCursor(rec), Steps: []storedriver.StepWrite{{StepID: stepID, Record: *sr}}, UnwindFailure: &uf}) {
@@ -1274,6 +1288,7 @@ func activeCursor(rec *storedriver.RunRecord, stepID StepID, attempts uint64) st
 		StepID:        stepID,
 		Attempts:      attempts,
 		AwaitingRunID: rec.AwaitingRunID,
+		AwaitedRunID:  rec.AwaitedRunID,
 		NextAttemptAt: rec.NextAttemptAt,
 		LastError:     rec.LastError,
 		LastReason:    rec.LastReason,

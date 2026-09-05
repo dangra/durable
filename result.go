@@ -103,13 +103,10 @@ type Status struct {
 	CancelRequested bool
 	CancelCause     string
 
-	// AwaitingRunID is set when State is RunStateAwaiting: the Run whose
-	// termination this Run is parked on — the first of AwaitingRunIDs.
-	AwaitingRunID RunID
-
-	// AwaitingRunIDs, AwaitMode, and AwaitDeadline describe the whole park
-	// when State is RunStateAwaiting; AwaitDeadline is zero for a park
-	// without WithAwaitTimeout.
+	// AwaitingRunIDs, AwaitMode, and AwaitDeadline describe the park when
+	// State is RunStateAwaiting: the Runs whose termination this Run is
+	// parked on, how the park resolves, and when it expires (zero for a
+	// park without WithAwaitTimeout).
 	AwaitingRunIDs []RunID
 	AwaitMode      AwaitMode
 	AwaitDeadline  time.Time

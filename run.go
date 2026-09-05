@@ -146,7 +146,6 @@ func (r Run) Status(ctx context.Context) (Status, error) {
 			st.InvalidReason = ie.Reason
 		} else if rec.Awaiting != nil && rec.Cancel == nil {
 			st.State = RunStateAwaiting
-			st.AwaitingRunID = rec.Awaiting.Targets[0]
 			st.AwaitingRunIDs = append([]RunID(nil), rec.Awaiting.Targets...)
 			st.AwaitMode = rec.Awaiting.Mode
 			st.AwaitDeadline = rec.Awaiting.Deadline

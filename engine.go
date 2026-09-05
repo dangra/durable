@@ -960,11 +960,9 @@ func (e *Engine) resolveAwaitPark(rec *storedriver.RunRecord, done []RunID, reso
 	delete(e.awaitParked, rec.RunID)
 	e.mu.Unlock()
 	if present && resolved {
-		targets := rec.Awaiting.Targets
 		e.emitWaiterWoken(observe.WakeEvent{
-			PipelineID: rec.PipelineID, ResourceID: rec.ResourceID,
-			RunID: rec.RunID, Target: targets[0],
-			Targets: append([]RunID(nil), targets...), Done: append([]RunID(nil), done...),
+			PipelineID: rec.PipelineID, ResourceID: rec.ResourceID, RunID: rec.RunID,
+			Targets: append([]RunID(nil), rec.Awaiting.Targets...), Done: append([]RunID(nil), done...),
 			Expired:  expired,
 			Duration: e.clock.Now().Sub(since)})
 	}

@@ -119,15 +119,6 @@ func AwaitRequest(err error) (Await, bool) {
 	return Await{}, false
 }
 
-// AwaitTarget is AwaitRequest reduced to the park's first target, for
-// callers that only need to classify the return.
-func AwaitTarget(err error) (RunID, bool) {
-	if ar, ok := asAwait(err); ok && len(ar.park.Targets) > 0 {
-		return ar.park.Targets[0], true
-	}
-	return "", false
-}
-
 // asAwait reports whether err is a park resolution.
 func asAwait(err error) (*awaitResolution, bool) {
 	if ar, ok := errors.AsType[*awaitResolution](err); ok {

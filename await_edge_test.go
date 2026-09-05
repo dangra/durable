@@ -624,7 +624,7 @@ func TestAwaitAllWakesOnceEveryTargetIsDone(t *testing.T) {
 		t.Fatalf("Schedule parent: %v", err)
 	}
 	st := waitForState(t, pRun, durable.RunStateAwaiting)
-	if st.AwaitMode != durable.AwaitModeAll || len(st.AwaitingRunIDs) != 3 || st.AwaitingRunID != st.AwaitingRunIDs[0] {
+	if st.AwaitMode != durable.AwaitModeAll || len(st.AwaitingRunIDs) != 3 {
 		t.Fatalf("Status = %+v; want an all-of park on 3 children", st)
 	}
 	ids := st.AwaitingRunIDs

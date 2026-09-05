@@ -1514,8 +1514,8 @@ func TestAwaitRunParksUntilTargetCompletes(t *testing.T) {
 			t.Fatalf("Status: %v", err)
 		}
 		if st.State == durable.RunStateAwaiting {
-			if st.AwaitingRunID != tRun.ID() {
-				t.Fatalf("AwaitingRunID = %s, want %s", st.AwaitingRunID, tRun.ID())
+			if len(st.AwaitingRunIDs) != 1 || st.AwaitingRunIDs[0] != tRun.ID() {
+				t.Fatalf("AwaitingRunIDs = %v, want [%s]", st.AwaitingRunIDs, tRun.ID())
 			}
 			break
 		}

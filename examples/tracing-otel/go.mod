@@ -7,8 +7,8 @@ replace github.com/dangra/durable => ../..
 replace github.com/dangra/durable/contrib/durableotel => ../../contrib/durableotel
 
 require (
-	github.com/dangra/durable v0.4.0
-	github.com/dangra/durable/contrib/durableotel v0.4.0
+	github.com/dangra/durable v0.5.0
+	github.com/dangra/durable/contrib/durableotel v0.5.0
 	go.opentelemetry.io/otel/sdk v1.46.0
 	go.opentelemetry.io/otel/trace v1.46.0
 	google.golang.org/protobuf v1.36.12

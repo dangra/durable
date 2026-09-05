@@ -8,7 +8,7 @@ replace github.com/dangra/durable/contrib/durableotel => ../../contrib/durableot
 
 require (
 	github.com/dangra/durable v0.3.0
-	github.com/dangra/durable/contrib/durableotel v0.0.0-00010101000000-000000000000
+	github.com/dangra/durable/contrib/durableotel v0.3.0
 	go.opentelemetry.io/otel/sdk v1.46.0
 	go.opentelemetry.io/otel/trace v1.46.0
 	google.golang.org/protobuf v1.36.12

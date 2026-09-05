@@ -4,8 +4,9 @@ go 1.27.0
 
 // In-tree development and CI build against the working-tree core; the
 // directive is ignored when this module is consumed via go get, where
-// the required release version below applies. Tag this module only when
-// every core API it uses is in that release.
+// the required release version below applies. Releases are lockstep:
+// this module is tagged at the same version and commit as the core, and
+// scripts/release.sh writes the require line (see docs/releasing.md).
 replace github.com/dangra/durable => ../..
 
 require (

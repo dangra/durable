@@ -5,6 +5,8 @@ import (
 	"sync"
 
 	"google.golang.org/protobuf/proto"
+
+	"github.com/dangra/durable/storedriver"
 )
 
 // Invocation is the untyped core behind generated Invocation types. It is
@@ -24,7 +26,7 @@ type Invocation struct {
 	annotations map[string]string
 
 	cancelRequested bool
-	awaitedRunID    RunID
+	awaited         *storedriver.Wake
 
 	baseLogger *slog.Logger
 
@@ -58,13 +60,25 @@ func (inv *Invocation) Logger() *slog.Logger {
 	return inv.scopedLogger
 }
 
-// AwaitedRunID reports the Run the previous attempt of this operation
-// parked on via AwaitRun, once that Run reached terminality (or turned out
-// to be missing). It lets a handler distinguish "woken after the awaited
-// Run completed" from a first execution — the memory that prevents a
-// schedule-then-await step from respawning its child on re-execution.
+// AwaitedRunID reports the Run an earlier attempt of this operation parked
+// on via AwaitRun, once that park resolved: the Run reached terminality,
+// turned out to be missing, or a cancellation request bypassed the park
+// (CancelRequested is then also set). It lets a handler distinguish "woken
+// after the awaited Run completed" from a first execution — the memory
+// that prevents a schedule-then-await step from respawning its child on
+// re-execution.
+//
+// The memory is durable and belongs to the operation, not to one attempt:
+// it persists through ordinary-error retries and engine restarts, and is
+// cleared when the operation resolves or parks again.
+//
+// It reports only single-target parks; a multi-target park (AwaitAll,
+// AwaitAny) yields ("", false) here and is read through Awaited.
 func (inv *Invocation) AwaitedRunID() (RunID, bool) {
-	return inv.awaitedRunID, inv.awaitedRunID != ""
+	if inv.awaited == nil || len(inv.awaited.Targets) != 1 {
+		return "", false
+	}
+	return inv.awaited.Targets[0], true
 }
 
 // Annotations returns a caller-owned copy of the Run's immutable

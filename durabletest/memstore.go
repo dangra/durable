@@ -68,7 +68,8 @@ func (s *MemStore) ApplyTransition(_ context.Context, id durable.RunID, t stored
 	rec.Phase = c.Phase
 	rec.NextAttemptAt = c.NextAttemptAt
 	rec.LastError, rec.LastReason, rec.LastErrorAt = c.LastError, c.LastReason, c.LastErrorAt
-	rec.AwaitingRunID = c.AwaitingRunID
+	rec.Awaiting = c.Awaiting.Clone()
+	rec.Awaited = c.Awaited.Clone()
 	rec.UpdatedAt = c.UpdatedAt
 	if c.StepID != "" {
 		sr := rec.Step(c.StepID)

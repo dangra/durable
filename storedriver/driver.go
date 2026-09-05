@@ -55,6 +55,66 @@ type CancelRequest struct {
 	At    time.Time
 }
 
+// Await is a park of the in-flight operation: it waits on Targets until
+// they resolve per Mode — or until Deadline, when set.
+type Await struct {
+	Mode    AwaitMode
+	Targets []RunID
+	// Deadline is the absolute time the park expires; zero when it has
+	// none.
+	Deadline time.Time
+}
+
+// Clone returns a deep copy.
+func (a *Await) Clone() *Await {
+	if a == nil {
+		return nil
+	}
+	c := *a
+	c.Targets = append([]RunID(nil), a.Targets...)
+	return &c
+}
+
+// Wake is the resolved memory of a park: what the operation parked on and
+// what it found on waking. Done holds the Targets that were terminal or
+// missing at wake time; Expired reports that the park's deadline passed
+// first. A cancellation request bypassing the park also produces a Wake,
+// with Done reflecting the targets' state at that moment.
+type Wake struct {
+	Targets []RunID
+	Done    []RunID
+	Expired bool
+}
+
+// Pending returns the Targets not in Done, in Targets order.
+func (w Wake) Pending() []RunID {
+	if len(w.Done) == 0 {
+		return append([]RunID(nil), w.Targets...)
+	}
+	done := make(map[RunID]struct{}, len(w.Done))
+	for _, id := range w.Done {
+		done[id] = struct{}{}
+	}
+	var out []RunID
+	for _, id := range w.Targets {
+		if _, ok := done[id]; !ok {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// Clone returns a deep copy.
+func (w *Wake) Clone() *Wake {
+	if w == nil {
+		return nil
+	}
+	c := *w
+	c.Targets = append([]RunID(nil), w.Targets...)
+	c.Done = append([]RunID(nil), w.Done...)
+	return &c
+}
+
 // Cursor is the per-Run scheduling state rewritten on every durable
 // transition. It is deliberately small: per-attempt write volume is
 // bounded by the Cursor, independent of Input and State sizes.
@@ -66,9 +126,14 @@ type Cursor struct {
 	StepID   StepID
 	Attempts uint64
 
-	// AwaitingRunID parks the in-flight operation until the referenced
-	// Run terminates; empty when not parked.
-	AwaitingRunID RunID
+	// Awaiting parks the in-flight operation; nil when not parked.
+	Awaiting *Await
+
+	// Awaited is the memory of the in-flight operation's last park, once
+	// resolved. It persists across the operation's retries and restarts
+	// and is cleared when the operation resolves or parks again; nil when
+	// no park has resolved.
+	Awaited *Wake
 
 	NextAttemptAt time.Time
 	LastError     string
@@ -139,9 +204,12 @@ type RunRecord struct {
 	// survives restart.
 	NextAttemptAt time.Time
 
-	// AwaitingRunID mirrors Cursor.AwaitingRunID: the in-flight operation
-	// is parked until that Run terminates.
-	AwaitingRunID RunID
+	// Awaiting mirrors Cursor.Awaiting: the in-flight operation's park.
+	Awaiting *Await
+
+	// Awaited mirrors Cursor.Awaited: the resolved memory of the
+	// in-flight operation's last park.
+	Awaited *Wake
 
 	// LastError, LastReason, and LastErrorAt describe the most recent
 	// ordinary-error attempt of the current unresolved operation. They are
@@ -214,6 +282,8 @@ func (r *RunRecord) Clone() *RunRecord {
 		cr := *r.Cancel
 		c.Cancel = &cr
 	}
+	c.Awaiting = r.Awaiting.Clone()
+	c.Awaited = r.Awaited.Clone()
 	return &c
 }
 

@@ -75,7 +75,8 @@ func MarshalCursor(c storedriver.Cursor) ([]byte, error) {
 		LastReason:    c.LastReason,
 		LastErrorAt:   ts(c.LastErrorAt),
 		UpdatedAt:     ts(c.UpdatedAt),
-		AwaitingRunId: string(c.AwaitingRunID),
+		Awaiting:      awaitToProto(c.Awaiting),
+		Awaited:       wakeToProto(c.Awaited),
 	})
 }
 
@@ -93,8 +94,101 @@ func UnmarshalCursor(b []byte) (storedriver.Cursor, error) {
 		LastReason:    pb.GetLastReason(),
 		LastErrorAt:   fromTS(pb.GetLastErrorAt()),
 		UpdatedAt:     fromTS(pb.GetUpdatedAt()),
-		AwaitingRunID: durable.RunID(pb.GetAwaitingRunId()),
+		Awaiting:      awaitFromProto(pb),
+		Awaited:       wakeFromProto(pb.GetAwaited()),
 	}, nil
+}
+
+func awaitToProto(a *storedriver.Await) *Await {
+	if a == nil {
+		return nil
+	}
+	return &Await{
+		Mode:     awaitModeToProto(a.Mode),
+		RunIds:   runIDsToProto(a.Targets),
+		Deadline: ts(a.Deadline),
+	}
+}
+
+// awaitFromProto decodes the cursor's park, reading the pre-v0.4
+// single-target field as an ALL park of one target when the message is
+// absent.
+func awaitFromProto(pb *Cursor) *storedriver.Await {
+	if a := pb.GetAwaiting(); a != nil {
+		return &storedriver.Await{
+			Mode:     awaitModeFromProto(a.GetMode()),
+			Targets:  runIDsFromProto(a.GetRunIds()),
+			Deadline: fromTS(a.GetDeadline()),
+		}
+	}
+	if legacy := pb.GetAwaitingRunId(); legacy != "" {
+		return &storedriver.Await{Mode: storedriver.AwaitModeAll, Targets: []durable.RunID{durable.RunID(legacy)}}
+	}
+	return nil
+}
+
+func wakeToProto(w *storedriver.Wake) *Wake {
+	if w == nil {
+		return nil
+	}
+	return &Wake{
+		Targets: runIDsToProto(w.Targets),
+		Done:    runIDsToProto(w.Done),
+		Expired: w.Expired,
+	}
+}
+
+func wakeFromProto(pb *Wake) *storedriver.Wake {
+	if pb == nil {
+		return nil
+	}
+	return &storedriver.Wake{
+		Targets: runIDsFromProto(pb.GetTargets()),
+		Done:    runIDsFromProto(pb.GetDone()),
+		Expired: pb.GetExpired(),
+	}
+}
+
+func runIDsToProto(ids []durable.RunID) []string {
+	if len(ids) == 0 {
+		return nil
+	}
+	out := make([]string, len(ids))
+	for i, id := range ids {
+		out[i] = string(id)
+	}
+	return out
+}
+
+func runIDsFromProto(ids []string) []durable.RunID {
+	if len(ids) == 0 {
+		return nil
+	}
+	out := make([]durable.RunID, len(ids))
+	for i, id := range ids {
+		out[i] = durable.RunID(id)
+	}
+	return out
+}
+
+func awaitModeToProto(m storedriver.AwaitMode) AwaitMode {
+	switch m {
+	case storedriver.AwaitModeAll:
+		return AwaitMode_AWAIT_MODE_ALL
+	case storedriver.AwaitModeAny:
+		return AwaitMode_AWAIT_MODE_ANY
+	default:
+		return AwaitMode_AWAIT_MODE_UNSPECIFIED
+	}
+}
+
+func awaitModeFromProto(m AwaitMode) storedriver.AwaitMode {
+	switch m {
+	case AwaitMode_AWAIT_MODE_ANY:
+		return storedriver.AwaitModeAny
+	default:
+		return storedriver.AwaitModeAll
+	}
 }
 
 func MarshalStepRecord(sr *storedriver.StepRecord) ([]byte, error) {

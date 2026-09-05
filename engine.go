@@ -814,18 +814,28 @@ func clearLastError(rec *storedriver.RunRecord) {
 // returns true (no redispatch — the watcher wakes the Run). A pending
 // cancellation bypasses the park so the operation can resolve.
 func (e *Engine) awaitGate(rec *storedriver.RunRecord) bool {
-	if rec.AwaitingRunID == "" || rec.Cancel != nil {
-		if rec.AwaitingRunID != "" {
-			// A cancellation is bypassing an existing park: the Run
-			// proceeds now, so it is no longer awaiting. The stale
-			// watcher goroutine sees the missing entry and stays silent.
-			e.mu.Lock()
-			delete(e.awaitParked, rec.RunID)
-			e.mu.Unlock()
-		}
+	park := rec.Awaiting
+	if park == nil {
 		return false
 	}
-	target := rec.AwaitingRunID
+	if rec.Cancel != nil {
+		// A cancellation is bypassing the park: the Run proceeds now, so
+		// it is no longer awaiting. The stale watcher goroutine sees the
+		// missing entry and stays silent. The memory records what the
+		// targets look like at this moment, best effort.
+		e.mu.Lock()
+		delete(e.awaitParked, rec.RunID)
+		e.mu.Unlock()
+		var done []RunID
+		for _, t := range park.Targets {
+			if ok, err := e.targetDone(t); err == nil && ok {
+				done = append(done, t)
+			}
+		}
+		settleAwait(rec, done, false)
+		return false
+	}
+	target := park.Targets[0]
 	if cycle, err := e.awaitCycle(rec.RunID, target); err == nil && cycle {
 		e.markInvalid(rec, "", fmt.Sprintf("await cycle: awaiting run %s would deadlock back to this run", target))
 		return true
@@ -833,23 +843,20 @@ func (e *Engine) awaitGate(rec *storedriver.RunRecord) bool {
 	// Register before checking terminality so a completion between the
 	// check and the registration cannot be missed.
 	ch, cancelWatch := e.waiters.Watch(target)
-	trec, err := e.store.GetRun(e.baseCtx, target)
+	done, err := e.targetDone(target)
 	switch {
-	case errors.Is(err, ErrRunNotFound):
-		// Resolve immediately: the target never existed or was reaped.
-		cancelWatch()
-		e.resolveAwaitPark(rec, target, true)
-		return false
 	case err != nil:
 		cancelWatch()
 		if e.baseCtx.Err() == nil {
 			e.logger.Error("durable: await target read failed", "run", rec.RunID, "target", target, "error", err)
 		}
 		e.resolveAwaitPark(rec, target, false)
+		settleAwait(rec, nil, false)
 		return false
-	case trec.Terminal():
+	case done:
 		cancelWatch()
 		e.resolveAwaitPark(rec, target, true)
+		settleAwait(rec, []RunID{target}, false)
 		return false
 	}
 	parked := rec.RunID
@@ -874,6 +881,29 @@ func (e *Engine) awaitGate(rec *storedriver.RunRecord) bool {
 		}
 	})
 	return true
+}
+
+// targetDone reports whether an await target no longer needs waiting on:
+// it is terminal, or it never existed / was reaped by retention.
+func (e *Engine) targetDone(target RunID) (bool, error) {
+	trec, err := e.store.GetRun(e.baseCtx, target)
+	if errors.Is(err, ErrRunNotFound) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return trec.Terminal(), nil
+}
+
+// settleAwait converts the park the await gate let through into the
+// operation's memory of it, in place: the next durable write — the
+// attempt reservation — persists it, and every later cursor write carries
+// it, so it outlives ordinary-error retries and restarts until the
+// operation resolves or parks again.
+func settleAwait(rec *storedriver.RunRecord, done []RunID, expired bool) {
+	rec.Awaited = &storedriver.Wake{Targets: rec.Awaiting.Targets, Done: done, Expired: expired}
+	rec.Awaiting = nil
 }
 
 // resolveAwaitPark closes out a Run's AwaitRun park, if one is recorded:
@@ -901,7 +931,9 @@ func (e *Engine) parkAwait(rec *storedriver.RunRecord, stepID StepID, attempts u
 		e.markInvalid(rec, stepID, "AwaitRun with empty RunID")
 		return false, 0, false
 	}
-	rec.AwaitingRunID = target
+	// A new park supersedes the memory of the previous one.
+	rec.Awaiting = &storedriver.Await{Mode: storedriver.AwaitModeAll, Targets: []RunID{target}}
+	rec.Awaited = nil
 	if !e.apply(rec, storedriver.Transition{Cursor: activeCursor(rec, stepID, attempts)}) {
 		return false, time.Second, true
 	}
@@ -942,10 +974,10 @@ func (e *Engine) awaitCycle(self, target RunID) (bool, error) {
 		if err != nil {
 			return false, err
 		}
-		if rec.Terminal() {
+		if rec.Terminal() || rec.Awaiting == nil {
 			return false, nil
 		}
-		cur = rec.AwaitingRunID
+		cur = rec.Awaiting.Targets[0]
 	}
 	return false, nil
 }
@@ -969,8 +1001,6 @@ func (e *Engine) runForward(rec *storedriver.RunRecord, def *Definition, stepID 
 	sr := rec.Step(stepID)
 
 	// Durably reserve the attempt before invoking application code.
-	awaited := rec.AwaitingRunID
-	rec.AwaitingRunID = ""
 	sr.ForwardStatus = storedriver.OpUnresolved
 	sr.ForwardAttempts++
 	rec.NextAttemptAt = time.Time{}
@@ -979,7 +1009,7 @@ func (e *Engine) runForward(rec *storedriver.RunRecord, def *Definition, stepID 
 	}
 
 	inv := e.invocation(rec, def, stepID, sr.ForwardAttempts, PhaseForward)
-	inv.awaitedRunID = awaited
+	inv.awaited = rec.Awaited.Clone()
 	opStart := e.clock.Now()
 	state, panicked, err := e.invokeForward(sc, inv)
 	preemptCause, wasPreempted := e.takePreempted(rec.RunID)
@@ -1012,6 +1042,7 @@ func (e *Engine) runForward(rec *storedriver.RunRecord, def *Definition, stepID 
 		// State commit and forward success are one durable transition.
 		sr.ForwardStatus = storedriver.OpSucceeded
 		sr.State = stateBytes
+		rec.Awaited = nil
 		clearLastError(rec)
 		if !e.apply(rec, storedriver.Transition{Cursor: idleCursor(rec), Steps: []storedriver.StepWrite{{StepID: stepID, Record: *sr}}}) {
 			return false, time.Second, true
@@ -1049,6 +1080,7 @@ func (e *Engine) runForward(rec *storedriver.RunRecord, def *Definition, stepID 
 			rec.RootFailure.Message = sanitizeText(cause)
 		}
 		rec.Phase = PhaseUnwind
+		rec.Awaited = nil
 		clearLastError(rec)
 		if !e.apply(rec, storedriver.Transition{Cursor: idleCursor(rec), Steps: []storedriver.StepWrite{{StepID: stepID, Record: *sr}}, RootFailure: rec.RootFailure}) {
 			return false, time.Second, true
@@ -1077,8 +1109,6 @@ func (e *Engine) runUnwind(rec *storedriver.RunRecord, def *Definition, stepID S
 	sc := def.step(stepID)
 	sr := rec.Step(stepID)
 
-	awaited := rec.AwaitingRunID
-	rec.AwaitingRunID = ""
 	sr.UnwindStatus = storedriver.OpUnresolved
 	sr.UnwindAttempts++
 	rec.NextAttemptAt = time.Time{}
@@ -1087,7 +1117,7 @@ func (e *Engine) runUnwind(rec *storedriver.RunRecord, def *Definition, stepID S
 	}
 
 	inv := e.invocation(rec, def, stepID, sr.UnwindAttempts, PhaseUnwind)
-	inv.awaitedRunID = awaited
+	inv.awaited = rec.Awaited.Clone()
 	opStart := e.clock.Now()
 	failure := Failure{
 		UnwindFailures: append([]UnwindFailure(nil), rec.UnwindFailures...),
@@ -1111,6 +1141,7 @@ func (e *Engine) runUnwind(rec *storedriver.RunRecord, def *Definition, stepID S
 	switch pe, permanent := asPermanent(err); {
 	case err == nil:
 		sr.UnwindStatus = storedriver.OpSucceeded
+		rec.Awaited = nil
 		clearLastError(rec)
 		if !e.apply(rec, storedriver.Transition{Cursor: idleCursor(rec), Steps: []storedriver.StepWrite{{StepID: stepID, Record: *sr}}}) {
 			return false, time.Second, true
@@ -1128,6 +1159,7 @@ func (e *Engine) runUnwind(rec *storedriver.RunRecord, def *Definition, stepID S
 			At:      now,
 			Kind:    pe.failureKind(),
 			Reason:  sanitizeText(pe.failureReason())})
+		rec.Awaited = nil
 		clearLastError(rec)
 		uf := rec.UnwindFailures[len(rec.UnwindFailures)-1]
 		if !e.apply(rec, storedriver.Transition{Cursor: idleCursor(rec), Steps: []storedriver.StepWrite{{StepID: stepID, Record: *sr}}, UnwindFailure: &uf}) {
@@ -1273,7 +1305,8 @@ func activeCursor(rec *storedriver.RunRecord, stepID StepID, attempts uint64) st
 		Phase:         rec.Phase,
 		StepID:        stepID,
 		Attempts:      attempts,
-		AwaitingRunID: rec.AwaitingRunID,
+		Awaiting:      rec.Awaiting,
+		Awaited:       rec.Awaited,
 		NextAttemptAt: rec.NextAttemptAt,
 		LastError:     rec.LastError,
 		LastReason:    rec.LastReason,

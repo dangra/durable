@@ -55,7 +55,7 @@ jobs:
       - name: Primitive coverage gate
         run: |
           go test -coverprofile=/tmp/prim.cov \
-            ./internal/ledger/ ./internal/watchset/ ./internal/tokenpool/ ./internal/dispatcher/ ./internal/joinset/
+            ./internal/ledger/ ./internal/watchset/ ./internal/tokenpool/ ./internal/dispatcher/ ./internal/joinset/ ./internal/frozen/
           total=$(go tool cover -func=/tmp/prim.cov | awk '/^total:/{print $NF}')
           echo "primitive coverage: $total"
           if [ "$total" != "100.0%" ]; then

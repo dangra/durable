@@ -18,6 +18,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/dangra/durable/internal/dispatcher"
+	"github.com/dangra/durable/internal/frozen"
 	"github.com/dangra/durable/internal/joinset"
 	"github.com/dangra/durable/internal/ledger"
 	"github.com/dangra/durable/internal/tokenpool"
@@ -210,11 +211,11 @@ type Engine struct {
 	// FailureKindCanceled truthfully. Consumed by the next resolution.
 	preempted map[RunID]string
 
-	// pipelines and stepOwner are written only before Start, under mu
-	// (register rejects later binds); after the Start freeze they are
-	// read without locking.
-	pipelines map[PipelineID]*Definition
-	stepOwner map[StepID]PipelineID
+	// pipelines and stepOwner are written by register, under mu, and
+	// frozen by Start; a Put after that panics, and workers read them
+	// lock-free.
+	pipelines frozen.Map[PipelineID, *Definition]
+	stepOwner frozen.Map[StepID, PipelineID]
 
 	// waiters broadcasts a Run's terminal/invalid notification to
 	// Run.Wait callers; it is internally locked, independent of mu.
@@ -253,8 +254,6 @@ func NewEngine(store storedriver.Store, opts ...Option) *Engine {
 		logger:        slog.Default(),
 		retry:         defaultRetryPolicy,
 		concurrency:   16,
-		pipelines:     make(map[PipelineID]*Definition),
-		stepOwner:     make(map[StepID]PipelineID),
 		invalid:       make(map[RunID]*InvalidRunError),
 		attemptCancel: make(map[RunID]context.CancelCauseFunc),
 		preempted:     make(map[RunID]string),
@@ -279,17 +278,17 @@ func (e *Engine) register(d *Definition) error {
 	if e.started {
 		return ErrEngineStarted
 	}
-	if _, dup := e.pipelines[d.ID()]; dup {
+	if _, dup := e.pipelines.Get(d.ID()); dup {
 		return fmt.Errorf("durable: pipeline %q bound twice", d.ID())
 	}
 	for id := range d.steps {
-		if owner, dup := e.stepOwner[id]; dup {
+		if owner, dup := e.stepOwner.Get(id); dup {
 			return fmt.Errorf("durable: step %q declared by pipelines %q and %q; one durable step belongs to exactly one active pipeline", id, owner, d.ID())
 		}
 	}
-	e.pipelines[d.ID()] = d
+	e.pipelines.Put(d.ID(), d)
 	for id := range d.steps {
-		e.stepOwner[id] = d.ID()
+		e.stepOwner.Put(id, d.ID())
 	}
 	return nil
 }
@@ -308,6 +307,8 @@ func (e *Engine) Start(ctx context.Context) error {
 		return ErrEngineStarted
 	}
 	e.started = true
+	e.pipelines.Freeze()
+	e.stepOwner.Freeze()
 	e.baseCtx, e.cancel = context.WithCancelCause(context.Background())
 	e.dispCtx, e.drainCancel = context.WithCancel(e.baseCtx)
 	e.disp = dispatcher.New(dispatcher.Config[RunID]{
@@ -342,7 +343,7 @@ func (e *Engine) Start(ctx context.Context) error {
 	}
 
 	e.mu.Lock()
-	for _, d := range e.pipelines {
+	e.pipelines.Range(func(_ PipelineID, d *Definition) bool {
 		for _, sc := range d.steps {
 			if sc.ConcurrencyClass != "" {
 				if _, ok := e.classCapacity[sc.ConcurrencyClass]; !ok {
@@ -351,7 +352,8 @@ func (e *Engine) Start(ctx context.Context) error {
 				}
 			}
 		}
-	}
+		return true
+	})
 	e.mu.Unlock()
 	return nil
 }
@@ -572,14 +574,9 @@ func (e *Engine) processRun(id RunID) (time.Duration, bool) {
 			return 0, false
 		}
 
-		// Lock-free read: pipelines is frozen at Start (register rejects
-		// later binds under mu), and every worker descends from a
-		// mu-synchronized point after that freeze — Start's own recovery
-		// dispatches, or a public entry point that passed an isStarted
-		// check under mu (Schedule, Cancel, ...) before dispatching,
-		// directly or through the wakes and kicks of workers so rooted.
-		// The last write therefore happens-before every read here.
-		def := e.pipelines[rec.PipelineID]
+		// Lock-free: pipelines was frozen by Start, before any worker
+		// existed, and a write after that panics.
+		def, _ := e.pipelines.Get(rec.PipelineID)
 		if def == nil {
 			e.markInvalid(rec, "", fmt.Sprintf("pipeline %q is not registered with the current deployment", rec.PipelineID))
 			return 0, false

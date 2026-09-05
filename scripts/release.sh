@@ -19,7 +19,8 @@
 # say "require durable v0.4.0" before v0.4.0 is tagged, and every module's
 # tag lands on that one commit.
 set -euo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+[[ -f VERSION && -d contrib ]] || { echo "release: not at the repository root: $PWD" >&2; exit 1; }
 
 CORE=github.com/dangra/durable
 SEMVER='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$'
@@ -40,10 +41,14 @@ require_version() {
 		$1 == m && $2 ~ /^v/     { print $2; exit }' "$1/go.mod"
 }
 
-# set_require DIR MODPATH VERSION rewrites the require line in place.
+# set_require DIR MODPATH VERSION rewrites the require line, in both the
+# block and single-line forms, keeping indentation and any trailing
+# comment. Portable: no sed -i.
 set_require() {
-	local m; m=$(printf '%s' "$2" | sed 's/[.\/]/\\&/g')
-	sed -i -E "s#^(require +)${m}( +)v[^ ]+#\1$2\2$3#; s#^([[:space:]]+)${m}( +)v[^ ]+#\1$2\2$3#" "$1/go.mod"
+	local tmp; tmp=$(mktemp)
+	awk -v m="$2" -v v="$3" '
+		($1 == "require" && $2 == m) || ($1 == m && $2 ~ /^v/) { sub(/ v[^ \t]+/, " " v) }
+		{ print }' "$1/go.mod" >"$tmp" && mv "$tmp" "$1/go.mod"
 }
 
 has_replace() { grep -Eq "^replace[[:space:]]+$2[[:space:]]+=>" "$1/go.mod"; }
@@ -165,19 +170,35 @@ ci_green() {
 consumer_check() {
 	local v=$1 d; d=$(mktemp -d)
 	local paths; paths="$CORE $(for m in $(tagged_modules); do module_path "$m"; done)"
+	# The subshell's status is captured explicitly: a caller testing this
+	# function in an if-condition suspends errexit, so a failure inside
+	# would otherwise fall through to success. Cleanup runs either way.
+	# Modules are pinned with go mod edit, not go get: go get treats the
+	# path as a package pattern and, when the version is missing for the
+	# nested module, quietly resolves it at its own latest instead.
+	# Tidy fails on an unknown revision, and the final go list asserts
+	# that every module resolved to exactly the version.
+	local rc=0
 	(
+		set -e
 		cd "$d"
+		export GOPROXY=direct GONOSUMDB="$CORE" GOFLAGS=-mod=mod
 		go mod init probe.invalid/probe >/dev/null 2>&1
+		for p in $paths; do go mod edit -require="$p@$v"; done
 		{
 			echo 'package main'
 			for p in $paths; do echo "import _ \"$p\""; done
 			echo 'func main() {}'
 		} >main.go
-		export GOPROXY=direct GONOSUMDB="$CORE" GONOSUMCHECK=1 GOFLAGS=-mod=mod
-		for p in $paths; do go get "$p@$v"; done
+		go mod tidy
 		go build ./...
-	)
+		for p in $paths; do
+			got=$(go list -m -f '{{.Version}}' "$p")
+			[[ $got == "$v" ]] || { echo "release: $p resolved to $got, not $v" >&2; exit 1; }
+		done
+	) || rc=$?
 	rm -rf "$d"
+	((rc == 0)) || return "$rc"
 	note "consumer check ok: $paths at $v"
 }
 
@@ -233,6 +254,10 @@ EOF
 		exit 1
 	fi
 }
+
+# Sourcing the script loads the functions without running a command, for
+# tests.
+[[ ${BASH_SOURCE[0]} == "$0" ]] || return 0
 
 case ${1:-} in
 verify) cmd_verify ;;

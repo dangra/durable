@@ -25,7 +25,8 @@ on:
         default: false
 
 permissions:
-  contents: write
+  contents: write # tags and the release
+  checks: read # the CI-green gate reads the commit's check runs
 
 concurrency:
   group: release

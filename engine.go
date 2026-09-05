@@ -9,6 +9,7 @@ import (
 	mrand "math/rand/v2"
 	"runtime/debug"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"google.golang.org/protobuf/proto"
@@ -158,6 +159,22 @@ func WithRecoveryBackoff(d time.Duration) Option {
 	}
 }
 
+// WithDrainTimeout makes Stop graceful: for up to d, the Engine starts
+// no new operation attempts (newly scheduled Runs included) while
+// in-flight attempts keep live contexts and their results commit
+// normally — no burst of preempted errors on shutdown. Attempts still
+// running at the deadline are preempted as usual (context.Cause
+// ErrEngineStopping). The default is 0: Stop preempts immediately. A
+// handler that blocks on ctx.Done() drains only at the deadline; keep d
+// modest.
+func WithDrainTimeout(d time.Duration) Option {
+	return func(e *Engine) {
+		if d > 0 {
+			e.drainTimeout = d
+		}
+	}
+}
+
 // Engine executes Runs against a Store. Exactly one Engine may execute
 // against a Store at a time in v1.
 type Engine struct {
@@ -168,6 +185,7 @@ type Engine struct {
 	concurrency     int
 	recoveryBackoff time.Duration
 	retention       RetentionPolicy
+	drainTimeout    time.Duration
 	middleware      []Middleware
 	observers       []Observer
 	annotators      []ScheduleAnnotator
@@ -206,7 +224,13 @@ type Engine struct {
 
 	baseCtx context.Context
 	cancel  context.CancelCauseFunc
-	wg      sync.WaitGroup
+	// dispCtx gates dispatch and helper goroutines; draining cancels it
+	// first, ahead of baseCtx, so in-flight attempts keep live contexts
+	// while no new work starts.
+	dispCtx     context.Context
+	drainCancel context.CancelFunc
+	draining    atomic.Bool
+	wg          sync.WaitGroup
 }
 
 // NewEngine constructs an Engine in the configuring state. Definitions bind
@@ -275,8 +299,9 @@ func (e *Engine) Start(ctx context.Context) error {
 	}
 	e.started = true
 	e.baseCtx, e.cancel = context.WithCancelCause(context.Background())
+	e.dispCtx, e.drainCancel = context.WithCancel(e.baseCtx)
 	e.disp = dispatcher.New(dispatcher.Config[RunID]{
-		Ctx:         e.baseCtx,
+		Ctx:         e.dispCtx,
 		Concurrency: e.concurrency,
 		Clock:       e.clock,
 		Spawn:       e.wg.Go,
@@ -362,7 +387,7 @@ func (e *Engine) retentionLoop() {
 		d = d/2 + d/4 + time.Duration(mrand.Int64N(int64(d/2))) // [0.75d, 1.25d)
 		select {
 		case <-e.clock.After(d):
-		case <-e.baseCtx.Done():
+		case <-e.dispCtx.Done():
 			return
 		}
 	}
@@ -399,6 +424,10 @@ func (e *Engine) sweepRetention() {
 // active handler contexts (their context.Cause is ErrEngineStopping), and
 // leaves unresolved Runs nonterminal. Shutdown does not create Pipeline
 // failure; a future Engine resumes the Runs.
+//
+// With WithDrainTimeout, Stop first drains: no new attempts start while
+// in-flight ones finish with live contexts and commit their results;
+// only at the deadline (or when ctx expires) are stragglers preempted.
 func (e *Engine) Stop(ctx context.Context) error {
 	e.mu.Lock()
 	if !e.started || e.cancel == nil {
@@ -406,14 +435,27 @@ func (e *Engine) Stop(ctx context.Context) error {
 		return ErrEngineNotStarted
 	}
 	cancel := e.cancel
+	drainCancel := e.drainCancel
 	e.mu.Unlock()
 
-	cancel(ErrEngineStopping)
 	done := make(chan struct{})
 	go func() {
 		e.wg.Wait()
 		close(done)
 	}()
+
+	if e.drainTimeout > 0 {
+		e.draining.Store(true)
+		drainCancel()
+		e.logger.Info("durable: draining before shutdown", "timeout", e.drainTimeout)
+		select {
+		case <-done:
+		case <-e.clock.After(e.drainTimeout):
+		case <-ctx.Done():
+		}
+	}
+
+	cancel(ErrEngineStopping)
 	select {
 	case <-done:
 		return nil
@@ -540,6 +582,11 @@ func (e *Engine) processRun(id RunID) (time.Duration, bool) {
 			return 0, false
 
 		case ledger.KindRunForward:
+			// Draining: no new attempt starts; the Run stays runnable
+			// for the next Engine.
+			if e.draining.Load() {
+				return 0, false
+			}
 			// A pending cancellation stops new forward work; a started
 			// operation is never abandoned and continues until it
 			// resolves.
@@ -591,6 +638,9 @@ func (e *Engine) processRun(id RunID) (time.Duration, bool) {
 			}
 
 		case ledger.KindRunUnwind:
+			if e.draining.Load() {
+				return 0, false
+			}
 			if e.awaitGate(rec) {
 				return 0, false
 			}
@@ -807,7 +857,7 @@ func (e *Engine) awaitGate(rec *RunRecord) bool {
 		select {
 		case <-ch:
 			e.disp.Dispatch(parked, 0)
-		case <-e.baseCtx.Done():
+		case <-e.dispCtx.Done():
 			cancelWatch()
 		}
 	})

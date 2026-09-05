@@ -275,7 +275,10 @@ recorded — the next `Start` resumes them (that is the
 [durability chapter](#durability-crash-restart-continue)). Shutdown is
 ephemeral and process-scoped; `Cancel` is durable intent that survives
 restart and drives the Run to a terminal `Canceled()` outcome via
-unwind.
+unwind. By default `Stop` preempts in-flight attempts immediately;
+`WithDrainTimeout` makes it graceful — no new attempts start while
+in-flight ones finish with live contexts and commit their results,
+with preemption only for stragglers at the deadline.
 
 ### Opting out of the cooperative loop
 

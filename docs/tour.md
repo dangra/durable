@@ -137,6 +137,12 @@ The three ways out of a handler:
   At-least-once means the handler may run again *after* succeeding
   (crash between effect and commit), so make it idempotent: check
   whether the migration is already applied before applying it.
+  `ctx.Err()` is an ordinary error too: the engine never inspects
+  error values for intent — `context.Canceled` carries none. When your
+  ctx dies, return `ctx.Err()` as-is; whatever killed it is already
+  tracked on its own channel (a pending cancel gates the next dispatch,
+  a shutdown resumes via recovery), so don't wrap it in `Fail` — a
+  preempted attempt is not necessarily a permanent failure.
 - **Permanent failure** — declare it explicitly:
 
 ```go

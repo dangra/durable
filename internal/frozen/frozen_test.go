@@ -72,9 +72,24 @@ func TestRangeBeforeAndAfterFreeze(t *testing.T) {
 	if stopped != 1 {
 		t.Fatalf("Range did not stop on false: visited %d", stopped)
 	}
+	// Before Freeze, fn may use the map: reads see the snapshot's
+	// entries, and a Put lands without being visited by this Range.
+	visited := 0
+	m.Range(func(k int, _ string) bool {
+		visited++
+		if _, ok := m.Get(k); !ok {
+			t.Errorf("Get(%d) inside Range found nothing", k)
+		}
+		_ = m.Len()
+		m.Put(100+k, "late")
+		return true
+	})
+	if visited != 5 || m.Len() != 10 {
+		t.Fatalf("Range with a mutating fn visited %d, Len = %d; want 5 and 10", visited, m.Len())
+	}
 	m.Freeze()
-	if count() != 5 {
-		t.Fatalf("Range after Freeze visited %d; want 5", count())
+	if count() != 10 {
+		t.Fatalf("Range after Freeze visited %d; want 10", count())
 	}
 }
 

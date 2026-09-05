@@ -12,6 +12,7 @@
 package frozen
 
 import (
+	"maps"
 	"sync"
 	"sync/atomic"
 )
@@ -59,14 +60,17 @@ func (f *Map[K, V]) Len() int {
 	return len(f.m)
 }
 
-// Range calls fn for each entry, in map order, until fn returns false.
-// Before Freeze it holds the lock throughout, so fn must not Put.
+// Range calls fn for each entry, in unspecified order, until fn returns
+// false. fn may use the map: before Freeze, Range iterates a snapshot
+// taken under the lock, so a Put from fn lands but is not visited.
 func (f *Map[K, V]) Range(fn func(K, V) bool) {
+	m := f.m
 	if !f.frozen.Load() {
 		f.mu.Lock()
-		defer f.mu.Unlock()
+		m = maps.Clone(f.m)
+		f.mu.Unlock()
 	}
-	for k, v := range f.m {
+	for k, v := range m {
 		if !fn(k, v) {
 			return
 		}

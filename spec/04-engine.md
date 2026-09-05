@@ -82,8 +82,8 @@ A future bounded retry feature would need separate exhaustion semantics and is o
 Engine-level policy MAY be configured:
 
 ```go
-durable.WithRetryPolicy(
-    durable.RetryPolicy{
+engine.WithRetryPolicy(
+    engine.RetryPolicy{
         Initial:    100 * time.Millisecond,
         Max:        30 * time.Second,
         Multiplier: 2,
@@ -428,7 +428,7 @@ Different Runs MAY execute concurrently.
 Global concurrency:
 
 ```go
-durable.WithConcurrency(32)
+engine.WithConcurrency(32)
 ```
 
 ## Concurrency classes
@@ -445,7 +445,7 @@ option (durable.v1.step) = {
 ```
 
 ```go
-durable.WithConcurrencyClass("vm-snapshots", 2)
+engine.WithConcurrencyClass("vm-snapshots", 2)
 ```
 
 A pipeline-level `concurrency_class` sets the default for all of its
@@ -519,7 +519,7 @@ The system need not persist a distinction between graceful interruption and cras
 The Engine SHOULD support:
 
 ```go
-durable.WithClock(clock)
+engine.WithClock(clock)
 ```
 
 for deterministic timing tests.
@@ -565,7 +565,7 @@ Step); an unwind operation always returns `(nil, err)`.
 Engine-level middleware wraps every operation, forward and unwind alike:
 
 ```go
-durable.WithMiddleware(logging, metrics)
+engine.WithMiddleware(logging, metrics)
 ```
 
 The first middleware is outermost. `Invocation.Phase()` distinguishes
@@ -651,7 +651,7 @@ Retention is off by default: without configuration, terminal Runs
 accumulate indefinitely (the Engine logs this at Start).
 
 ```go
-durable.WithRetention(durable.RetentionPolicy{
+engine.WithRetention(engine.RetentionPolicy{
     TerminalAfter: 7 * 24 * time.Hour, // keep terminal Runs this long
     Interval:      10 * time.Minute,   // jittered sweep cadence (default)
 })

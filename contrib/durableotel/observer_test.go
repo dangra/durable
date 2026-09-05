@@ -12,6 +12,7 @@ import (
 	"github.com/dangra/durable"
 	"github.com/dangra/durable/contrib/durableotel"
 	"github.com/dangra/durable/durabletest"
+	"github.com/dangra/durable/engine"
 	"github.com/dangra/durable/observe"
 )
 
@@ -234,7 +235,7 @@ func TestEndToEndMetrics(t *testing.T) {
 		t.Fatalf("NewObserver: %v", err)
 	}
 
-	runSaga(t, nil, durable.WithObserver(obs))
+	runSaga(t, nil, engine.WithObserver(obs))
 
 	got := collect(t, reader)
 	pipeline := durableotel.AttrPipeline.String("saga")
@@ -267,13 +268,13 @@ func TestRegisterStats(t *testing.T) {
 	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
 	defer mp.Shutdown(t.Context())
 
-	engine := durable.NewEngine(durabletest.NewMemStore(), fastRetry, quietLogger())
-	if err := engine.Start(t.Context()); err != nil {
+	eng := engine.New(durabletest.NewMemStore(), fastRetry, quietLogger())
+	if err := eng.Start(t.Context()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	defer engine.Stop(t.Context())
+	defer eng.Stop(t.Context())
 
-	reg, err := durableotel.RegisterStats(engine, durableotel.WithMeterProvider(mp))
+	reg, err := durableotel.RegisterStats(eng, durableotel.WithMeterProvider(mp))
 	if err != nil {
 		t.Fatalf("RegisterStats: %v", err)
 	}

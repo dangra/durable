@@ -19,6 +19,7 @@ import (
 
 const (
 	durablePkg = protogen.GoImportPath("github.com/dangra/durable")
+	enginePkg  = protogen.GoImportPath("github.com/dangra/durable/engine")
 	contextPkg = protogen.GoImportPath("context")
 	syncPkg    = protogen.GoImportPath("sync")
 	protoPkg   = protogen.GoImportPath("google.golang.org/protobuf/proto")
@@ -447,7 +448,7 @@ func emitDefinition(g *protogen.GeneratedFile, pl *pipelineDecl) {
 
 	g.P("// ", name, "Definition is the unbound pipeline definition.")
 	g.P("type ", name, "Definition struct {")
-	g.P("def *", g.QualifiedGoIdent(durablePkg.Ident("Definition")))
+	g.P("def *", g.QualifiedGoIdent(enginePkg.Ident("Definition")))
 	g.P("}")
 	g.P()
 
@@ -466,7 +467,7 @@ func emitDefinition(g *protogen.GeneratedFile, pl *pipelineDecl) {
 		g.P("reduce ", name, "Reducer,")
 	}
 	g.P(") *", name, "Definition {")
-	g.P("return &", name, "Definition{def: ", g.QualifiedGoIdent(durablePkg.Ident("NewDefinition")), "(", g.QualifiedGoIdent(durablePkg.Ident("DefinitionConfig")), "{")
+	g.P("return &", name, "Definition{def: ", g.QualifiedGoIdent(enginePkg.Ident("NewDefinition")), "(", g.QualifiedGoIdent(enginePkg.Ident("DefinitionConfig")), "{")
 	g.P("ID: ", strconv(pl.opts.GetId()), ",")
 	if eg := pl.opts.GetExclusionGroup(); eg != "" {
 		g.P("ExclusionGroup: ", strconv(eg), ",")
@@ -485,7 +486,7 @@ func emitDefinition(g *protogen.GeneratedFile, pl *pipelineDecl) {
 		g.P("return reduce(x)")
 		g.P("},")
 	}
-	g.P("Steps: []", g.QualifiedGoIdent(durablePkg.Ident("StepConfig")), "{")
+	g.P("Steps: []", g.QualifiedGoIdent(enginePkg.Ident("StepConfig")), "{")
 	for _, s := range pl.steps {
 		goName := s.msg.GoIdent.GoName
 		param := lowerFirst(goName)
@@ -528,7 +529,7 @@ func emitDefinition(g *protogen.GeneratedFile, pl *pipelineDecl) {
 
 	g.P("// Bind registers the definition with an engine. It is allowed only before")
 	g.P("// Engine.Start.")
-	g.P("func (d *", name, "Definition) Bind(e *", g.QualifiedGoIdent(durablePkg.Ident("Engine")), ") (*", name, "Pipeline, error) {")
+	g.P("func (d *", name, "Definition) Bind(e *", g.QualifiedGoIdent(enginePkg.Ident("Engine")), ") (*", name, "Pipeline, error) {")
 	g.P("p, err := d.def.Bind(e)")
 	g.P("if err != nil {")
 	g.P("return nil, err")
@@ -543,7 +544,7 @@ func emitBoundPipeline(g *protogen.GeneratedFile, pl *pipelineDecl) {
 	ctx := g.QualifiedGoIdent(contextPkg.Ident("Context"))
 	resourceID := g.QualifiedGoIdent(durablePkg.Ident("ResourceID"))
 	runID := g.QualifiedGoIdent(durablePkg.Ident("RunID"))
-	plainRun := g.QualifiedGoIdent(durablePkg.Ident("Run"))
+	plainRun := g.QualifiedGoIdent(enginePkg.Ident("Run"))
 
 	runType := plainRun
 	wrap := func(expr string) string { return expr }
@@ -554,11 +555,11 @@ func emitBoundPipeline(g *protogen.GeneratedFile, pl *pipelineDecl) {
 
 	g.P("// ", name, "Pipeline is the definition bound to an engine.")
 	g.P("type ", name, "Pipeline struct {")
-	g.P("pipeline *", g.QualifiedGoIdent(durablePkg.Ident("Pipeline")))
+	g.P("pipeline *", g.QualifiedGoIdent(enginePkg.Ident("Pipeline")))
 	g.P("}")
 	g.P()
 
-	scheduleOpt := g.QualifiedGoIdent(durablePkg.Ident("ScheduleOption"))
+	scheduleOpt := g.QualifiedGoIdent(enginePkg.Ident("ScheduleOption"))
 	g.P("// Schedule creates a run for the resource slot or returns the active one.")
 	if pl.input != nil {
 		g.P("func (p *", name, "Pipeline) Schedule(ctx ", ctx, ", resource ", resourceID, ", input *", g.QualifiedGoIdent(pl.input.GoIdent), ", opts ...", scheduleOpt, ") (", runType, ", bool, error) {")
@@ -645,12 +646,12 @@ func emitTypedRunAndResult(g *protogen.GeneratedFile, pl *pipelineDecl) {
 
 	g.P("// ", name, "Run is a typed handle to one run of the pipeline.")
 	g.P("type ", name, "Run struct {")
-	g.P("run ", g.QualifiedGoIdent(durablePkg.Ident("Run")))
+	g.P("run ", g.QualifiedGoIdent(enginePkg.Ident("Run")))
 	g.P("}")
 	g.P()
 	g.P("func (r ", name, "Run) ID() ", g.QualifiedGoIdent(durablePkg.Ident("RunID")), " { return r.run.ID() }")
 	g.P()
-	g.P("func (r ", name, "Run) Status(ctx ", ctx, ") (", g.QualifiedGoIdent(durablePkg.Ident("Status")), ", error) {")
+	g.P("func (r ", name, "Run) Status(ctx ", ctx, ") (", g.QualifiedGoIdent(enginePkg.Ident("Status")), ", error) {")
 	g.P("return r.run.Status(ctx)")
 	g.P("}")
 	g.P()
@@ -678,7 +679,7 @@ func emitTypedRunAndResult(g *protogen.GeneratedFile, pl *pipelineDecl) {
 	}
 	if pl.output == nil {
 		g.P("// Wait blocks until the run is terminal.")
-		g.P("func (r ", name, "Run) Wait(ctx ", ctx, ") (", g.QualifiedGoIdent(durablePkg.Ident("Result")), ", error) {")
+		g.P("func (r ", name, "Run) Wait(ctx ", ctx, ") (", g.QualifiedGoIdent(enginePkg.Ident("Result")), ", error) {")
 		g.P("return r.run.Wait(ctx)")
 		g.P("}")
 		g.P()
@@ -708,7 +709,7 @@ func emitTypedRunAndResult(g *protogen.GeneratedFile, pl *pipelineDecl) {
 	g.P()
 	g.P("// ", name, "Result is the typed terminal result of a run.")
 	g.P("type ", name, "Result struct {")
-	g.P(g.QualifiedGoIdent(durablePkg.Ident("Result")))
+	g.P(g.QualifiedGoIdent(enginePkg.Ident("Result")))
 	g.P("output *", g.QualifiedGoIdent(pl.output.GoIdent))
 	g.P("}")
 	g.P()

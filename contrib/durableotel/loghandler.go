@@ -15,8 +15,8 @@ import (
 //
 //	logger := slog.New(durableotel.NewLogHandler(
 //		slog.NewJSONHandler(os.Stderr, nil)))
-//	engine := durable.NewEngine(store, durable.WithLogger(logger),
-//		durable.WithMiddleware(durableotel.Middleware()))
+//	engine := engine.New(store, engine.WithLogger(logger),
+//		engine.WithMiddleware(durableotel.Middleware()))
 //
 // and handler lines join their attempt span, on top of the canonical
 // durable keys Invocation.Logger already attaches:

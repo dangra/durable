@@ -14,6 +14,7 @@ import (
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
 	"github.com/dangra/durable"
+	"github.com/dangra/durable/engine"
 )
 
 // The coordination scenarios use small inputs deliberately: they measure
@@ -54,9 +55,9 @@ func BenchmarkSupersedeCycle(b *testing.B) {
 		return sig
 	}
 
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "supersede",
-		Steps: []durable.StepConfig{{
+		Steps: []engine.StepConfig{{
 			ID:     "supersede-apply/v1",
 			Unwind: true,
 			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
@@ -104,7 +105,7 @@ func BenchmarkSupersedeCycle(b *testing.B) {
 				mu.Unlock()
 
 				_, _, err = v.pipe.Schedule(context.Background(), res, v2)
-				var conflict *durable.ScheduleConflictError
+				var conflict *engine.ScheduleConflictError
 				if !errors.As(err, &conflict) {
 					b.Errorf("expected conflict, got %v", err)
 					return
@@ -156,9 +157,9 @@ func BenchmarkAwaitFanout(b *testing.B) {
 		release      atomic.Pointer[chan struct{}]
 		enteredCount atomic.Int64
 	)
-	target := durable.NewDefinition(durable.DefinitionConfig{
+	target := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "fan-target",
-		Steps: []durable.StepConfig{{
+		Steps: []engine.StepConfig{{
 			ID: "fan-target-hold/v1",
 			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				enteredCount.Add(1)
@@ -175,9 +176,9 @@ func BenchmarkAwaitFanout(b *testing.B) {
 	// directly: the driver already knows the ID, and a lookup scan here
 	// would charge unrelated store-scan costs — growing with the terminal
 	// population left behind by earlier iterations — to the wake metrics.
-	waiter := durable.NewDefinition(durable.DefinitionConfig{
+	waiter := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "fan-waiter",
-		Steps: []durable.StepConfig{{
+		Steps: []engine.StepConfig{{
 			ID: "fan-waiter-wait/v1",
 			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				if _, ok := inv.AwaitedRunID(); ok {
@@ -191,9 +192,9 @@ func BenchmarkAwaitFanout(b *testing.B) {
 	})
 	// Every target holds a worker slot while blocked, and waiter attempts
 	// need workers besides — size the pool for the whole population.
-	v := newEnv(b, target, durable.WithConcurrency(pairs*2+16))
+	v := newEnv(b, target, engine.WithConcurrency(pairs*2+16))
 	targetPipe := v.pipe
-	waiterPipe, err := waiter.Bind(v.engine)
+	waiterPipe, err := waiter.Bind(v.eng)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -218,7 +219,7 @@ func BenchmarkAwaitFanout(b *testing.B) {
 			failed atomic.Bool
 			swg    sync.WaitGroup
 		)
-		targets := make([]durable.Run, pairs)
+		targets := make([]engine.Run, pairs)
 		for p := 0; p < pairs; p++ {
 			swg.Add(1)
 			go func(p int) {
@@ -249,7 +250,7 @@ func BenchmarkAwaitFanout(b *testing.B) {
 		}
 
 		// Waiters park 1:1 on the targets.
-		waiters := make([]durable.Run, pairs)
+		waiters := make([]engine.Run, pairs)
 		for p := 0; p < pairs; p++ {
 			swg.Add(1)
 			go func(p int) {
@@ -278,7 +279,7 @@ func BenchmarkAwaitFanout(b *testing.B) {
 		)
 		for _, run := range waiters {
 			wg.Add(1)
-			go func(run durable.Run) {
+			go func(run engine.Run) {
 				defer wg.Done()
 				if res, err := run.Wait(context.Background()); err != nil || !res.Succeeded() {
 					b.Errorf("waiter Wait = %+v, %v", res, err)
@@ -326,7 +327,7 @@ func BenchmarkAwaitFanout(b *testing.B) {
 // waitAllAwaiting polls until every run is parked in RunStateAwaiting.
 // It returns an error instead of failing the benchmark itself: callers
 // have live goroutines holding b and must release and join them first.
-func waitAllAwaiting(runs []durable.Run) error {
+func waitAllAwaiting(runs []engine.Run) error {
 	deadline := time.Now().Add(30 * time.Second)
 	for _, r := range runs {
 		for {
@@ -334,7 +335,7 @@ func waitAllAwaiting(runs []durable.Run) error {
 			if err != nil {
 				return err
 			}
-			if st.State == durable.RunStateAwaiting {
+			if st.State == engine.RunStateAwaiting {
 				break
 			}
 			if time.Now().After(deadline) {
@@ -355,7 +356,7 @@ func BenchmarkThrottleContention(b *testing.B) {
 	var specs [numSteps]stepSpec
 	specs[2].class = "gate"
 	def := machinePipeline("throttled", specs)
-	v := newEnv(b, def, durable.WithConcurrencyClass("gate", 4))
+	v := newEnv(b, def, engine.WithConcurrencyClass("gate", 4))
 	v.start(b)
 
 	b.ResetTimer()

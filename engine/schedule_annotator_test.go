@@ -1,4 +1,4 @@
-package durable_test
+package engine_test
 
 import (
 	"context"
@@ -9,6 +9,7 @@ import (
 
 	"github.com/dangra/durable"
 	"github.com/dangra/durable/durabletest"
+	"github.com/dangra/durable/engine"
 	"github.com/dangra/durable/observe"
 )
 
@@ -28,28 +29,28 @@ func TestScheduleAnnotator(t *testing.T) {
 		seen = ev.Annotations
 		mu.Unlock()
 	}}
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "annotated",
-		Steps: []durable.StepConfig{{
+		Steps: []engine.StepConfig{{
 			ID: "noop/v1",
 			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				return nil, nil
 			},
 		}},
 	})
-	e := durable.NewEngine(durabletest.NewMemStore(), fastRetry,
-		durable.WithLogger(discardTestLogger()), durable.WithObserver(obs),
-		durable.WithScheduleAnnotator(func(ctx context.Context) map[string]string {
+	e := engine.New(durabletest.NewMemStore(), fastRetry,
+		engine.WithLogger(discardTestLogger()), engine.WithObserver(obs),
+		engine.WithScheduleAnnotator(func(ctx context.Context) map[string]string {
 			tenant, _ := ctx.Value(tenantKey{}).(string)
 			if tenant == "" {
 				return nil // contributes nothing
 			}
 			return map[string]string{"tenant": tenant, "shared": "from-first"}
 		}),
-		durable.WithScheduleAnnotator(func(context.Context) map[string]string {
+		engine.WithScheduleAnnotator(func(context.Context) map[string]string {
 			return map[string]string{"second": "yes", "shared": "from-second"}
 		}),
-		durable.WithScheduleAnnotator(nil), // ignored
+		engine.WithScheduleAnnotator(nil), // ignored
 	)
 	pipe, err := def.Bind(e)
 	if err != nil {
@@ -62,7 +63,7 @@ func TestScheduleAnnotator(t *testing.T) {
 
 	ctx := context.WithValue(context.Background(), tenantKey{}, "acme")
 	run, _, err := pipe.Schedule(ctx, "res-1", nil,
-		durable.WithAnnotations(map[string]string{"shared": "explicit"}))
+		engine.WithAnnotations(map[string]string{"shared": "explicit"}))
 	if err != nil {
 		t.Fatalf("Schedule: %v", err)
 	}
@@ -103,18 +104,18 @@ func TestScheduleAnnotator(t *testing.T) {
 // TestScheduleAnnotatorInvalidUTF8 pins that annotator output passes
 // through the same validation as call-site annotations.
 func TestScheduleAnnotatorInvalidUTF8(t *testing.T) {
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "annotated-bad",
-		Steps: []durable.StepConfig{{
+		Steps: []engine.StepConfig{{
 			ID: "noop/v1",
 			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				return nil, nil
 			},
 		}},
 	})
-	e := durable.NewEngine(durabletest.NewMemStore(), fastRetry,
-		durable.WithLogger(discardTestLogger()),
-		durable.WithScheduleAnnotator(func(context.Context) map[string]string {
+	e := engine.New(durabletest.NewMemStore(), fastRetry,
+		engine.WithLogger(discardTestLogger()),
+		engine.WithScheduleAnnotator(func(context.Context) map[string]string {
 			return map[string]string{"bad": "\xff\xfe"}
 		}))
 	pipe, err := def.Bind(e)

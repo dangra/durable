@@ -1,6 +1,7 @@
-package durable
+package engine
 
 import (
+	"github.com/dangra/durable"
 	"strings"
 	"unicode/utf8"
 
@@ -27,7 +28,7 @@ var runIDEntropy = &ulid.LockedMonotonicReader{MonotonicReader: ulid.Monotonic(r
 // creation-ordered. This is an implementation convenience for debugging,
 // key layout, and tooling — RunIDs remain opaque strings, no API compares
 // them, and CreatedAt stays authoritative for ordering.
-func newRunID(now time.Time) RunID {
+func newRunID(now time.Time) durable.RunID {
 	if now.Before(time.Unix(0, 0)) {
 		now = time.Unix(0, 0)
 	}
@@ -35,7 +36,7 @@ func newRunID(now time.Time) RunID {
 	if err != nil {
 		panic(fmt.Sprintf("durable: generating run id: %v", err))
 	}
-	return RunID(id.String())
+	return durable.RunID(id.String())
 }
 
 // invalidID reports whether an identifier violates the storage

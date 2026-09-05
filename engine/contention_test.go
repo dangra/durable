@@ -1,6 +1,6 @@
 // Contention: duplicate scheduling, exclusion groups, supersede
 // reconciliation, and concurrency classes.
-package durable_test
+package engine_test
 
 import (
 	"context"
@@ -13,15 +13,16 @@ import (
 
 	"github.com/dangra/durable"
 	"github.com/dangra/durable/durabletest"
+	"github.com/dangra/durable/engine"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
 func TestDuplicateScheduling(t *testing.T) {
 	release := make(chan struct{})
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "dedup",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			stateless("wait/v1", func(ctx context.Context, inv durable.Invocation) error {
 				select {
 				case <-release:
@@ -49,7 +50,7 @@ func TestDuplicateScheduling(t *testing.T) {
 	}
 
 	_, created, err = p.Schedule(context.Background(), "res-1", str("different"))
-	var conflict *durable.ScheduleConflictError
+	var conflict *engine.ScheduleConflictError
 	if !errors.As(err, &conflict) || created {
 		t.Fatalf("conflicting Schedule = created=%v err=%v, want ScheduleConflictError", created, err)
 	}
@@ -80,11 +81,11 @@ func TestDuplicateScheduling(t *testing.T) {
 
 func TestExclusionGroupSemantics(t *testing.T) {
 	release := make(chan struct{})
-	blocking := func(id durable.PipelineID, group string) *durable.Definition {
-		return durable.NewDefinition(durable.DefinitionConfig{
+	blocking := func(id durable.PipelineID, group string) *engine.Definition {
+		return engine.NewDefinition(engine.DefinitionConfig{
 			ID:             id,
 			ExclusionGroup: group,
-			Steps: []durable.StepConfig{
+			Steps: []engine.StepConfig{
 				stateless("s-"+durable.StepID(id)+"/v1", func(ctx context.Context, inv durable.Invocation) error {
 					select {
 					case <-release:
@@ -117,7 +118,7 @@ func TestExclusionGroupSemantics(t *testing.T) {
 
 	// Group sibling: always a conflict, even with equivalent input.
 	_, created, err = b.Schedule(context.Background(), "res", str("in"))
-	var conflict *durable.ScheduleConflictError
+	var conflict *engine.ScheduleConflictError
 	if !errors.As(err, &conflict) || created {
 		t.Fatalf("b.Schedule = created=%v err=%v, want conflict", created, err)
 	}
@@ -141,9 +142,9 @@ func TestExclusionGroupSemantics(t *testing.T) {
 
 func TestActiveRun(t *testing.T) {
 	release := make(chan struct{})
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "observed",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			stateless("s/v1", func(ctx context.Context, inv durable.Invocation) error {
 				select {
 				case <-release:
@@ -185,9 +186,9 @@ func TestSupersedeReconcile(t *testing.T) {
 	var unwound []string
 	started := make(chan struct{})
 	var startedOnce sync.Once
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "versioned",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			{
 				ID:     "apply/v1",
 				Unwind: true,
@@ -227,7 +228,7 @@ func TestSupersedeReconcile(t *testing.T) {
 
 	// The reconcile loop delivers newer intent.
 	_, _, err = p.Schedule(context.Background(), "res", str("v2"))
-	var conflict *durable.ScheduleConflictError
+	var conflict *engine.ScheduleConflictError
 	if !errors.As(err, &conflict) {
 		t.Fatalf("Schedule v2 = %v, want conflict", err)
 	}
@@ -277,10 +278,10 @@ func TestConcurrencyClassLimitsExecution(t *testing.T) {
 		peak       atomic.Int64
 	)
 	release := make(chan struct{})
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID:               "throttled-pipe",
 		ConcurrencyClass: "snapshots",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			stateless("s/v1", func(ctx context.Context, inv durable.Invocation) error {
 				n := concurrent.Add(1)
 				defer concurrent.Add(-1)
@@ -299,8 +300,8 @@ func TestConcurrencyClassLimitsExecution(t *testing.T) {
 			}),
 		},
 	})
-	e := durable.NewEngine(durabletest.NewMemStore(), fastRetry,
-		durable.WithConcurrencyClass("snapshots", 1))
+	e := engine.New(durabletest.NewMemStore(), fastRetry,
+		engine.WithConcurrencyClass("snapshots", 1))
 	p, err := def.Bind(e)
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
@@ -325,14 +326,14 @@ func TestConcurrencyClassLimitsExecution(t *testing.T) {
 		s1, _ := run1.Status(context.Background())
 		s2, _ := run2.Status(context.Background())
 		throttled, running := 0, 0
-		for _, st := range []durable.Status{s1, s2} {
+		for _, st := range []engine.Status{s1, s2} {
 			switch st.State {
-			case durable.RunStateThrottled:
+			case engine.RunStateThrottled:
 				if st.ThrottledClass != "snapshots" {
 					t.Fatalf("ThrottledClass = %q", st.ThrottledClass)
 				}
 				throttled++
-			case durable.RunStateRunning:
+			case engine.RunStateRunning:
 				running++
 			}
 		}
@@ -347,7 +348,7 @@ func TestConcurrencyClassLimitsExecution(t *testing.T) {
 
 	// Releasing lets both complete, never exceeding the capacity.
 	close(release)
-	for _, r := range []durable.Run{run1, run2} {
+	for _, r := range []engine.Run{run1, run2} {
 		if res, err := r.Wait(context.Background()); err != nil || !res.Succeeded() {
 			t.Fatalf("Wait = %+v, %v", res, err)
 		}
@@ -364,10 +365,10 @@ func TestUnconfiguredClassIsUnlimited(t *testing.T) {
 		peak       atomic.Int64
 	)
 	gate := make(chan struct{})
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID:               "unlimited-pipe",
 		ConcurrencyClass: "never-configured",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			stateless("s/v1", func(ctx context.Context, inv durable.Invocation) error {
 				n := concurrent.Add(1)
 				defer concurrent.Add(-1)
@@ -388,7 +389,7 @@ func TestUnconfiguredClassIsUnlimited(t *testing.T) {
 	})
 	_, pipes := startEngine(t, durabletest.NewMemStore(), def)
 
-	var runs []durable.Run
+	var runs []engine.Run
 	for i := range parallel {
 		r, _, err := pipes[0].Schedule(context.Background(), durable.ResourceID(fmt.Sprintf("r%d", i)), nil)
 		if err != nil {
@@ -416,10 +417,10 @@ func TestCancelBypassesThrottle(t *testing.T) {
 	defer close(release)
 	holderEntered := make(chan struct{})
 	var enteredOnce sync.Once
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID:               "throttle-cancel",
 		ConcurrencyClass: "narrow",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			stateless("s/v1", func(ctx context.Context, inv durable.Invocation) error {
 				if inv.CancelRequested() {
 					return nil
@@ -436,8 +437,8 @@ func TestCancelBypassesThrottle(t *testing.T) {
 			}),
 		},
 	})
-	e := durable.NewEngine(durabletest.NewMemStore(), fastRetry,
-		durable.WithConcurrencyClass("narrow", 1))
+	e := engine.New(durabletest.NewMemStore(), fastRetry,
+		engine.WithConcurrencyClass("narrow", 1))
 	p, _ := def.Bind(e)
 	if err := e.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -458,7 +459,7 @@ func TestCancelBypassesThrottle(t *testing.T) {
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		st, _ := parked.Status(context.Background())
-		if st.State == durable.RunStateThrottled {
+		if st.State == engine.RunStateThrottled {
 			break
 		}
 		if time.Now().After(deadline) {

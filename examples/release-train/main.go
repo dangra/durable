@@ -36,17 +36,17 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/dangra/durable"
 	"github.com/dangra/durable/bboltstore"
+	"github.com/dangra/durable/engine"
 	"github.com/dangra/durable/examples/release-train/releasepb"
 )
 
 // story runs the whole demo against dir and returns the world plus the
 // train's and the api deploy's terminal results.
-func story(ctx context.Context, dir string) (*world, durable.Result, releasepb.DeployServiceResult, error) {
+func story(ctx context.Context, dir string) (*world, engine.Result, releasepb.DeployServiceResult, error) {
 	w := newWorld()
-	fail := func(err error) (*world, durable.Result, releasepb.DeployServiceResult, error) {
-		return nil, durable.Result{}, releasepb.DeployServiceResult{}, err
+	fail := func(err error) (*world, engine.Result, releasepb.DeployServiceResult, error) {
+		return nil, engine.Result{}, releasepb.DeployServiceResult{}, err
 	}
 
 	store, err := bboltstore.Open(filepath.Join(dir, "release.db"))

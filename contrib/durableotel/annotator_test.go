@@ -14,6 +14,7 @@ import (
 	"github.com/dangra/durable"
 	"github.com/dangra/durable/contrib/durableotel"
 	"github.com/dangra/durable/durabletest"
+	"github.com/dangra/durable/engine"
 )
 
 // TestAnnotatorEngineWide is the declare-once DX story: with Annotator
@@ -29,9 +30,9 @@ func TestAnnotatorEngineWide(t *testing.T) {
 		mu   sync.Mutex
 		seen = map[string]string{}
 	)
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "declared-once",
-		Steps: []durable.StepConfig{{
+		Steps: []engine.StepConfig{{
 			ID: "probe/v1",
 			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				mu.Lock()
@@ -43,18 +44,18 @@ func TestAnnotatorEngineWide(t *testing.T) {
 			},
 		}},
 	})
-	engine := durable.NewEngine(durabletest.NewMemStore(), fastRetry, quietLogger(),
-		durable.WithMiddleware(durableotel.Middleware(
+	eng := engine.New(durabletest.NewMemStore(), fastRetry, quietLogger(),
+		engine.WithMiddleware(durableotel.Middleware(
 			durableotel.WithTracerProvider(tp), durableotel.WithBaggage())),
-		durable.WithScheduleAnnotator(durableotel.Annotator(durableotel.WithBaggage())))
-	pipe, err := def.Bind(engine)
+		engine.WithScheduleAnnotator(durableotel.Annotator(durableotel.WithBaggage())))
+	pipe, err := def.Bind(eng)
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
 	}
-	if err := engine.Start(t.Context()); err != nil {
+	if err := eng.Start(t.Context()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	defer engine.Stop(t.Context())
+	defer eng.Stop(t.Context())
 
 	// The subsystem's ctx: a request span plus upstream baggage — and a
 	// bare Schedule with nothing to remember.

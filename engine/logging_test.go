@@ -1,4 +1,4 @@
-package durable_test
+package engine_test
 
 import (
 	"bytes"
@@ -14,6 +14,7 @@ import (
 
 	"github.com/dangra/durable"
 	"github.com/dangra/durable/durabletest"
+	"github.com/dangra/durable/engine"
 )
 
 // lockedBuffer serializes writes from concurrent engine goroutines.
@@ -34,12 +35,12 @@ func (l *lockedBuffer) String() string {
 	return l.b.String()
 }
 
-func startLoggingEngine(t *testing.T, def *durable.Definition) (*lockedBuffer, *durable.Pipeline) {
+func startLoggingEngine(t *testing.T, def *engine.Definition) (*lockedBuffer, *engine.Pipeline) {
 	t.Helper()
 	buf := &lockedBuffer{}
 	logger := slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	e := durable.NewEngine(durabletest.NewMemStore(),
-		fastRetry, durable.WithRecoveryBackoff(0), durable.WithLogger(logger))
+	e := engine.New(durabletest.NewMemStore(),
+		fastRetry, engine.WithRecoveryBackoff(0), engine.WithLogger(logger))
 	pipe, err := def.Bind(e)
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
@@ -90,9 +91,9 @@ func mustLog(t *testing.T, buf *lockedBuffer, wants ...string) {
 // emits each lifecycle event at its documented level with the canonical
 // keys, and that Invocation.Logger pre-attaches the same keys.
 func TestLoggingLifecycle(t *testing.T) {
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "logging",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			{
 				ID:     "flaky/v1",
 				Unwind: true,
@@ -142,9 +143,9 @@ func TestLoggingLifecycle(t *testing.T) {
 // TestLoggingCancel asserts the cancellation request and its acceptance
 // are logged, including the cause.
 func TestLoggingCancel(t *testing.T) {
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "logging-cancel",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			stateless("never-runs/v1", func(ctx context.Context, inv durable.Invocation) error {
 				return nil
 			}),
@@ -152,7 +153,7 @@ func TestLoggingCancel(t *testing.T) {
 	})
 	buf, pipe := startLoggingEngine(t, def)
 
-	run, _, err := pipe.Schedule(context.Background(), "res-1", nil, durable.StartAfter(time.Hour))
+	run, _, err := pipe.Schedule(context.Background(), "res-1", nil, engine.StartAfter(time.Hour))
 	if err != nil {
 		t.Fatalf("Schedule: %v", err)
 	}

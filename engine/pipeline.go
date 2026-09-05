@@ -1,8 +1,9 @@
-package durable
+package engine
 
 import (
 	"context"
 	"fmt"
+	"github.com/dangra/durable"
 	"github.com/dangra/durable/observe"
 	"github.com/dangra/durable/storedriver"
 	"time"
@@ -69,7 +70,7 @@ type Pipeline struct {
 }
 
 // ID returns the PipelineID.
-func (p *Pipeline) ID() PipelineID { return p.def.ID() }
+func (p *Pipeline) ID() durable.PipelineID { return p.def.ID() }
 
 // Schedule creates a Run for (pipeline, resource) or returns the active
 // one.
@@ -83,10 +84,10 @@ func (p *Pipeline) ID() PipelineID { return p.def.ID() }
 // pipeline it must be nil (generated Schedule omits the argument). ctx
 // governs only acceptance of the scheduling request: once accepted, Run
 // execution belongs to the Engine.
-func (p *Pipeline) Schedule(ctx context.Context, resource ResourceID, input proto.Message, opts ...ScheduleOption) (Run, bool, error) {
+func (p *Pipeline) Schedule(ctx context.Context, resource durable.ResourceID, input proto.Message, opts ...ScheduleOption) (Run, bool, error) {
 	e := p.engine
 	if !e.isStarted() {
-		return Run{}, false, ErrEngineNotStarted
+		return Run{}, false, ErrNotStarted
 	}
 	if invalidID(string(resource)) {
 		return Run{}, false, fmt.Errorf("durable: resource id %q must be NUL-free valid UTF-8", resource)
@@ -131,7 +132,7 @@ func (p *Pipeline) Schedule(ctx context.Context, resource ResourceID, input prot
 		Group:       p.def.slotGroup(),
 		Annotations: so.annotations,
 		Input:       inputBytes,
-		Phase:       PhaseForward,
+		Phase:       durable.PhaseForward,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
@@ -180,7 +181,7 @@ func (p *Pipeline) Schedule(ctx context.Context, resource ResourceID, input prot
 
 // Run returns a handle to an existing Run, verifying it belongs to this
 // pipeline. A mismatch returns *PipelineMismatchError.
-func (p *Pipeline) Run(ctx context.Context, id RunID) (Run, error) {
+func (p *Pipeline) Run(ctx context.Context, id durable.RunID) (Run, error) {
 	rec, err := p.engine.store.GetRun(ctx, id)
 	if err != nil {
 		return Run{}, err
@@ -195,7 +196,7 @@ func (p *Pipeline) Run(ctx context.Context, id RunID) (Run, error) {
 // resource, if one exists. It is a read-only observation for wait/inspect
 // flows (callers that know the resource but cannot reproduce the exact
 // Input); claiming the slot atomically remains Schedule's job.
-func (p *Pipeline) ActiveRun(ctx context.Context, resource ResourceID) (Run, bool, error) {
+func (p *Pipeline) ActiveRun(ctx context.Context, resource durable.ResourceID) (Run, bool, error) {
 	recs, err := p.engine.store.ListRuns(ctx, p.def.ID(), resource)
 	if err != nil {
 		return Run{}, false, err
@@ -225,7 +226,7 @@ func (p *Pipeline) Active(ctx context.Context) ([]Run, error) {
 
 // Runs returns handles for all Runs of this pipeline against a resource,
 // oldest first.
-func (p *Pipeline) Runs(ctx context.Context, resource ResourceID) ([]Run, error) {
+func (p *Pipeline) Runs(ctx context.Context, resource durable.ResourceID) ([]Run, error) {
 	recs, err := p.engine.store.ListRuns(ctx, p.def.ID(), resource)
 	if err != nil {
 		return nil, err

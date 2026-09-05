@@ -1,8 +1,9 @@
-package durable
+package engine
 
 import (
 	"context"
 	"fmt"
+	"github.com/dangra/durable"
 
 	"google.golang.org/protobuf/proto"
 
@@ -12,7 +13,7 @@ import (
 // StepConfig describes one Step of a pipeline definition. It is the
 // type-erased adapter surface produced by generated code.
 type StepConfig struct {
-	ID      StepID
+	ID      durable.StepID
 	Unwind  bool
 	Retired bool
 	// HasState reports whether the Step declaration has protobuf fields,
@@ -26,17 +27,17 @@ type StepConfig struct {
 	// Run invokes the application forward handler. For a state-producing
 	// Step it returns the State to commit; for a stateless Step it returns
 	// (nil, err).
-	Run func(context.Context, Invocation) (proto.Message, error)
+	Run func(context.Context, durable.Invocation) (proto.Message, error)
 
 	// UnwindFunc invokes the application unwind handler. It is set exactly
 	// when Unwind is true.
-	UnwindFunc func(context.Context, Invocation, Failure) error
+	UnwindFunc func(context.Context, durable.Invocation, durable.Failure) error
 }
 
 // DefinitionConfig is the type-erased pipeline description produced by
 // generated code.
 type DefinitionConfig struct {
-	ID    PipelineID
+	ID    durable.PipelineID
 	Steps []StepConfig
 
 	// ExclusionGroup optionally names a mutual-exclusion group: pipelines
@@ -55,7 +56,7 @@ type DefinitionConfig struct {
 
 	// Reduce invokes the application Reducer; nil for an Output-less
 	// pipeline. It must be pure.
-	Reduce func(ReduceView) proto.Message
+	Reduce func(durable.ReduceView) proto.Message
 }
 
 // Definition is a registered-but-unbound pipeline definition: identity,
@@ -63,7 +64,7 @@ type DefinitionConfig struct {
 // active handlers, and Reducer.
 type Definition struct {
 	cfg   DefinitionConfig
-	steps map[StepID]*StepConfig
+	steps map[durable.StepID]*StepConfig
 	topo  ledger.Topology
 }
 
@@ -85,7 +86,7 @@ func NewDefinition(cfg DefinitionConfig) *Definition {
 	}
 	d := &Definition{
 		cfg:   cfg,
-		steps: make(map[StepID]*StepConfig, len(cfg.Steps)),
+		steps: make(map[durable.StepID]*StepConfig, len(cfg.Steps)),
 	}
 	for i := range cfg.Steps {
 		sc := &cfg.Steps[i]
@@ -118,7 +119,7 @@ func NewDefinition(cfg DefinitionConfig) *Definition {
 }
 
 // ID returns the PipelineID.
-func (d *Definition) ID() PipelineID { return d.cfg.ID }
+func (d *Definition) ID() durable.PipelineID { return d.cfg.ID }
 
 // Bind registers the definition with an Engine. It is allowed only before
 // Engine.Start.
@@ -129,7 +130,7 @@ func (d *Definition) Bind(e *Engine) (*Pipeline, error) {
 	return &Pipeline{engine: e, def: d}, nil
 }
 
-func (d *Definition) step(id StepID) *StepConfig { return d.steps[id] }
+func (d *Definition) step(id durable.StepID) *StepConfig { return d.steps[id] }
 
 // slotGroup returns the namespaced exclusion scope for this pipeline's
 // Runs. The namespaces keep an explicit group name from accidentally

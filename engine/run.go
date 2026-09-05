@@ -1,19 +1,20 @@
-package durable
+package engine
 
 import (
 	"context"
+	"github.com/dangra/durable"
 	"github.com/dangra/durable/storedriver"
 )
 
 // Run is an in-process handle to one execution. The handle itself is not
 // durable state; recover one after restart through Pipeline.Run.
 type Run struct {
-	id     RunID
+	id     durable.RunID
 	engine *Engine
 }
 
 // ID returns the RunID.
-func (r Run) ID() RunID { return r.id }
+func (r Run) ID() durable.RunID { return r.id }
 
 // Wait blocks until the Run is terminal and returns its Result.
 //
@@ -31,7 +32,7 @@ func (r Run) Wait(ctx context.Context) (Result, error) {
 	e := r.engine
 	base, ok := e.baseContext()
 	if !ok {
-		return Result{}, ErrEngineNotStarted
+		return Result{}, ErrNotStarted
 	}
 	for {
 		rec, err := e.store.GetRun(ctx, r.id)
@@ -93,7 +94,7 @@ func (r Run) Wait(ctx context.Context) (Result, error) {
 func (r Run) Cancel(ctx context.Context, cause string) error {
 	e := r.engine
 	if !e.isStarted() {
-		return ErrEngineNotStarted
+		return ErrNotStarted
 	}
 	accepted, err := e.store.RequestCancel(ctx, r.id, storedriver.CancelRequest{Cause: sanitizeText(cause), At: e.clock.Now()})
 	if err != nil {
@@ -146,7 +147,7 @@ func (r Run) Status(ctx context.Context) (Status, error) {
 			st.InvalidReason = ie.Reason
 		} else if rec.Awaiting != nil && rec.Cancel == nil {
 			st.State = RunStateAwaiting
-			st.AwaitingRunIDs = append([]RunID(nil), rec.Awaiting.Targets...)
+			st.AwaitingRunIDs = append([]durable.RunID(nil), rec.Awaiting.Targets...)
 			st.AwaitMode = rec.Awaiting.Mode
 			st.AwaitDeadline = rec.Awaiting.Deadline
 		} else if class, ok := e.pool.ParkedOn(r.id); ok {
@@ -222,7 +223,7 @@ func started(rec *storedriver.RunRecord) bool {
 func resultOf(rec *storedriver.RunRecord) Result {
 	res := Result{
 		Outcome:        *rec.Outcome,
-		UnwindFailures: append([]UnwindFailure(nil), rec.UnwindFailures...),
+		UnwindFailures: append([]durable.UnwindFailure(nil), rec.UnwindFailures...),
 	}
 	if rec.RootFailure != nil {
 		rf := *rec.RootFailure

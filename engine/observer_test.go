@@ -1,4 +1,4 @@
-package durable_test
+package engine_test
 
 import (
 	"context"
@@ -14,6 +14,7 @@ import (
 
 	"github.com/dangra/durable"
 	"github.com/dangra/durable/durabletest"
+	"github.com/dangra/durable/engine"
 	"github.com/dangra/durable/observe"
 )
 
@@ -54,14 +55,14 @@ func (l *eventLog) locked(fn func()) {
 	fn()
 }
 
-func startObservedEngine(t *testing.T, log *eventLog, defs []*durable.Definition, opts ...durable.Option) (*durable.Engine, []*durable.Pipeline) {
+func startObservedEngine(t *testing.T, log *eventLog, defs []*engine.Definition, opts ...engine.Option) (*engine.Engine, []*engine.Pipeline) {
 	t.Helper()
-	opts = append([]durable.Option{
-		fastRetry, durable.WithRecoveryBackoff(0), durable.WithObserver(log.observer()),
-		durable.WithLogger(discardTestLogger()),
+	opts = append([]engine.Option{
+		fastRetry, engine.WithRecoveryBackoff(0), engine.WithObserver(log.observer()),
+		engine.WithLogger(discardTestLogger()),
 	}, opts...)
-	e := durable.NewEngine(durabletest.NewMemStore(), opts...)
-	var pipes []*durable.Pipeline
+	e := engine.New(durabletest.NewMemStore(), opts...)
+	var pipes []*engine.Pipeline
 	for _, def := range defs {
 		pipe, err := def.Bind(e)
 		if err != nil {
@@ -83,9 +84,9 @@ func startObservedEngine(t *testing.T, log *eventLog, defs []*durable.Definition
 // TestObserverLifecycle drives retry, success, permanent failure, and
 // unwind, asserting the full event sequence with attribution.
 func TestObserverLifecycle(t *testing.T) {
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "observed",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			{
 				ID:     "flaky/v1",
 				Unwind: true,
@@ -105,7 +106,7 @@ func TestObserverLifecycle(t *testing.T) {
 		},
 	})
 	log := &eventLog{}
-	_, pipes := startObservedEngine(t, log, []*durable.Definition{def})
+	_, pipes := startObservedEngine(t, log, []*engine.Definition{def})
 	pipe := pipes[0]
 
 	run, _, err := pipe.Schedule(context.Background(), "res-1", nil)
@@ -193,17 +194,17 @@ func TestObserverLifecycle(t *testing.T) {
 // RunUnwinding with FailureKindCanceled and that a delayed run shows in
 // Stats as delayed.
 func TestObserverCancel(t *testing.T) {
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "observed-cancel",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			stateless("never/v1", func(ctx context.Context, inv durable.Invocation) error { return nil }),
 		},
 	})
 	log := &eventLog{}
-	e, pipes := startObservedEngine(t, log, []*durable.Definition{def})
+	e, pipes := startObservedEngine(t, log, []*engine.Definition{def})
 	pipe := pipes[0]
 
-	run, _, err := pipe.Schedule(context.Background(), "res-1", nil, durable.StartAfter(time.Hour))
+	run, _, err := pipe.Schedule(context.Background(), "res-1", nil, engine.StartAfter(time.Hour))
 	if err != nil {
 		t.Fatalf("Schedule: %v", err)
 	}
@@ -238,9 +239,9 @@ func TestObserverCancel(t *testing.T) {
 // wakes emit WaiterWoken with the awaited target.
 func TestObserverAwaitWake(t *testing.T) {
 	release := make(chan struct{})
-	target := durable.NewDefinition(durable.DefinitionConfig{
+	target := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "await-target",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			stateless("hold/v1", func(ctx context.Context, inv durable.Invocation) error {
 				select {
 				case <-release:
@@ -252,9 +253,9 @@ func TestObserverAwaitWake(t *testing.T) {
 		},
 	})
 	var targetID durable.RunID
-	waiter := durable.NewDefinition(durable.DefinitionConfig{
+	waiter := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "await-waiter",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			stateless("wait/v1", func(ctx context.Context, inv durable.Invocation) error {
 				if _, ok := inv.AwaitedRunID(); ok {
 					return nil
@@ -264,7 +265,7 @@ func TestObserverAwaitWake(t *testing.T) {
 		},
 	})
 	log := &eventLog{}
-	e, pipes := startObservedEngine(t, log, []*durable.Definition{target, waiter})
+	e, pipes := startObservedEngine(t, log, []*engine.Definition{target, waiter})
 	targetPipe, waiterPipe := pipes[0], pipes[1]
 
 	trun, _, err := targetPipe.Schedule(context.Background(), "res-t", nil)
@@ -312,9 +313,9 @@ func TestObserverAwaitWake(t *testing.T) {
 func TestObserverClassWaitAndStats(t *testing.T) {
 	entered := make(chan struct{}, 1)
 	release := make(chan struct{})
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "observed-class",
-		Steps: []durable.StepConfig{{
+		Steps: []engine.StepConfig{{
 			ID:               "gated/v1",
 			ConcurrencyClass: "boot",
 			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
@@ -329,7 +330,7 @@ func TestObserverClassWaitAndStats(t *testing.T) {
 		}},
 	})
 	log := &eventLog{}
-	e, pipes := startObservedEngine(t, log, []*durable.Definition{def}, durable.WithConcurrencyClass("boot", 1))
+	e, pipes := startObservedEngine(t, log, []*engine.Definition{def}, engine.WithConcurrencyClass("boot", 1))
 	pipe := pipes[0]
 
 	first, _, err := pipe.Schedule(context.Background(), "res-1", nil)
@@ -354,7 +355,7 @@ func TestObserverClassWaitAndStats(t *testing.T) {
 	}
 	close(release)
 	<-entered // second proceeds after first releases the token
-	for _, r := range []durable.Run{first, second} {
+	for _, r := range []engine.Run{first, second} {
 		if res, err := r.Wait(context.Background()); err != nil || res.Outcome != durable.OutcomeSuccess {
 			t.Fatalf("Wait = %+v, %v", res, err)
 		}
@@ -373,9 +374,9 @@ func TestObserverClassWaitAndStats(t *testing.T) {
 func TestObserverCancelThrottledRun(t *testing.T) {
 	entered := make(chan struct{}, 2)
 	release := make(chan struct{})
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "observed-cancel-throttle",
-		Steps: []durable.StepConfig{{
+		Steps: []engine.StepConfig{{
 			ID:               "gated/v1",
 			ConcurrencyClass: "boot",
 			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
@@ -390,7 +391,7 @@ func TestObserverCancelThrottledRun(t *testing.T) {
 		}},
 	})
 	log := &eventLog{}
-	e, pipes := startObservedEngine(t, log, []*durable.Definition{def}, durable.WithConcurrencyClass("boot", 1))
+	e, pipes := startObservedEngine(t, log, []*engine.Definition{def}, engine.WithConcurrencyClass("boot", 1))
 	pipe := pipes[0]
 
 	holder, _, err := pipe.Schedule(context.Background(), "res-hold", nil)
@@ -433,7 +434,7 @@ func TestObserverCancelThrottledRun(t *testing.T) {
 	}
 	close(release)
 	<-entered // the waiter got the token
-	for _, r := range []durable.Run{holder, waiter} {
+	for _, r := range []engine.Run{holder, waiter} {
 		if res, err := r.Wait(context.Background()); err != nil || res.Outcome != durable.OutcomeSuccess {
 			t.Fatalf("Wait = %+v, %v", res, err)
 		}
@@ -445,9 +446,9 @@ func TestObserverCancelThrottledRun(t *testing.T) {
 // when the abandoned target later completes.
 func TestObserverCancelAwaitingRun(t *testing.T) {
 	release := make(chan struct{})
-	target := durable.NewDefinition(durable.DefinitionConfig{
+	target := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "cancel-await-target",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			stateless("hold/v1", func(ctx context.Context, inv durable.Invocation) error {
 				select {
 				case <-release:
@@ -459,9 +460,9 @@ func TestObserverCancelAwaitingRun(t *testing.T) {
 		},
 	})
 	var targetID durable.RunID
-	waiter := durable.NewDefinition(durable.DefinitionConfig{
+	waiter := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "cancel-await-waiter",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			stateless("wait/v1", func(ctx context.Context, inv durable.Invocation) error {
 				if _, ok := inv.AwaitedRunID(); ok {
 					return nil
@@ -471,7 +472,7 @@ func TestObserverCancelAwaitingRun(t *testing.T) {
 		},
 	})
 	log := &eventLog{}
-	e, pipes := startObservedEngine(t, log, []*durable.Definition{target, waiter})
+	e, pipes := startObservedEngine(t, log, []*engine.Definition{target, waiter})
 	targetPipe, waiterPipe := pipes[0], pipes[1]
 
 	trun, _, err := targetPipe.Schedule(context.Background(), "res-t", nil)
@@ -521,9 +522,9 @@ func TestObserverCancelAwaitingRun(t *testing.T) {
 func TestObserverCancelHandsOnWake(t *testing.T) {
 	entered := make(chan durable.ResourceID, 3)
 	release := make(chan struct{})
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "observed-hand-on",
-		Steps: []durable.StepConfig{{
+		Steps: []engine.StepConfig{{
 			ID:               "gated/v1",
 			ConcurrencyClass: "boot",
 			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
@@ -538,7 +539,7 @@ func TestObserverCancelHandsOnWake(t *testing.T) {
 		}},
 	})
 	log := &eventLog{}
-	e, pipes := startObservedEngine(t, log, []*durable.Definition{def}, durable.WithConcurrencyClass("boot", 1))
+	e, pipes := startObservedEngine(t, log, []*engine.Definition{def}, engine.WithConcurrencyClass("boot", 1))
 	pipe := pipes[0]
 
 	holder, _, err := pipe.Schedule(context.Background(), "res-hold", nil)
@@ -578,7 +579,7 @@ func TestObserverCancelHandsOnWake(t *testing.T) {
 	}
 	close(release)
 	<-entered // behind got the token
-	for _, r := range []durable.Run{holder, behind} {
+	for _, r := range []engine.Run{holder, behind} {
 		if res, err := r.Wait(context.Background()); err != nil || res.Outcome != durable.OutcomeSuccess {
 			t.Fatalf("Wait = %+v, %v", res, err)
 		}
@@ -594,10 +595,10 @@ func TestObserverCancelHandsOnWake(t *testing.T) {
 // invalidStateDef builds a pipeline whose single HasState step returns
 // (nil, nil) once gate closes — the state violation that marks the Run
 // invalid for the current deployment.
-func invalidStateDef(id durable.PipelineID, gate chan struct{}) *durable.Definition {
-	return durable.NewDefinition(durable.DefinitionConfig{
+func invalidStateDef(id durable.PipelineID, gate chan struct{}) *engine.Definition {
+	return engine.NewDefinition(engine.DefinitionConfig{
 		ID: id,
-		Steps: []durable.StepConfig{{
+		Steps: []engine.StepConfig{{
 			ID:       "nil-state/v1",
 			HasState: true,
 			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
@@ -619,14 +620,14 @@ func invalidStateDef(id durable.PipelineID, gate chan struct{}) *durable.Definit
 func TestObserverInvalidIdempotent(t *testing.T) {
 	def := invalidStateDef("observed-invalid", nil)
 	log := &eventLog{}
-	_, pipes := startObservedEngine(t, log, []*durable.Definition{def})
+	_, pipes := startObservedEngine(t, log, []*engine.Definition{def})
 	pipe := pipes[0]
 
 	run, _, err := pipe.Schedule(context.Background(), "res-1", nil)
 	if err != nil {
 		t.Fatalf("Schedule: %v", err)
 	}
-	var ie *durable.InvalidRunError
+	var ie *engine.InvalidRunError
 	if _, err := run.Wait(context.Background()); !errors.As(err, &ie) {
 		t.Fatalf("Wait err = %v, want InvalidRunError", err)
 	}
@@ -650,9 +651,9 @@ func TestObserverInvalidTargetNoSpuriousWake(t *testing.T) {
 	gate := make(chan struct{})
 	target := invalidStateDef("invalid-target", gate)
 	var targetID durable.RunID
-	waiter := durable.NewDefinition(durable.DefinitionConfig{
+	waiter := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "invalid-target-waiter",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			stateless("wait/v1", func(ctx context.Context, inv durable.Invocation) error {
 				if _, ok := inv.AwaitedRunID(); ok {
 					return nil
@@ -662,7 +663,7 @@ func TestObserverInvalidTargetNoSpuriousWake(t *testing.T) {
 		},
 	})
 	log := &eventLog{}
-	e, pipes := startObservedEngine(t, log, []*durable.Definition{target, waiter})
+	e, pipes := startObservedEngine(t, log, []*engine.Definition{target, waiter})
 	targetPipe, waiterPipe := pipes[0], pipes[1]
 
 	trun, _, err := targetPipe.Schedule(context.Background(), "res-t", nil)
@@ -720,14 +721,14 @@ func TestObserverInvalidTargetNoSpuriousWake(t *testing.T) {
 func TestObserverReapedPerBatch(t *testing.T) {
 	const runs = 300 // > one 256-run reap batch
 	store := durabletest.NewMemStore()
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "observed-reap",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			stateless("noop/v1", func(ctx context.Context, inv durable.Invocation) error { return nil }),
 		},
 	})
 
-	seeder := durable.NewEngine(store, fastRetry, durable.WithRecoveryBackoff(0), durable.WithLogger(discardTestLogger()))
+	seeder := engine.New(store, fastRetry, engine.WithRecoveryBackoff(0), engine.WithLogger(discardTestLogger()))
 	pipe, err := def.Bind(seeder)
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
@@ -750,10 +751,10 @@ func TestObserverReapedPerBatch(t *testing.T) {
 
 	log := &eventLog{}
 	var reaps []int
-	reaper := durable.NewEngine(store,
-		durable.WithRecoveryBackoff(0), durable.WithLogger(discardTestLogger()),
-		durable.WithRetention(durable.RetentionPolicy{TerminalAfter: time.Nanosecond, Interval: time.Hour}),
-		durable.WithObserver(observe.Observer{RunsReaped: func(n int) {
+	reaper := engine.New(store,
+		engine.WithRecoveryBackoff(0), engine.WithLogger(discardTestLogger()),
+		engine.WithRetention(engine.RetentionPolicy{TerminalAfter: time.Nanosecond, Interval: time.Hour}),
+		engine.WithObserver(observe.Observer{RunsReaped: func(n int) {
 			log.mu.Lock()
 			reaps = append(reaps, n)
 			log.mu.Unlock()
@@ -794,9 +795,9 @@ func TestObserverReapedPerBatch(t *testing.T) {
 // TestObserverPanicIsolated asserts a panicking callback neither affects
 // the Run nor later observers.
 func TestObserverPanicIsolated(t *testing.T) {
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "observed-panic",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			stateless("ok/v1", func(ctx context.Context, inv durable.Invocation) error { return nil }),
 		},
 	})
@@ -804,9 +805,9 @@ func TestObserverPanicIsolated(t *testing.T) {
 	panicky := observe.Observer{
 		RunTerminal: func(observe.RunTerminalEvent) { panic("observer bug") },
 	}
-	e := durable.NewEngine(durabletest.NewMemStore(),
-		fastRetry, durable.WithRecoveryBackoff(0), durable.WithLogger(discardTestLogger()),
-		durable.WithObserver(panicky), durable.WithObserver(log.observer()))
+	e := engine.New(durabletest.NewMemStore(),
+		fastRetry, engine.WithRecoveryBackoff(0), engine.WithLogger(discardTestLogger()),
+		engine.WithObserver(panicky), engine.WithObserver(log.observer()))
 	pipe, err := def.Bind(e)
 	if err != nil {
 		t.Fatalf("Bind: %v", err)

@@ -14,6 +14,7 @@ import (
 	"github.com/dangra/durable"
 	"github.com/dangra/durable/contrib/durableotel"
 	"github.com/dangra/durable/durabletest"
+	"github.com/dangra/durable/engine"
 )
 
 // baggageCtx is a scheduling-side ctx carrying two baggage members, the
@@ -37,14 +38,14 @@ func baggageCtx(t *testing.T) context.Context {
 
 // runBaggageProbe schedules a one-step pipeline and returns what the
 // handler observed: its ctx baggage and the Run's annotations.
-func runBaggageProbe(t *testing.T, tp *sdktrace.TracerProvider, schedule []durable.ScheduleOption, mwOpts ...durableotel.Option) (seen map[string]string, annotations map[string]string) {
+func runBaggageProbe(t *testing.T, tp *sdktrace.TracerProvider, schedule []engine.ScheduleOption, mwOpts ...durableotel.Option) (seen map[string]string, annotations map[string]string) {
 	t.Helper()
 	var mu sync.Mutex
 	seen, annotations = map[string]string{}, map[string]string{}
 
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "baggage-probe",
-		Steps: []durable.StepConfig{{
+		Steps: []engine.StepConfig{{
 			ID: "probe/v1",
 			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				mu.Lock()
@@ -59,17 +60,17 @@ func runBaggageProbe(t *testing.T, tp *sdktrace.TracerProvider, schedule []durab
 			},
 		}},
 	})
-	engine := durable.NewEngine(durabletest.NewMemStore(), fastRetry, quietLogger(),
-		durable.WithMiddleware(durableotel.Middleware(
+	eng := engine.New(durabletest.NewMemStore(), fastRetry, quietLogger(),
+		engine.WithMiddleware(durableotel.Middleware(
 			append([]durableotel.Option{durableotel.WithTracerProvider(tp)}, mwOpts...)...)))
-	pipe, err := def.Bind(engine)
+	pipe, err := def.Bind(eng)
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
 	}
-	if err := engine.Start(t.Context()); err != nil {
+	if err := eng.Start(t.Context()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	defer engine.Stop(t.Context())
+	defer eng.Stop(t.Context())
 	run, _, err := pipe.Schedule(t.Context(), "res-1", nil, schedule...)
 	if err != nil {
 		t.Fatalf("Schedule: %v", err)
@@ -92,7 +93,7 @@ func TestBaggageRoundTrip(t *testing.T) {
 
 	ctx := baggageCtx(t)
 	seen, annotations := runBaggageProbe(t, tp,
-		[]durable.ScheduleOption{durableotel.WithTraceContext(ctx, durableotel.WithBaggage())},
+		[]engine.ScheduleOption{durableotel.WithTraceContext(ctx, durableotel.WithBaggage())},
 		durableotel.WithBaggage(), durableotel.WithSpanBaggage("tenant"))
 
 	if seen["tenant"] != "acme" || seen["machine_id"] != "m-42" {
@@ -123,7 +124,7 @@ func TestSpanBaggageAllMembers(t *testing.T) {
 
 	ctx := baggageCtx(t)
 	_, _ = runBaggageProbe(t, tp,
-		[]durable.ScheduleOption{durableotel.WithTraceContext(ctx, durableotel.WithBaggage())},
+		[]engine.ScheduleOption{durableotel.WithTraceContext(ctx, durableotel.WithBaggage())},
 		durableotel.WithBaggage(), durableotel.WithSpanBaggage())
 
 	spans := recorder.Ended()
@@ -145,7 +146,7 @@ func TestBaggageIsOptIn(t *testing.T) {
 
 	ctx := baggageCtx(t)
 	seen, annotations := runBaggageProbe(t, tp,
-		[]durable.ScheduleOption{durableotel.WithTraceContext(ctx)})
+		[]engine.ScheduleOption{durableotel.WithTraceContext(ctx)})
 
 	if len(seen) != 0 {
 		t.Fatalf("handler baggage = %v, want none without WithBaggage", seen)

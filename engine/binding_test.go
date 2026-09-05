@@ -1,6 +1,6 @@
 // Definition binding: step ownership across pipelines and the Start
 // freeze.
-package durable_test
+package engine_test
 
 import (
 	"context"
@@ -11,14 +11,15 @@ import (
 
 	"github.com/dangra/durable"
 	"github.com/dangra/durable/durabletest"
+	"github.com/dangra/durable/engine"
 )
 
 func TestStepOwnershipIsExclusive(t *testing.T) {
-	e := durable.NewEngine(durabletest.NewMemStore())
-	mk := func(pipeline durable.PipelineID) *durable.Definition {
-		return durable.NewDefinition(durable.DefinitionConfig{
+	e := engine.New(durabletest.NewMemStore())
+	mk := func(pipeline durable.PipelineID) *engine.Definition {
+		return engine.NewDefinition(engine.DefinitionConfig{
 			ID: pipeline,
-			Steps: []durable.StepConfig{
+			Steps: []engine.StepConfig{
 				stateless("shared/v1", func(context.Context, durable.Invocation) error { return nil }),
 			},
 		})
@@ -38,17 +39,17 @@ func TestStepOwnershipIsExclusive(t *testing.T) {
 // covers the exact interleaving of a rejected concurrent registration
 // attempt against unlocked pipeline lookups.
 func TestBindAfterStartRejected(t *testing.T) {
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "frozen",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			stateless("step/v1", func(ctx context.Context, inv durable.Invocation) error { return nil }),
 		},
 	})
 	e, pipes := startEngine(t, durabletest.NewMemStore(), def)
 
-	latecomer := durable.NewDefinition(durable.DefinitionConfig{
+	latecomer := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "latecomer",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			stateless("late/v1", func(ctx context.Context, inv durable.Invocation) error { return nil }),
 		},
 	})
@@ -72,7 +73,7 @@ func TestBindAfterStartRejected(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if _, err := latecomer.Bind(e); !errors.Is(err, durable.ErrEngineStarted) {
+			if _, err := latecomer.Bind(e); !errors.Is(err, engine.ErrStarted) {
 				t.Errorf("Bind after Start = %v, want ErrEngineStarted; the pipelines freeze is broken", err)
 			}
 		}()

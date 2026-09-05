@@ -564,7 +564,7 @@ Accidentally swapping two unrelated Step handlers fails to compile.
 ```go
 provision, err := machines.NewProvisionMachine(
     ...,
-).Bind(engine)
+).Bind(eng)
 ```
 
 returns:
@@ -617,7 +617,7 @@ Output:
 
 ```go
 type ProvisionMachineRun struct {
-    // wraps durable.Run
+    // wraps engine.Run
 }
 ```
 
@@ -628,7 +628,7 @@ func (r ProvisionMachineRun) ID() durable.RunID
 
 func (r ProvisionMachineRun) Status(
     context.Context,
-) (durable.Status, error)
+) (engine.Status, error)
 
 func (r ProvisionMachineRun) Wait(
     context.Context,
@@ -641,7 +641,7 @@ func (r ProvisionMachineRun) Wait(
 
 ```go
 type ProvisionMachineResult struct {
-    durable.Result
+    engine.Result
 }
 
 func (r ProvisionMachineResult) Output() *ProvisionMachineOutput

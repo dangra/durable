@@ -10,25 +10,26 @@ import (
 	"time"
 
 	"github.com/dangra/durable"
+	"github.com/dangra/durable/engine"
 	"github.com/dangra/durable/examples/release-train/legacypb"
 	"github.com/dangra/durable/examples/release-train/releasepb"
 )
 
-func quiet() durable.Option { return durable.WithLogger(slog.New(slog.DiscardHandler)) }
+func quiet() engine.Option { return engine.WithLogger(slog.New(slog.DiscardHandler)) }
 
-func fast() durable.Option {
-	return durable.WithRetryPolicy(durable.RetryPolicy{
+func fast() engine.Option {
+	return engine.WithRetryPolicy(engine.RetryPolicy{
 		Initial: time.Millisecond, Max: 5 * time.Millisecond, Multiplier: 2})
 }
 
 // yesterdaysBuild binds the legacy deploy pipeline (no canary step) and
 // the release train, and returns the started engine plus the train
 // pipeline handle.
-func yesterdaysBuild(ctx context.Context, store storedriver.Store, w *world) (*durable.Engine, *releasepb.ReleaseTrainPipeline, error) {
-	engine := durable.NewEngine(store, quiet(), fast(), durable.WithRecoveryBackoff(0))
+func yesterdaysBuild(ctx context.Context, store storedriver.Store, w *world) (*engine.Engine, *releasepb.ReleaseTrainPipeline, error) {
+	eng := engine.New(store, quiet(), fast(), engine.WithRecoveryBackoff(0))
 	deploy, err := legacypb.NewDeployService(
 		&legacyProvisionEnv{w}, &legacyRunMigrations{w}, &legacyShiftTraffic{w}, reduceLegacyDeploy,
-	).Bind(engine)
+	).Bind(eng)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -50,20 +51,20 @@ func yesterdaysBuild(ctx context.Context, store storedriver.Store, w *world) (*d
 	train, err := releasepb.NewReleaseTrain(
 		releasepb.PlanReleaseFunc(s.plan), releasepb.ShipWebFunc(s.shipWeb), releasepb.ShipApiFunc(s.shipApi),
 		releasepb.AnnounceFunc(s.announce),
-	).Bind(engine)
+	).Bind(eng)
 	if err != nil {
 		return nil, nil, err
 	}
-	return engine, train, engine.Start(ctx)
+	return eng, train, eng.Start(ctx)
 }
 
 // todaysBuild binds the current deploy pipeline — same pipeline id,
 // canary-analysis step added — and the same release train.
-func todaysBuild(ctx context.Context, store storedriver.Store, w *world) (*durable.Engine, *releasepb.ReleaseTrainPipeline, *releasepb.DeployServicePipeline, error) {
-	engine := durable.NewEngine(store, quiet(), fast(), durable.WithRecoveryBackoff(0))
+func todaysBuild(ctx context.Context, store storedriver.Store, w *world) (*engine.Engine, *releasepb.ReleaseTrainPipeline, *releasepb.DeployServicePipeline, error) {
+	eng := engine.New(store, quiet(), fast(), engine.WithRecoveryBackoff(0))
 	deploy, err := releasepb.NewDeployService(
 		&provisionEnv{w}, &runMigrations{w}, &canaryAnalysis{w}, &shiftTraffic{w}, reduceDeploy,
-	).Bind(engine)
+	).Bind(eng)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -85,9 +86,9 @@ func todaysBuild(ctx context.Context, store storedriver.Store, w *world) (*durab
 	train, err := releasepb.NewReleaseTrain(
 		releasepb.PlanReleaseFunc(s.plan), releasepb.ShipWebFunc(s.shipWeb), releasepb.ShipApiFunc(s.shipApi),
 		releasepb.AnnounceFunc(s.announce),
-	).Bind(engine)
+	).Bind(eng)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	return engine, train, deploy, engine.Start(ctx)
+	return eng, train, deploy, eng.Start(ctx)
 }

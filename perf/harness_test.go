@@ -34,6 +34,7 @@ import (
 
 	"github.com/dangra/durable"
 	"github.com/dangra/durable/bboltstore"
+	"github.com/dangra/durable/engine"
 	"github.com/dangra/durable/observe"
 )
 
@@ -60,8 +61,8 @@ type env struct {
 	store  *bboltstore.Store
 	writes *atomic.Int64
 	reads  *atomic.Int64
-	engine *durable.Engine
-	pipe   *durable.Pipeline
+	eng    *engine.Engine
+	pipe   *engine.Pipeline
 }
 
 // countingObserver counts logical write calls through the StoreOp
@@ -96,23 +97,23 @@ func countingObserver(writes, reads *atomic.Int64) observe.Observer {
 
 // newEnv builds a store and engine with the given definition bound, not
 // yet started.
-func newEnv(b *testing.B, def *durable.Definition, opts ...durable.Option) *env {
+func newEnv(b *testing.B, def *engine.Definition, opts ...engine.Option) *env {
 	b.Helper()
 	store, err := bboltstore.Open(filepath.Join(b.TempDir(), "perf.db"))
 	if err != nil {
 		b.Fatal(err)
 	}
 	writes, reads := new(atomic.Int64), new(atomic.Int64)
-	opts = append([]durable.Option{
-		durable.WithConcurrency(32),
-		durable.WithRetryPolicy(durable.RetryPolicy{
+	opts = append([]engine.Option{
+		engine.WithConcurrency(32),
+		engine.WithRetryPolicy(engine.RetryPolicy{
 			Initial: 500 * time.Microsecond, Max: 2 * time.Millisecond, Multiplier: 2,
 		}),
-		durable.WithRecoveryBackoff(0),
-		durable.WithLogger(discardLogger()),
-		durable.WithObserver(countingObserver(writes, reads)),
+		engine.WithRecoveryBackoff(0),
+		engine.WithLogger(discardLogger()),
+		engine.WithObserver(countingObserver(writes, reads)),
 	}, opts...)
-	e := durable.NewEngine(store, opts...)
+	e := engine.New(store, opts...)
 	pipe, err := def.Bind(e)
 	if err != nil {
 		b.Fatal(err)
@@ -123,12 +124,12 @@ func newEnv(b *testing.B, def *durable.Definition, opts ...durable.Option) *env 
 		_ = e.Stop(ctx)
 		_ = store.Close()
 	})
-	return &env{store: store, writes: writes, reads: reads, engine: e, pipe: pipe}
+	return &env{store: store, writes: writes, reads: reads, eng: e, pipe: pipe}
 }
 
 func (v *env) start(b *testing.B) {
 	b.Helper()
-	if err := v.engine.Start(context.Background()); err != nil {
+	if err := v.eng.Start(context.Background()); err != nil {
 		b.Fatal(err)
 	}
 }
@@ -143,12 +144,12 @@ type stepSpec struct {
 	class     string // concurrency class, if any
 }
 
-func machinePipeline(id durable.PipelineID, specs [numSteps]stepSpec) *durable.Definition {
+func machinePipeline(id durable.PipelineID, specs [numSteps]stepSpec) *engine.Definition {
 	state := wrapperspb.Bytes(make([]byte, stateSize))
-	var steps []durable.StepConfig
+	var steps []engine.StepConfig
 	for i, spec := range specs {
 		spec := spec
-		sc := durable.StepConfig{
+		sc := engine.StepConfig{
 			ID:               durable.StepID(fmt.Sprintf("%s-step-%d/v1", id, i)),
 			HasState:         true,
 			Unwind:           spec.unwind,
@@ -170,7 +171,7 @@ func machinePipeline(id durable.PipelineID, specs [numSteps]stepSpec) *durable.D
 		}
 		steps = append(steps, sc)
 	}
-	return durable.NewDefinition(durable.DefinitionConfig{
+	return engine.NewDefinition(engine.DefinitionConfig{
 		ID:       id,
 		Steps:    steps,
 		NewInput: func() proto.Message { return &wrapperspb.BytesValue{} },
@@ -179,7 +180,7 @@ func machinePipeline(id durable.PipelineID, specs [numSteps]stepSpec) *durable.D
 
 // runPopulation schedules n runs concurrently and waits for all of them,
 // returning per-run schedule-to-terminal latencies.
-func runPopulation(b *testing.B, pipe *durable.Pipeline, n int, prefix string) []time.Duration {
+func runPopulation(b *testing.B, pipe *engine.Pipeline, n int, prefix string) []time.Duration {
 	b.Helper()
 	var (
 		wg  sync.WaitGroup

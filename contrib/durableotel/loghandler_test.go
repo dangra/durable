@@ -18,6 +18,7 @@ import (
 	"github.com/dangra/durable"
 	"github.com/dangra/durable/contrib/durableotel"
 	"github.com/dangra/durable/durabletest"
+	"github.com/dangra/durable/engine"
 )
 
 // logLines decodes one JSON object per line from buf.
@@ -122,9 +123,9 @@ func TestLogCorrelationEndToEnd(t *testing.T) {
 	// after the run.
 	logger := slog.New(durableotel.NewLogHandler(slog.NewJSONHandler(&buf, nil)))
 
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "logged",
-		Steps: []durable.StepConfig{{
+		Steps: []engine.StepConfig{{
 			ID: "work/v1",
 			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				mu.Lock()
@@ -134,14 +135,14 @@ func TestLogCorrelationEndToEnd(t *testing.T) {
 			},
 		}},
 	})
-	engine := durable.NewEngine(durabletest.NewMemStore(), fastRetry,
-		durable.WithLogger(logger),
-		durable.WithMiddleware(durableotel.Middleware(durableotel.WithTracerProvider(tp))))
-	pipe, err := def.Bind(engine)
+	eng := engine.New(durabletest.NewMemStore(), fastRetry,
+		engine.WithLogger(logger),
+		engine.WithMiddleware(durableotel.Middleware(durableotel.WithTracerProvider(tp))))
+	pipe, err := def.Bind(eng)
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
 	}
-	if err := engine.Start(t.Context()); err != nil {
+	if err := eng.Start(t.Context()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	run, _, err := pipe.Schedule(t.Context(), "res-1", nil)
@@ -151,7 +152,7 @@ func TestLogCorrelationEndToEnd(t *testing.T) {
 	if _, err := run.Wait(t.Context()); err != nil {
 		t.Fatalf("Wait: %v", err)
 	}
-	engine.Stop(t.Context())
+	eng.Stop(t.Context())
 
 	var attempt trace.SpanContext
 	for _, sp := range recorder.Ended() {

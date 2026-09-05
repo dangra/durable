@@ -2,7 +2,7 @@
 // on a running, missing, or cycle-closing target, the memory that stops
 // a child respawn, cancellation cutting through, and Wait inside a
 // handler. The edge cases live in await_edge_test.go.
-package durable_test
+package engine_test
 
 import (
 	"context"
@@ -16,6 +16,7 @@ import (
 
 	"github.com/dangra/durable"
 	"github.com/dangra/durable/durabletest"
+	"github.com/dangra/durable/engine"
 )
 
 // A handler that calls Run.Wait with its attempt context must not block a
@@ -23,9 +24,9 @@ import (
 // already-terminal target still yields its Result.
 func TestWaitInsideHandlerFailsFast(t *testing.T) {
 	release := make(chan struct{})
-	child := durable.NewDefinition(durable.DefinitionConfig{
+	child := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "child",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			stateless("work/v1", func(ctx context.Context, inv durable.Invocation) error {
 				select {
 				case <-release:
@@ -39,13 +40,13 @@ func TestWaitInsideHandlerFailsFast(t *testing.T) {
 
 	var (
 		childID   durable.RunID
-		childPipe *durable.Pipeline
+		childPipe *engine.Pipeline
 		firstErr  = make(chan error, 1)
-		wokenRes  = make(chan durable.Result, 1)
+		wokenRes  = make(chan engine.Result, 1)
 	)
-	parent := durable.NewDefinition(durable.DefinitionConfig{
+	parent := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "parent",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			stateless("ship/v1", func(ctx context.Context, inv durable.Invocation) error {
 				if awaited, woken := inv.AwaitedRunID(); woken {
 					run, err := childPipe.Run(ctx, awaited)
@@ -81,7 +82,7 @@ func TestWaitInsideHandlerFailsFast(t *testing.T) {
 	}
 	select {
 	case err := <-firstErr:
-		if !errors.Is(err, durable.ErrRunInProgress) {
+		if !errors.Is(err, engine.ErrRunInProgress) {
 			t.Fatalf("Wait inside handler on running child = %v; want ErrRunInProgress", err)
 		}
 	case <-time.After(5 * time.Second):
@@ -129,9 +130,9 @@ func TestAwaitRunParksUntilTargetCompletes(t *testing.T) {
 	release := make(chan struct{})
 	var waiterAttempts atomic.Uint64
 
-	target := durable.NewDefinition(durable.DefinitionConfig{
+	target := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "await-target",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			stateless("t/v1", func(ctx context.Context, inv durable.Invocation) error {
 				select {
 				case <-release:
@@ -142,11 +143,11 @@ func TestAwaitRunParksUntilTargetCompletes(t *testing.T) {
 			}),
 		},
 	})
-	var waiterDef *durable.Definition
-	var targetPipe *durable.Pipeline
-	waiterDef = durable.NewDefinition(durable.DefinitionConfig{
+	var waiterDef *engine.Definition
+	var targetPipe *engine.Pipeline
+	waiterDef = engine.NewDefinition(engine.DefinitionConfig{
 		ID: "await-waiter",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			stateless("w/v1", func(ctx context.Context, inv durable.Invocation) error {
 				waiterAttempts.Store(inv.Attempt())
 				run, ok, err := targetPipe.ActiveRun(ctx, "res")
@@ -179,7 +180,7 @@ func TestAwaitRunParksUntilTargetCompletes(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Status: %v", err)
 		}
-		if st.State == durable.RunStateAwaiting {
+		if st.State == engine.RunStateAwaiting {
 			if len(st.AwaitingRunIDs) != 1 || st.AwaitingRunIDs[0] != tRun.ID() {
 				t.Fatalf("AwaitingRunIDs = %v, want [%s]", st.AwaitingRunIDs, tRun.ID())
 			}
@@ -205,23 +206,23 @@ func TestAwaitRunParksUntilTargetCompletes(t *testing.T) {
 // prevents respawning the child on re-execution.
 func TestAwaitedRunIDPreventsChildRespawn(t *testing.T) {
 	var sawAwaited atomic.Bool
-	child := durable.NewDefinition(durable.DefinitionConfig{
+	child := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "spawn-child",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			stateless("c/v1", func(ctx context.Context, inv durable.Invocation) error { return nil }),
 		},
 	})
-	var childPipe *durable.Pipeline
-	parent := durable.NewDefinition(durable.DefinitionConfig{
+	var childPipe *engine.Pipeline
+	parent := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "spawn-parent",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			stateless("p/v1", func(ctx context.Context, inv durable.Invocation) error {
 				if _, ok := inv.AwaitedRunID(); ok {
 					sawAwaited.Store(true)
 					return nil // child completed; do not respawn
 				}
 				run, _, err := childPipe.Schedule(ctx, "child-res", nil)
-				if conflict, ok := errors.AsType[*durable.ScheduleConflictError](err); ok {
+				if conflict, ok := errors.AsType[*engine.ScheduleConflictError](err); ok {
 					return durable.AwaitRun(conflict.RunID)
 				}
 				if err != nil {
@@ -255,9 +256,9 @@ func TestAwaitedRunIDPreventsChildRespawn(t *testing.T) {
 }
 
 func TestAwaitRunResolvesImmediatelyForMissingTarget(t *testing.T) {
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "await-missing",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			stateless("s/v1", func(ctx context.Context, inv durable.Invocation) error {
 				if id, ok := inv.AwaitedRunID(); ok {
 					if id != "no-such-run" {
@@ -278,11 +279,11 @@ func TestAwaitRunResolvesImmediatelyForMissingTarget(t *testing.T) {
 
 func TestAwaitCycleIsInvalid(t *testing.T) {
 	store := durabletest.NewMemStore()
-	var pipeA, pipeB *durable.Pipeline
-	mk := func(id durable.PipelineID, other **durable.Pipeline, otherRes durable.ResourceID) *durable.Definition {
-		return durable.NewDefinition(durable.DefinitionConfig{
+	var pipeA, pipeB *engine.Pipeline
+	mk := func(id durable.PipelineID, other **engine.Pipeline, otherRes durable.ResourceID) *engine.Definition {
+		return engine.NewDefinition(engine.DefinitionConfig{
 			ID: id,
-			Steps: []durable.StepConfig{
+			Steps: []engine.StepConfig{
 				stateless(durable.StepID(string(id)+"/v1"), func(ctx context.Context, inv durable.Invocation) error {
 					if _, ok := inv.AwaitedRunID(); ok {
 						return nil
@@ -317,12 +318,12 @@ func TestAwaitCycleIsInvalid(t *testing.T) {
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		var invalid int
-		for _, r := range []durable.Run{runA, runB} {
+		for _, r := range []engine.Run{runA, runB} {
 			st, err := r.Status(context.Background())
 			if err != nil {
 				t.Fatalf("Status: %v", err)
 			}
-			if st.State == durable.RunStateInvalid {
+			if st.State == engine.RunStateInvalid {
 				if !strings.Contains(st.InvalidReason, "await cycle") {
 					t.Fatalf("InvalidReason = %q", st.InvalidReason)
 				}
@@ -342,9 +343,9 @@ func TestAwaitCycleIsInvalid(t *testing.T) {
 func TestCancelCutsThroughAwait(t *testing.T) {
 	release := make(chan struct{})
 	defer close(release)
-	target := durable.NewDefinition(durable.DefinitionConfig{
+	target := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "cancel-await-target",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			stateless("t/v1", func(ctx context.Context, inv durable.Invocation) error {
 				select {
 				case <-release:
@@ -355,10 +356,10 @@ func TestCancelCutsThroughAwait(t *testing.T) {
 			}),
 		},
 	})
-	var targetPipe *durable.Pipeline
-	waiter := durable.NewDefinition(durable.DefinitionConfig{
+	var targetPipe *engine.Pipeline
+	waiter := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "cancel-await-waiter",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			stateless("w/v1", func(ctx context.Context, inv durable.Invocation) error {
 				if inv.CancelRequested() {
 					return nil
@@ -387,7 +388,7 @@ func TestCancelCutsThroughAwait(t *testing.T) {
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		st, _ := wRun.Status(context.Background())
-		if st.State == durable.RunStateAwaiting {
+		if st.State == engine.RunStateAwaiting {
 			break
 		}
 		if time.Now().After(deadline) {

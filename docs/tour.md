@@ -89,14 +89,14 @@ constructor, and a pipeline handle:
 
 ```go
 store, _ := bboltstore.Open("deploys.db")
-engine := durable.NewEngine(store)
+eng := engine.New(store)
 
 deploy, err := deploypb.NewDeployService(
     &provisionEnv{}, &runMigrations{}, &shiftTraffic{},
     reduceDeployService, // pure: folds step states into the Output
-).Bind(engine)
+).Bind(eng)
 // bind every pipeline, then:
-engine.Start(ctx)
+eng.Start(ctx)
 
 run, created, err := deploy.Schedule(ctx, "service-web", &deploypb.DeployServiceInput{
     Image: "registry.example.com/web:v42",
@@ -197,9 +197,9 @@ recovers every nonterminal run and continues it. There is no separate
 
 ```go
 // After restart: same store, same binds, and the run is still there.
-engine := durable.NewEngine(store)
-deploy, _ := deploypb.NewDeployService(...).Bind(engine)
-engine.Start(ctx)
+eng := engine.New(store)
+deploy, _ := deploypb.NewDeployService(...).Bind(eng)
+eng.Start(ctx)
 
 run, err := deploy.Run(ctx, runID) // recover a handle by RunID
 result, err := run.Wait(ctx)
@@ -288,8 +288,8 @@ committed state — the per-handler `CancelRequested` check can be
 replaced by one middleware:
 
 ```go
-engine := durable.NewEngine(store,
-    durable.WithMiddleware(durable.FailFastOnCancel()))
+eng := engine.New(store,
+    engine.WithMiddleware(durable.FailFastOnCancel()))
 ```
 
 A canceled Run's forward operations are then resolved by the
@@ -324,7 +324,7 @@ A release train deploys many services: a parent run schedules child
 runs and waits for them. Handlers cannot block on other runs: a
 blocked handler holds a worker slot and can deadlock the pool, so
 `run.Wait` called with the attempt context fails fast with
-`durable.ErrRunInProgress` when the target is still running (it still
+`engine.ErrRunInProgress` when the target is still running (it still
 returns the `Result` of an already-terminal run). Instead, a handler
 *parks*:
 
@@ -441,7 +441,7 @@ option (durable.v1.step) = { id: "shift-traffic/v1" concurrency_class: "lb" };
 ```
 
 ```go
-engine := durable.NewEngine(store, durable.WithConcurrencyClass("lb", 3))
+eng := engine.New(store, engine.WithConcurrencyClass("lb", 3))
 ```
 
 Tokens are execution-scoped: held only while a handler runs, never
@@ -456,7 +456,7 @@ immediately but attempts nothing until the hour:
 
 ```go
 run, _, err := deploy.Schedule(ctx, "service-web", input,
-    durable.StartAt(window))          // or durable.StartAfter(4 * time.Hour)
+    engine.StartAt(window))          // or engine.StartAfter(4 * time.Hour)
 ```
 
 The delay is durable — it survives restarts, like retry backoffs do.
@@ -464,8 +464,8 @@ Terminal runs accumulate by default (they are the audit trail); opt
 into reaping with a policy:
 
 ```go
-engine := durable.NewEngine(store,
-    durable.WithRetention(durable.RetentionPolicy{TerminalAfter: 30 * 24 * time.Hour}))
+eng := engine.New(store,
+    engine.WithRetention(engine.RetentionPolicy{TerminalAfter: 30 * 24 * time.Hour}))
 ```
 
 Runnable: [`ExampleStartAfter`](https://pkg.go.dev/github.com/dangra/durable#example-StartAfter).

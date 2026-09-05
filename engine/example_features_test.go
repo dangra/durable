@@ -1,4 +1,4 @@
-package durable_test
+package engine_test
 
 import (
 	"context"
@@ -10,6 +10,7 @@ import (
 
 	"github.com/dangra/durable"
 	"github.com/dangra/durable/durabletest"
+	"github.com/dangra/durable/engine"
 )
 
 // ExampleFail declares a permanent failure with attribution: a SaaS
@@ -18,9 +19,9 @@ import (
 // record that was already created. Kind and reason surface on the
 // Result for alert routing.
 func ExampleFail() {
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "onboard-tenant",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			{
 				ID:     "create-tenant/v1",
 				Unwind: true,
@@ -42,16 +43,16 @@ func ExampleFail() {
 		},
 	})
 
-	engine := durable.NewEngine(durabletest.NewMemStore())
-	pipeline, err := def.Bind(engine)
+	eng := engine.New(durabletest.NewMemStore())
+	pipeline, err := def.Bind(eng)
 	if err != nil {
 		panic(err)
 	}
 	ctx := context.Background()
-	if err := engine.Start(ctx); err != nil {
+	if err := eng.Start(ctx); err != nil {
 		panic(err)
 	}
-	defer engine.Stop(ctx)
+	defer eng.Stop(ctx)
 
 	run, _, err := pipeline.Schedule(ctx, "tenant-acme", nil)
 	if err != nil {
@@ -78,9 +79,9 @@ func ExampleFail() {
 // over and unwinds.
 func ExampleRun_Cancel() {
 	verifying := make(chan struct{})
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "deploy-service",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			{
 				ID:     "provision-env/v1",
 				Unwind: true,
@@ -108,17 +109,17 @@ func ExampleRun_Cancel() {
 		},
 	})
 
-	engine := durable.NewEngine(durabletest.NewMemStore(),
-		durable.WithRetryPolicy(durable.RetryPolicy{Initial: time.Millisecond, Max: time.Millisecond, Multiplier: 1}))
-	pipeline, err := def.Bind(engine)
+	eng := engine.New(durabletest.NewMemStore(),
+		engine.WithRetryPolicy(engine.RetryPolicy{Initial: time.Millisecond, Max: time.Millisecond, Multiplier: 1}))
+	pipeline, err := def.Bind(eng)
 	if err != nil {
 		panic(err)
 	}
 	ctx := context.Background()
-	if err := engine.Start(ctx); err != nil {
+	if err := eng.Start(ctx); err != nil {
 		panic(err)
 	}
-	defer engine.Stop(ctx)
+	defer eng.Stop(ctx)
 
 	run, _, err := pipeline.Schedule(ctx, "service-web", nil)
 	if err != nil {
@@ -145,11 +146,11 @@ func ExampleRun_Cancel() {
 // the park survives restarts. The woken attempt re-executes fresh,
 // distinguishing "woken after completion" through AwaitedRunID.
 func ExampleAwaitRun() {
-	engine := durable.NewEngine(durabletest.NewMemStore())
+	eng := engine.New(durabletest.NewMemStore())
 
-	deploy := durable.NewDefinition(durable.DefinitionConfig{
+	deploy := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "deploy-service",
-		Steps: []durable.StepConfig{{
+		Steps: []engine.StepConfig{{
 			ID: "rollout/v1",
 			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				fmt.Println("deploying", inv.ResourceID())
@@ -157,14 +158,14 @@ func ExampleAwaitRun() {
 			},
 		}},
 	})
-	deployPipe, err := deploy.Bind(engine)
+	deployPipe, err := deploy.Bind(eng)
 	if err != nil {
 		panic(err)
 	}
 
-	release := durable.NewDefinition(durable.DefinitionConfig{
+	release := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "release-train",
-		Steps: []durable.StepConfig{{
+		Steps: []engine.StepConfig{{
 			ID: "ship-services/v1",
 			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				if _, woken := inv.AwaitedRunID(); woken {
@@ -179,16 +180,16 @@ func ExampleAwaitRun() {
 			},
 		}},
 	})
-	releasePipe, err := release.Bind(engine)
+	releasePipe, err := release.Bind(eng)
 	if err != nil {
 		panic(err)
 	}
 
 	ctx := context.Background()
-	if err := engine.Start(ctx); err != nil {
+	if err := eng.Start(ctx); err != nil {
 		panic(err)
 	}
-	defer engine.Stop(ctx)
+	defer eng.Stop(ctx)
 
 	run, _, err := releasePipe.Schedule(ctx, "train-42", nil)
 	if err != nil {
@@ -211,9 +212,9 @@ func ExampleAwaitRun() {
 // entry point for at-least-once callers like message consumers.
 func ExamplePipeline_Schedule() {
 	release := make(chan struct{})
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "deploy-service",
-		Steps: []durable.StepConfig{{
+		Steps: []engine.StepConfig{{
 			ID: "rollout/v1",
 			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				<-release
@@ -222,16 +223,16 @@ func ExamplePipeline_Schedule() {
 		}},
 	})
 
-	engine := durable.NewEngine(durabletest.NewMemStore())
-	pipeline, err := def.Bind(engine)
+	eng := engine.New(durabletest.NewMemStore())
+	pipeline, err := def.Bind(eng)
 	if err != nil {
 		panic(err)
 	}
 	ctx := context.Background()
-	if err := engine.Start(ctx); err != nil {
+	if err := eng.Start(ctx); err != nil {
 		panic(err)
 	}
-	defer engine.Stop(ctx)
+	defer eng.Stop(ctx)
 
 	first, created, err := pipeline.Schedule(ctx, "service-web", nil)
 	if err != nil {
@@ -260,10 +261,10 @@ func ExamplePipeline_Schedule() {
 // or parks.
 func ExampleWithConcurrencyClass() {
 	webRunning, finishWeb := make(chan struct{}), make(chan struct{})
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID:               "deploy-service",
 		ConcurrencyClass: "cluster",
-		Steps: []durable.StepConfig{{
+		Steps: []engine.StepConfig{{
 			ID: "rollout/v1",
 			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				fmt.Println("start", inv.ResourceID())
@@ -277,17 +278,17 @@ func ExampleWithConcurrencyClass() {
 		}},
 	})
 
-	engine := durable.NewEngine(durabletest.NewMemStore(),
-		durable.WithConcurrencyClass("cluster", 1))
-	pipeline, err := def.Bind(engine)
+	eng := engine.New(durabletest.NewMemStore(),
+		engine.WithConcurrencyClass("cluster", 1))
+	pipeline, err := def.Bind(eng)
 	if err != nil {
 		panic(err)
 	}
 	ctx := context.Background()
-	if err := engine.Start(ctx); err != nil {
+	if err := eng.Start(ctx); err != nil {
 		panic(err)
 	}
-	defer engine.Stop(ctx)
+	defer eng.Stop(ctx)
 
 	web, _, err := pipeline.Schedule(ctx, "service-web", nil)
 	if err != nil {
@@ -316,9 +317,9 @@ func ExampleWithConcurrencyClass() {
 // renewal scheduled ahead of expiry. The Run occupies its resource slot
 // immediately and the delay survives restarts.
 func ExampleStartAfter() {
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "renew-certificate",
-		Steps: []durable.StepConfig{{
+		Steps: []engine.StepConfig{{
 			ID: "renew/v1",
 			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				return nil, nil
@@ -326,19 +327,19 @@ func ExampleStartAfter() {
 		}},
 	})
 
-	engine := durable.NewEngine(durabletest.NewMemStore())
-	pipeline, err := def.Bind(engine)
+	eng := engine.New(durabletest.NewMemStore())
+	pipeline, err := def.Bind(eng)
 	if err != nil {
 		panic(err)
 	}
 	ctx := context.Background()
-	if err := engine.Start(ctx); err != nil {
+	if err := eng.Start(ctx); err != nil {
 		panic(err)
 	}
-	defer engine.Stop(ctx)
+	defer eng.Stop(ctx)
 
 	run, _, err := pipeline.Schedule(ctx, "example.com", nil,
-		durable.StartAfter(time.Second))
+		engine.StartAfter(time.Second))
 	if err != nil {
 		panic(err)
 	}
@@ -363,10 +364,10 @@ func ExampleStartAfter() {
 // second waits on it.
 func ExampleEngine_Stats() {
 	webRunning, finishWeb := make(chan struct{}), make(chan struct{})
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID:               "deploy-service",
 		ConcurrencyClass: "cluster",
-		Steps: []durable.StepConfig{{
+		Steps: []engine.StepConfig{{
 			ID: "rollout/v1",
 			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				if inv.ResourceID() == "service-web" {
@@ -378,17 +379,17 @@ func ExampleEngine_Stats() {
 		}},
 	})
 
-	engine := durable.NewEngine(durabletest.NewMemStore(),
-		durable.WithConcurrencyClass("cluster", 1))
-	pipeline, err := def.Bind(engine)
+	eng := engine.New(durabletest.NewMemStore(),
+		engine.WithConcurrencyClass("cluster", 1))
+	pipeline, err := def.Bind(eng)
 	if err != nil {
 		panic(err)
 	}
 	ctx := context.Background()
-	if err := engine.Start(ctx); err != nil {
+	if err := eng.Start(ctx); err != nil {
 		panic(err)
 	}
-	defer engine.Stop(ctx)
+	defer eng.Stop(ctx)
 
 	web, _, err := pipeline.Schedule(ctx, "service-web", nil)
 	if err != nil {
@@ -400,10 +401,10 @@ func ExampleEngine_Stats() {
 		panic(err)
 	}
 	// Poll until the second deploy has parked on the class token.
-	stats := engine.Stats()
+	stats := eng.Stats()
 	for stats.ThrottledRuns == 0 {
 		time.Sleep(time.Millisecond)
-		stats = engine.Stats()
+		stats = eng.Stats()
 	}
 	cluster := stats.Classes["cluster"]
 	fmt.Printf("throttled=%d cluster: capacity=%d in_use=%d waiting=%d\n",

@@ -1,9 +1,10 @@
-package durable
+package engine
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/dangra/durable"
 	"github.com/dangra/durable/observe"
 	"github.com/dangra/durable/storedriver"
 	"log/slog"
@@ -191,7 +192,7 @@ type Engine struct {
 	recoveryBackoff time.Duration
 	retention       RetentionPolicy
 	drainTimeout    time.Duration
-	middleware      []Middleware
+	middleware      []durable.Middleware
 	observers       []observe.Observer
 	annotators      []ScheduleAnnotator
 
@@ -199,39 +200,39 @@ type Engine struct {
 
 	// pool gates operations on their step's concurrency class; it is
 	// internally locked, independent of mu.
-	pool *tokenpool.Pool[string, RunID]
+	pool *tokenpool.Pool[string, durable.RunID]
 
 	mu            sync.Mutex
 	started       bool
-	invalid       map[RunID]*InvalidRunError
-	attemptCancel map[RunID]context.CancelCauseFunc
+	invalid       map[durable.RunID]*InvalidRunError
+	attemptCancel map[durable.RunID]context.CancelCauseFunc
 	// preempted records, per Run, the cause of a cancellation-driven
 	// preemption of its in-flight attempt — the engine-side evidence that
 	// lets a returned Fail wrapping *PreemptedError be attributed as
 	// FailureKindCanceled truthfully. Consumed by the next resolution.
-	preempted map[RunID]string
+	preempted map[durable.RunID]string
 
 	// pipelines and stepOwner are written by register, under mu, and
 	// frozen by Start; a Put after that panics, and workers read them
 	// lock-free.
-	pipelines frozen.Map[PipelineID, *Definition]
-	stepOwner frozen.Map[StepID, PipelineID]
+	pipelines frozen.Map[durable.PipelineID, *Definition]
+	stepOwner frozen.Map[durable.StepID, durable.PipelineID]
 
 	// waiters broadcasts a Run's terminal/invalid notification to
 	// Run.Wait callers; it is internally locked, independent of mu.
-	waiters watchset.Set[RunID]
+	waiters watchset.Set[durable.RunID]
 
 	// joins holds the parks: each parked Run registered on its targets
 	// with the threshold its mode requires, and which targets this
 	// engine has seen done. Internally locked, independent of mu.
-	joins joinset.Set[RunID, RunID]
+	joins joinset.Set[durable.RunID, durable.RunID]
 	// awaitTimers holds, per parked Run with a deadline, the channel that
 	// stops its timer goroutine when the park resolves early. Under mu.
-	awaitTimers map[RunID]chan struct{}
+	awaitTimers map[durable.RunID]chan struct{}
 
 	// disp runs at most one worker per Run with bounded concurrency; it
 	// exists once the engine has started.
-	disp *dispatcher.Dispatcher[RunID]
+	disp *dispatcher.Dispatcher[durable.RunID]
 
 	baseCtx context.Context
 	cancel  context.CancelCauseFunc
@@ -244,26 +245,26 @@ type Engine struct {
 	wg          sync.WaitGroup
 }
 
-// NewEngine constructs an Engine in the configuring state. Definitions bind
+// New constructs an Engine in the configuring state. Definitions bind
 // and handlers register before Start; after Start, registration freezes and
 // scheduling is accepted.
-func NewEngine(store storedriver.Store, opts ...Option) *Engine {
+func New(store storedriver.Store, opts ...Option) *Engine {
 	e := &Engine{
 		store:         store,
 		clock:         wallClock{},
 		logger:        slog.Default(),
 		retry:         defaultRetryPolicy,
 		concurrency:   16,
-		invalid:       make(map[RunID]*InvalidRunError),
-		attemptCancel: make(map[RunID]context.CancelCauseFunc),
-		preempted:     make(map[RunID]string),
+		invalid:       make(map[durable.RunID]*InvalidRunError),
+		attemptCancel: make(map[durable.RunID]context.CancelCauseFunc),
+		preempted:     make(map[durable.RunID]string),
 		classCapacity: make(map[string]int),
-		awaitTimers:   make(map[RunID]chan struct{}),
+		awaitTimers:   make(map[durable.RunID]chan struct{}),
 	}
 	for _, o := range opts {
 		o(e)
 	}
-	e.pool = tokenpool.New[string, RunID](e.classCapacity)
+	e.pool = tokenpool.New[string, durable.RunID](e.classCapacity)
 	// A StoreOp subscription observes every storedriver.Store call, so the wrap must
 	// cover the engine's own store handle.
 	if e.hasStoreObserver() {
@@ -276,7 +277,7 @@ func (e *Engine) register(d *Definition) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.started {
-		return ErrEngineStarted
+		return ErrStarted
 	}
 	if _, dup := e.pipelines.Get(d.ID()); dup {
 		return fmt.Errorf("durable: pipeline %q bound twice", d.ID())
@@ -304,14 +305,14 @@ func (e *Engine) Start(ctx context.Context) error {
 	e.mu.Lock()
 	if e.started {
 		e.mu.Unlock()
-		return ErrEngineStarted
+		return ErrStarted
 	}
 	e.started = true
 	e.pipelines.Freeze()
 	e.stepOwner.Freeze()
 	e.baseCtx, e.cancel = context.WithCancelCause(context.Background())
 	e.dispCtx, e.drainCancel = context.WithCancel(e.baseCtx)
-	e.disp = dispatcher.New(dispatcher.Config[RunID]{
+	e.disp = dispatcher.New(dispatcher.Config[durable.RunID]{
 		Ctx:         e.dispCtx,
 		Concurrency: e.concurrency,
 		Clock:       e.clock,
@@ -343,7 +344,7 @@ func (e *Engine) Start(ctx context.Context) error {
 	}
 
 	e.mu.Lock()
-	e.pipelines.Range(func(_ PipelineID, d *Definition) bool {
+	e.pipelines.Range(func(_ durable.PipelineID, d *Definition) bool {
 		for _, sc := range d.steps {
 			if sc.ConcurrencyClass != "" {
 				if _, ok := e.classCapacity[sc.ConcurrencyClass]; !ok {
@@ -383,7 +384,7 @@ func (e *Engine) releaseClass(class string) {
 // clearClassWait removes a Run's concurrency-class park for paths that
 // resolve it without passing through acquireClass (cancellation,
 // invalidity), waking the next waiter if its departure exposed capacity.
-func (e *Engine) clearClassWait(id RunID) {
+func (e *Engine) clearClassWait(id durable.RunID) {
 	if kick, ok := e.pool.Clear(id); ok {
 		e.disp.Dispatch(kick, 0)
 	}
@@ -444,7 +445,7 @@ func (e *Engine) Stop(ctx context.Context) error {
 	e.mu.Lock()
 	if !e.started || e.cancel == nil {
 		e.mu.Unlock()
-		return ErrEngineNotStarted
+		return ErrNotStarted
 	}
 	cancel := e.cancel
 	drainCancel := e.drainCancel
@@ -467,7 +468,7 @@ func (e *Engine) Stop(ctx context.Context) error {
 		}
 	}
 
-	cancel(ErrEngineStopping)
+	cancel(durable.ErrEngineStopping)
 	select {
 	case <-done:
 		return nil
@@ -505,13 +506,13 @@ type attemptKey struct{}
 
 // inAttempt reports whether ctx is (derived from) a handler attempt context.
 func inAttempt(ctx context.Context) bool {
-	_, ok := ctx.Value(attemptKey{}).(RunID)
+	_, ok := ctx.Value(attemptKey{}).(durable.RunID)
 	return ok
 }
 
 // attemptContext derives the per-attempt handler context and registers its
 // cancel so a cancellation request can preempt the in-flight attempt.
-func (e *Engine) attemptContext(id RunID) (context.Context, func()) {
+func (e *Engine) attemptContext(id durable.RunID) (context.Context, func()) {
 	ctx, cancel := context.WithCancelCause(context.WithValue(e.baseCtx, attemptKey{}, id))
 	e.mu.Lock()
 	e.attemptCancel[id] = cancel
@@ -530,7 +531,7 @@ func (e *Engine) attemptContext(id RunID) (context.Context, func()) {
 // interrupted attempt resolves through normal handler result semantics.
 // The recorded cause is the engine-side evidence consumed by the next
 // resolution when attributing a preemption-yield (see runForward).
-func (e *Engine) preemptAttempt(id RunID, cause string) {
+func (e *Engine) preemptAttempt(id durable.RunID, cause string) {
 	e.mu.Lock()
 	cancel := e.attemptCancel[id]
 	if cancel != nil {
@@ -538,12 +539,12 @@ func (e *Engine) preemptAttempt(id RunID, cause string) {
 	}
 	e.mu.Unlock()
 	if cancel != nil {
-		cancel(&PreemptedError{Cause: cause})
+		cancel(&durable.PreemptedError{Cause: cause})
 	}
 }
 
 // takePreempted consumes the Run's recorded preemption evidence.
-func (e *Engine) takePreempted(id RunID) (string, bool) {
+func (e *Engine) takePreempted(id durable.RunID) (string, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	cause, ok := e.preempted[id]
@@ -554,7 +555,7 @@ func (e *Engine) takePreempted(id RunID) (string, bool) {
 // processRun advances one Run until it becomes terminal, invalid, must wait
 // for retry, or shutdown begins. It returns a redispatch delay when the Run
 // needs a future wakeup.
-func (e *Engine) processRun(id RunID) (time.Duration, bool) {
+func (e *Engine) processRun(id durable.RunID) (time.Duration, bool) {
 	for {
 		if e.baseCtx.Err() != nil {
 			return 0, false
@@ -585,9 +586,9 @@ func (e *Engine) processRun(id RunID) (time.Duration, bool) {
 		facts := factsOf(rec)
 		var dec ledger.Decision
 		switch rec.Phase {
-		case PhaseForward:
+		case durable.PhaseForward:
 			dec = ledger.NextForward(def.topo, facts)
-		case PhaseUnwind:
+		case durable.PhaseUnwind:
 			dec = ledger.NextUnwind(def.topo, facts)
 		default:
 			e.markInvalid(rec, "", fmt.Sprintf("nonterminal run in unexpected phase %v", rec.Phase))
@@ -596,7 +597,7 @@ func (e *Engine) processRun(id RunID) (time.Duration, bool) {
 
 		switch dec.Kind {
 		case ledger.KindInvalid:
-			e.markInvalid(rec, StepID(dec.Step), dec.Reason)
+			e.markInvalid(rec, durable.StepID(dec.Step), dec.Reason)
 			return 0, false
 
 		case ledger.KindRunForward:
@@ -608,7 +609,7 @@ func (e *Engine) processRun(id RunID) (time.Duration, bool) {
 			// A pending cancellation stops new forward work; a started
 			// operation is never abandoned and continues until it
 			// resolves.
-			if rec.Cancel != nil && !forwardStarted(rec, StepID(dec.Step)) {
+			if rec.Cancel != nil && !forwardStarted(rec, durable.StepID(dec.Step)) {
 				if !e.applyCancel(rec) {
 					return time.Second, true
 				}
@@ -620,7 +621,7 @@ func (e *Engine) processRun(id RunID) (time.Duration, bool) {
 			if delay, wait := e.retryGate(rec); wait {
 				return delay, true
 			}
-			class := def.step(StepID(dec.Step)).ConcurrencyClass
+			class := def.step(durable.StepID(dec.Step)).ConcurrencyClass
 			proceed, held, waited := e.acquireClass(rec, class)
 			if !proceed {
 				if e.debugLog() {
@@ -635,7 +636,7 @@ func (e *Engine) processRun(id RunID) (time.Duration, bool) {
 					PipelineID: rec.PipelineID, ResourceID: rec.ResourceID,
 					RunID: rec.RunID, Class: class, Duration: waited})
 			}
-			done, delay, again := e.runForward(rec, def, StepID(dec.Step))
+			done, delay, again := e.runForward(rec, def, durable.StepID(dec.Step))
 			if held {
 				e.releaseClass(class)
 			}
@@ -665,7 +666,7 @@ func (e *Engine) processRun(id RunID) (time.Duration, bool) {
 			if delay, wait := e.retryGate(rec); wait {
 				return delay, true
 			}
-			class := def.step(StepID(dec.Step)).ConcurrencyClass
+			class := def.step(durable.StepID(dec.Step)).ConcurrencyClass
 			proceed, held, waited := e.acquireClass(rec, class)
 			if !proceed {
 				if e.debugLog() {
@@ -680,7 +681,7 @@ func (e *Engine) processRun(id RunID) (time.Duration, bool) {
 					PipelineID: rec.PipelineID, ResourceID: rec.ResourceID,
 					RunID: rec.RunID, Class: class, Duration: waited})
 			}
-			done, delay, again := e.runUnwind(rec, def, StepID(dec.Step))
+			done, delay, again := e.runUnwind(rec, def, durable.StepID(dec.Step))
 			if held {
 				e.releaseClass(class)
 			}
@@ -689,9 +690,9 @@ func (e *Engine) processRun(id RunID) (time.Duration, bool) {
 			}
 
 		case ledger.KindUnwindComplete:
-			oc := OutcomeFailure
+			oc := durable.OutcomeFailure
 			rec.Outcome = &oc
-			rec.Phase = PhaseDone
+			rec.Phase = durable.PhaseDone
 			if !e.apply(rec, storedriver.Transition{Cursor: idleCursor(rec), Outcome: rec.Outcome}) {
 				return time.Second, true
 			}
@@ -703,7 +704,7 @@ func (e *Engine) processRun(id RunID) (time.Duration, bool) {
 
 // forwardStarted reports whether the Step's forward operation has ever
 // reserved an attempt for this Run.
-func forwardStarted(rec *storedriver.RunRecord, stepID StepID) bool {
+func forwardStarted(rec *storedriver.RunRecord, stepID durable.StepID) bool {
 	sr, ok := rec.Steps[stepID]
 	return ok && sr.ForwardAttempts > 0
 }
@@ -715,12 +716,12 @@ func (e *Engine) applyCancel(rec *storedriver.RunRecord) bool {
 	if cause == "" {
 		cause = "canceled"
 	}
-	rec.RootFailure = &RootFailure{
-		Phase:   PhaseForward,
+	rec.RootFailure = &durable.RootFailure{
+		Phase:   durable.PhaseForward,
 		Message: cause,
 		At:      e.clock.Now(),
-		Kind:    FailureKindCanceled}
-	rec.Phase = PhaseUnwind
+		Kind:    durable.FailureKindCanceled}
+	rec.Phase = durable.PhaseUnwind
 	rec.NextAttemptAt = time.Time{}
 	if !e.apply(rec, storedriver.Transition{Cursor: idleCursor(rec), RootFailure: rec.RootFailure}) {
 		return false
@@ -734,7 +735,7 @@ func (e *Engine) applyCancel(rec *storedriver.RunRecord) bool {
 		"run", string(rec.RunID), "cause", cause)
 	e.emitRunUnwinding(observe.RunFailureEvent{
 		PipelineID: rec.PipelineID, ResourceID: rec.ResourceID, RunID: rec.RunID,
-		Kind: FailureKindCanceled, Message: cause})
+		Kind: durable.FailureKindCanceled, Message: cause})
 	return true
 }
 
@@ -760,7 +761,7 @@ func (e *Engine) completeRun(rec *storedriver.RunRecord) {
 // same facts, so a future resolution path cannot serve one and drift on
 // the other. For observe.AttemptFailed, attribution comes off the record — the
 // RootFailure forward, the newest UnwindFailure during unwind.
-func (e *Engine) attemptResolved(rec *storedriver.RunRecord, stepID StepID, phase Phase, attempt uint64, elapsed time.Duration, result observe.AttemptResult, err error, retryIn time.Duration, panicked bool) {
+func (e *Engine) attemptResolved(rec *storedriver.RunRecord, stepID durable.StepID, phase durable.Phase, attempt uint64, elapsed time.Duration, result observe.AttemptResult, err error, retryIn time.Duration, panicked bool) {
 	switch result {
 	case observe.AttemptSucceeded:
 		if e.debugLog() {
@@ -777,7 +778,7 @@ func (e *Engine) attemptResolved(rec *storedriver.RunRecord, stepID StepID, phas
 				"attempt", attempt, "error", err, "next_attempt_at", rec.NextAttemptAt)
 		}
 	case observe.AttemptFailed:
-		if phase == PhaseForward {
+		if phase == durable.PhaseForward {
 			e.logger.Info("durable: run failed; unwinding",
 				"pipeline", string(rec.PipelineID), "resource", string(rec.ResourceID),
 				"run", string(rec.RunID), "step", string(stepID), "attempt", attempt,
@@ -805,7 +806,7 @@ func (e *Engine) attemptResolved(rec *storedriver.RunRecord, stepID StepID, phas
 // durable transition.
 func recordLastError(rec *storedriver.RunRecord, err error, now time.Time) {
 	rec.LastError = sanitizeText(err.Error())
-	rec.LastReason = sanitizeText(reasonOf(err))
+	rec.LastReason = sanitizeText(durable.FailureReason(err))
 	rec.LastErrorAt = now
 }
 
@@ -848,7 +849,7 @@ func (e *Engine) awaitGate(rec *storedriver.RunRecord) bool {
 		// plus a read of the rest.
 		known, _ := e.joins.Done(id)
 		e.unpark(id)
-		var done []RunID
+		var done []durable.RunID
 		for _, t := range park.Targets {
 			if slices.Contains(known, t) {
 				done = append(done, t)
@@ -933,8 +934,8 @@ func (e *Engine) awaitGate(rec *storedriver.RunRecord) bool {
 
 // awaitNeed is the park's mode as a threshold: how many targets must be
 // done before it resolves.
-func awaitNeed(park *Await) int {
-	if park.Mode == AwaitModeAny {
+func awaitNeed(park *durable.Await) int {
+	if park.Mode == durable.AwaitModeAny {
 		return 1
 	}
 	return len(park.Targets)
@@ -945,7 +946,7 @@ func awaitNeed(park *Await) int {
 // half of the gate: the gate registers and reads once, this keeps the
 // join current, so a spurious wake never happens and a real one reads
 // nothing.
-func (e *Engine) awaitTargetDone(target RunID) {
+func (e *Engine) awaitTargetDone(target durable.RunID) {
 	for _, parker := range e.joins.Complete(target) {
 		e.disp.Dispatch(parker, 0)
 	}
@@ -953,7 +954,7 @@ func (e *Engine) awaitTargetDone(target RunID) {
 
 // unpark drops a Run's park registration, if any, and stops its deadline
 // timer, returning when the park began.
-func (e *Engine) unpark(id RunID) (since time.Time, ok bool) {
+func (e *Engine) unpark(id durable.RunID) (since time.Time, ok bool) {
 	since, ok = e.joins.Remove(id)
 	e.mu.Lock()
 	if stop, armed := e.awaitTimers[id]; armed {
@@ -967,11 +968,11 @@ func (e *Engine) unpark(id RunID) (since time.Time, ok bool) {
 // wake resolves a Run's park: the registration is dropped, WaiterWoken
 // reports the full first-park-to-resolution duration, and the park is
 // settled into the operation's memory.
-func (e *Engine) wake(rec *storedriver.RunRecord, done []RunID, expired bool) {
+func (e *Engine) wake(rec *storedriver.RunRecord, done []durable.RunID, expired bool) {
 	if since, ok := e.unpark(rec.RunID); ok {
 		e.emitWaiterWoken(observe.WakeEvent{
 			PipelineID: rec.PipelineID, ResourceID: rec.ResourceID, RunID: rec.RunID,
-			Targets: append([]RunID(nil), rec.Awaiting.Targets...), Done: append([]RunID(nil), done...),
+			Targets: append([]durable.RunID(nil), rec.Awaiting.Targets...), Done: append([]durable.RunID(nil), done...),
 			Expired:  expired,
 			Duration: e.clock.Now().Sub(since)})
 	}
@@ -980,7 +981,7 @@ func (e *Engine) wake(rec *storedriver.RunRecord, done []RunID, expired bool) {
 
 // targetDone reports whether an await target no longer needs waiting on:
 // it is terminal, or it never existed / was reaped by retention.
-func (e *Engine) targetDone(target RunID) (bool, error) {
+func (e *Engine) targetDone(target durable.RunID) (bool, error) {
 	trec, err := e.store.GetRun(e.baseCtx, target)
 	if errors.Is(err, ErrRunNotFound) {
 		return true, nil
@@ -996,8 +997,8 @@ func (e *Engine) targetDone(target RunID) (bool, error) {
 // attempt reservation — persists it, and every later cursor write carries
 // it, so it outlives ordinary-error retries and restarts until the
 // operation resolves or parks again.
-func settleAwait(rec *storedriver.RunRecord, done []RunID, expired bool) {
-	rec.Awaited = &Wake{Targets: rec.Awaiting.Targets, Done: done, Expired: expired}
+func settleAwait(rec *storedriver.RunRecord, done []durable.RunID, expired bool) {
+	rec.Awaited = &durable.Wake{Targets: rec.Awaiting.Targets, Done: done, Expired: expired}
 	rec.Awaiting = nil
 }
 
@@ -1005,8 +1006,7 @@ func settleAwait(rec *storedriver.RunRecord, done []RunID, expired bool) {
 // the park is durably noted on the cursor, and the next reconciliation
 // parks through awaitGate (or proceeds immediately if the park already
 // resolves per its mode).
-func (e *Engine) parkAwait(rec *storedriver.RunRecord, stepID StepID, attempts uint64, ar *awaitResolution, elapsed time.Duration) (bool, time.Duration, bool) {
-	park := ar.park.Clone()
+func (e *Engine) parkAwait(rec *storedriver.RunRecord, stepID durable.StepID, attempts uint64, park *durable.Await, timeout time.Duration, elapsed time.Duration) (bool, time.Duration, bool) {
 	if len(park.Targets) == 0 {
 		e.markInvalid(rec, stepID, "await with no targets")
 		return false, 0, false
@@ -1017,8 +1017,8 @@ func (e *Engine) parkAwait(rec *storedriver.RunRecord, stepID StepID, attempts u
 			return false, 0, false
 		}
 	}
-	if ar.timeout > 0 {
-		park.Deadline = e.clock.Now().Add(ar.timeout)
+	if timeout > 0 {
+		park.Deadline = e.clock.Now().Add(timeout)
 	}
 	// A new park supersedes the memory of the previous one.
 	rec.Awaiting, rec.Awaited = park, nil
@@ -1052,10 +1052,10 @@ func (e *Engine) parkAwait(rec *storedriver.RunRecord, stepID StepID, attempts u
 // edge counts regardless of mode: an AwaitModeAny park whose other
 // targets might terminate could escape a cycle, but a park that can
 // deadlock is refused rather than gambled on. The walk is bounded.
-func (e *Engine) awaitCycle(self RunID, targets []RunID) (bool, error) {
+func (e *Engine) awaitCycle(self durable.RunID, targets []durable.RunID) (bool, error) {
 	const maxVisited = 1024
-	visited := make(map[RunID]struct{})
-	stack := append([]RunID(nil), targets...)
+	visited := make(map[durable.RunID]struct{})
+	stack := append([]durable.RunID(nil), targets...)
 	for len(stack) > 0 && len(visited) < maxVisited {
 		cur := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
@@ -1095,7 +1095,7 @@ func (e *Engine) retryGate(rec *storedriver.RunRecord) (time.Duration, bool) {
 
 // runForward reserves an attempt and executes one forward operation.
 // done=true means the loop should reconcile again immediately.
-func (e *Engine) runForward(rec *storedriver.RunRecord, def *Definition, stepID StepID) (done bool, delay time.Duration, again bool) {
+func (e *Engine) runForward(rec *storedriver.RunRecord, def *Definition, stepID durable.StepID) (done bool, delay time.Duration, again bool) {
 	sc := def.step(stepID)
 	sr := rec.Step(stepID)
 
@@ -1107,7 +1107,7 @@ func (e *Engine) runForward(rec *storedriver.RunRecord, def *Definition, stepID 
 		return false, time.Second, true
 	}
 
-	inv := e.invocation(rec, def, stepID, sr.ForwardAttempts, PhaseForward)
+	inv := e.invocation(rec, def, stepID, sr.ForwardAttempts, durable.PhaseForward)
 	inv.awaited = rec.Awaited.Clone()
 	opStart := e.clock.Now()
 	state, panicked, err := e.invokeForward(sc, inv)
@@ -1118,12 +1118,14 @@ func (e *Engine) runForward(rec *storedriver.RunRecord, def *Definition, stepID 
 		return false, 0, false
 	}
 
-	if aw, ok := asAwait(err); ok {
-		return e.parkAwait(rec, stepID, sr.ForwardAttempts, aw, e.clock.Now().Sub(opStart))
+	if park, ok := durable.AwaitRequest(err); ok {
+		return e.parkAwait(rec, stepID, sr.ForwardAttempts, &park, durable.AwaitTimeout(err), e.clock.Now().Sub(opStart))
 	}
 
 	now := e.clock.Now()
-	switch pe, permanent := asPermanent(err); {
+	cause, permanent := durable.FailureCause(err)
+	kind, reason, _ := durable.FailureInfo(err)
+	switch {
 	case err == nil:
 		var stateBytes []byte
 		if sc.HasState {
@@ -1146,25 +1148,25 @@ func (e *Engine) runForward(rec *storedriver.RunRecord, def *Definition, stepID 
 		if !e.apply(rec, storedriver.Transition{Cursor: idleCursor(rec), Steps: []storedriver.StepWrite{{StepID: stepID, Record: *sr}}}) {
 			return false, time.Second, true
 		}
-		e.attemptResolved(rec, stepID, PhaseForward, sr.ForwardAttempts, now.Sub(opStart), observe.AttemptSucceeded, nil, 0, false)
+		e.attemptResolved(rec, stepID, durable.PhaseForward, sr.ForwardAttempts, now.Sub(opStart), observe.AttemptSucceeded, nil, 0, false)
 		return true, 0, false
 
 	case permanent:
 		sr.ForwardStatus = storedriver.OpFailed
-		rec.RootFailure = &RootFailure{
+		rec.RootFailure = &durable.RootFailure{
 			StepID:  stepID,
-			Phase:   PhaseForward,
+			Phase:   durable.PhaseForward,
 			Attempt: sr.ForwardAttempts,
-			Message: sanitizeText(pe.err.Error()),
+			Message: sanitizeText(cause.Error()),
 			At:      now,
-			Kind:    pe.failureKind(),
-			Reason:  sanitizeText(pe.failureReason())}
+			Kind:    kind,
+			Reason:  sanitizeText(reason)}
 		// A Fail that wraps *PreemptedError declares a preemption-yield.
 		// Attribute it as cancellation only on engine-side evidence — the
 		// engine preempted this attempt, or the cancel request is already
 		// visible — never on the error value alone, which a handler could
 		// fabricate without any cancel pending.
-		if yielded, ok := errors.AsType[*PreemptedError](pe.err); ok && (wasPreempted || rec.Cancel != nil) {
+		if yielded, ok := errors.AsType[*durable.PreemptedError](cause); ok && (wasPreempted || rec.Cancel != nil) {
 			cause := preemptCause
 			if cause == "" {
 				cause = yielded.Cause
@@ -1175,16 +1177,16 @@ func (e *Engine) runForward(rec *storedriver.RunRecord, def *Definition, stepID 
 			if cause == "" {
 				cause = "canceled"
 			}
-			rec.RootFailure.Kind = FailureKindCanceled
+			rec.RootFailure.Kind = durable.FailureKindCanceled
 			rec.RootFailure.Message = sanitizeText(cause)
 		}
-		rec.Phase = PhaseUnwind
+		rec.Phase = durable.PhaseUnwind
 		rec.Awaited = nil
 		clearLastError(rec)
 		if !e.apply(rec, storedriver.Transition{Cursor: idleCursor(rec), Steps: []storedriver.StepWrite{{StepID: stepID, Record: *sr}}, RootFailure: rec.RootFailure}) {
 			return false, time.Second, true
 		}
-		e.attemptResolved(rec, stepID, PhaseForward, sr.ForwardAttempts, now.Sub(opStart), observe.AttemptFailed, pe.err, 0, false)
+		e.attemptResolved(rec, stepID, durable.PhaseForward, sr.ForwardAttempts, now.Sub(opStart), observe.AttemptFailed, cause, 0, false)
 		e.emitRunUnwinding(observe.RunFailureEvent{
 			PipelineID: rec.PipelineID, ResourceID: rec.ResourceID, RunID: rec.RunID,
 			StepID: stepID, Kind: rec.RootFailure.Kind, Reason: rec.RootFailure.Reason,
@@ -1198,13 +1200,13 @@ func (e *Engine) runForward(rec *storedriver.RunRecord, def *Definition, stepID 
 		if !e.apply(rec, storedriver.Transition{Cursor: activeCursor(rec, stepID, sr.ForwardAttempts)}) {
 			return false, time.Second, true
 		}
-		e.attemptResolved(rec, stepID, PhaseForward, sr.ForwardAttempts, now.Sub(opStart), observe.AttemptRetrying, err, d, panicked)
+		e.attemptResolved(rec, stepID, durable.PhaseForward, sr.ForwardAttempts, now.Sub(opStart), observe.AttemptRetrying, err, d, panicked)
 		return false, d, true
 	}
 }
 
 // runUnwind reserves an attempt and executes one unwind operation.
-func (e *Engine) runUnwind(rec *storedriver.RunRecord, def *Definition, stepID StepID) (done bool, delay time.Duration, again bool) {
+func (e *Engine) runUnwind(rec *storedriver.RunRecord, def *Definition, stepID durable.StepID) (done bool, delay time.Duration, again bool) {
 	sc := def.step(stepID)
 	sr := rec.Step(stepID)
 
@@ -1215,11 +1217,11 @@ func (e *Engine) runUnwind(rec *storedriver.RunRecord, def *Definition, stepID S
 		return false, time.Second, true
 	}
 
-	inv := e.invocation(rec, def, stepID, sr.UnwindAttempts, PhaseUnwind)
+	inv := e.invocation(rec, def, stepID, sr.UnwindAttempts, durable.PhaseUnwind)
 	inv.awaited = rec.Awaited.Clone()
 	opStart := e.clock.Now()
-	failure := Failure{
-		UnwindFailures: append([]UnwindFailure(nil), rec.UnwindFailures...),
+	failure := durable.Failure{
+		UnwindFailures: append([]durable.UnwindFailure(nil), rec.UnwindFailures...),
 	}
 	if rec.RootFailure != nil {
 		failure.Root = *rec.RootFailure
@@ -1232,12 +1234,14 @@ func (e *Engine) runUnwind(rec *storedriver.RunRecord, def *Definition, stepID S
 		return false, 0, false
 	}
 
-	if aw, ok := asAwait(err); ok {
-		return e.parkAwait(rec, stepID, sr.UnwindAttempts, aw, e.clock.Now().Sub(opStart))
+	if park, ok := durable.AwaitRequest(err); ok {
+		return e.parkAwait(rec, stepID, sr.UnwindAttempts, &park, durable.AwaitTimeout(err), e.clock.Now().Sub(opStart))
 	}
 
 	now := e.clock.Now()
-	switch pe, permanent := asPermanent(err); {
+	cause, permanent := durable.FailureCause(err)
+	kind, reason, _ := durable.FailureInfo(err)
+	switch {
 	case err == nil:
 		sr.UnwindStatus = storedriver.OpSucceeded
 		rec.Awaited = nil
@@ -1245,26 +1249,26 @@ func (e *Engine) runUnwind(rec *storedriver.RunRecord, def *Definition, stepID S
 		if !e.apply(rec, storedriver.Transition{Cursor: idleCursor(rec), Steps: []storedriver.StepWrite{{StepID: stepID, Record: *sr}}}) {
 			return false, time.Second, true
 		}
-		e.attemptResolved(rec, stepID, PhaseUnwind, sr.UnwindAttempts, now.Sub(opStart), observe.AttemptSucceeded, nil, 0, false)
+		e.attemptResolved(rec, stepID, durable.PhaseUnwind, sr.UnwindAttempts, now.Sub(opStart), observe.AttemptSucceeded, nil, 0, false)
 		return true, 0, false
 
 	case permanent:
 		sr.UnwindStatus = storedriver.OpFailed
-		rec.UnwindFailures = append(rec.UnwindFailures, UnwindFailure{
+		rec.UnwindFailures = append(rec.UnwindFailures, durable.UnwindFailure{
 			StepID:  stepID,
-			Phase:   PhaseUnwind,
+			Phase:   durable.PhaseUnwind,
 			Attempt: sr.UnwindAttempts,
-			Message: sanitizeText(pe.err.Error()),
+			Message: sanitizeText(cause.Error()),
 			At:      now,
-			Kind:    pe.failureKind(),
-			Reason:  sanitizeText(pe.failureReason())})
+			Kind:    kind,
+			Reason:  sanitizeText(reason)})
 		rec.Awaited = nil
 		clearLastError(rec)
 		uf := rec.UnwindFailures[len(rec.UnwindFailures)-1]
 		if !e.apply(rec, storedriver.Transition{Cursor: idleCursor(rec), Steps: []storedriver.StepWrite{{StepID: stepID, Record: *sr}}, UnwindFailure: &uf}) {
 			return false, time.Second, true
 		}
-		e.attemptResolved(rec, stepID, PhaseUnwind, sr.UnwindAttempts, now.Sub(opStart), observe.AttemptFailed, pe.err, 0, false)
+		e.attemptResolved(rec, stepID, durable.PhaseUnwind, sr.UnwindAttempts, now.Sub(opStart), observe.AttemptFailed, cause, 0, false)
 		return true, 0, false
 
 	default:
@@ -1274,7 +1278,7 @@ func (e *Engine) runUnwind(rec *storedriver.RunRecord, def *Definition, stepID S
 		if !e.apply(rec, storedriver.Transition{Cursor: activeCursor(rec, stepID, sr.UnwindAttempts)}) {
 			return false, time.Second, true
 		}
-		e.attemptResolved(rec, stepID, PhaseUnwind, sr.UnwindAttempts, now.Sub(opStart), observe.AttemptRetrying, err, d, panicked)
+		e.attemptResolved(rec, stepID, durable.PhaseUnwind, sr.UnwindAttempts, now.Sub(opStart), observe.AttemptRetrying, err, d, panicked)
 		return false, d, true
 	}
 }
@@ -1308,9 +1312,9 @@ func (e *Engine) reduceAndComplete(rec *storedriver.RunRecord, def *Definition) 
 		}
 		rec.Output = b
 	}
-	oc := OutcomeSuccess
+	oc := durable.OutcomeSuccess
 	rec.Outcome = &oc
-	rec.Phase = PhaseDone
+	rec.Phase = durable.PhaseDone
 	if !e.apply(rec, storedriver.Transition{Cursor: idleCursor(rec), Output: rec.Output, Outcome: rec.Outcome}) {
 		return false
 	}
@@ -1318,7 +1322,7 @@ func (e *Engine) reduceAndComplete(rec *storedriver.RunRecord, def *Definition) 
 	return true
 }
 
-func (e *Engine) invocation(rec *storedriver.RunRecord, def *Definition, stepID StepID, attempt uint64, phase Phase) *attemptInvocation {
+func (e *Engine) invocation(rec *storedriver.RunRecord, def *Definition, stepID durable.StepID, attempt uint64, phase durable.Phase) *attemptInvocation {
 	return &attemptInvocation{
 		pipelineID:      rec.PipelineID,
 		resourceID:      rec.ResourceID,
@@ -1341,8 +1345,8 @@ func (e *Engine) debugLog() bool {
 	return e.logger.Enabled(context.Background(), slog.LevelDebug)
 }
 
-func committedStates(rec *storedriver.RunRecord) map[StepID][]byte {
-	states := make(map[StepID][]byte)
+func committedStates(rec *storedriver.RunRecord) map[durable.StepID][]byte {
+	states := make(map[durable.StepID][]byte)
 	for id, sr := range rec.Steps {
 		if sr.ForwardStatus == storedriver.OpSucceeded && sr.State != nil {
 			states[id] = sr.State
@@ -1363,11 +1367,11 @@ func (e *Engine) invokeForward(sc *StepConfig, inv *attemptInvocation) (state pr
 	}()
 	ctx, done := e.attemptContext(inv.runID)
 	defer done()
-	state, err = e.wrap(Handler(sc.Run))(ctx, inv)
+	state, err = e.wrap(durable.Handler(sc.Run))(ctx, inv)
 	return state, false, err
 }
 
-func (e *Engine) invokeUnwind(sc *StepConfig, inv *attemptInvocation, failure Failure) (panicked bool, err error) {
+func (e *Engine) invokeUnwind(sc *StepConfig, inv *attemptInvocation, failure durable.Failure) (panicked bool, err error) {
 	defer func() {
 		if p := recover(); p != nil {
 			panicked = true
@@ -1377,7 +1381,7 @@ func (e *Engine) invokeUnwind(sc *StepConfig, inv *attemptInvocation, failure Fa
 				"panic", p, "stack", string(debug.Stack()))
 		}
 	}()
-	h := e.wrap(func(ctx context.Context, in Invocation) (proto.Message, error) {
+	h := e.wrap(func(ctx context.Context, in durable.Invocation) (proto.Message, error) {
 		return nil, sc.UnwindFunc(ctx, in, failure)
 	})
 	ctx, done := e.attemptContext(inv.runID)
@@ -1399,7 +1403,7 @@ func (e *Engine) invokeReduce(def *Definition, view *reduceView) (out proto.Mess
 
 // activeCursor builds the storedriver.Cursor for a Run whose operation on stepID is
 // in flight; idleCursor for a Run with none.
-func activeCursor(rec *storedriver.RunRecord, stepID StepID, attempts uint64) storedriver.Cursor {
+func activeCursor(rec *storedriver.RunRecord, stepID durable.StepID, attempts uint64) storedriver.Cursor {
 	return storedriver.Cursor{
 		Phase:         rec.Phase,
 		StepID:        stepID,
@@ -1467,7 +1471,7 @@ func (e *Engine) backoff(attempts uint64) time.Duration {
 // the Run. Invalidity is deployment-relative and derived, not persisted:
 // the Run is logged, surfaced through Status and Wait, and ignored for
 // execution until a corrected deployment reconciles it.
-func (e *Engine) markInvalid(rec *storedriver.RunRecord, stepID StepID, reason string) {
+func (e *Engine) markInvalid(rec *storedriver.RunRecord, stepID durable.StepID, reason string) {
 	ie := &InvalidRunError{RunID: rec.RunID, PipelineID: rec.PipelineID, Reason: reason}
 	e.mu.Lock()
 	// Idempotent per (run, reason): re-dispatches of an already-invalid
@@ -1494,7 +1498,7 @@ func (e *Engine) markInvalid(rec *storedriver.RunRecord, stepID StepID, reason s
 	e.waiters.Notify(rec.RunID)
 }
 
-func (e *Engine) invalidFor(id RunID) *InvalidRunError {
+func (e *Engine) invalidFor(id durable.RunID) *InvalidRunError {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.invalid[id]

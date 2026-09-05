@@ -125,6 +125,27 @@ func FailureInfo(err error) (kind FailureKind, reason string, ok bool) {
 	return pe.failureKind(), pe.failureReason(), true
 }
 
+// FailureCause reports whether err declares permanent failure via Fail
+// and, if so, the error Fail wrapped — the cause whose message the
+// engine records on the failure record, without the permanent-failure
+// prefix.
+func FailureCause(err error) (cause error, ok bool) {
+	pe, ok := asPermanent(err)
+	if !ok {
+		return nil, false
+	}
+	return pe.err, true
+}
+
+// FailureReason reports the reason carried by the first FailureReasoner
+// in err's chain, or "" when there is none. It applies to ordinary
+// retryable errors as well as permanent ones: the engine records it as
+// the Run's LastReason between retries. For a Fail resolution,
+// FailureInfo's reason additionally honors WithReason.
+func FailureReason(err error) string {
+	return reasonOf(err)
+}
+
 // asPermanent reports whether err declares permanent failure via Fail.
 func asPermanent(err error) (*permanentError, bool) {
 	if pe, ok := errors.AsType[*permanentError](err); ok {

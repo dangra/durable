@@ -1,4 +1,4 @@
-package durable_test
+package engine_test
 
 import (
 	"context"
@@ -12,6 +12,7 @@ import (
 
 	"github.com/dangra/durable"
 	"github.com/dangra/durable/durabletest"
+	"github.com/dangra/durable/engine"
 )
 
 // TestPreemptionCarriesCause pins the ctx cause contract: an attempt
@@ -25,9 +26,9 @@ func TestPreemptionCarriesCause(t *testing.T) {
 		cause error
 	)
 	running := make(chan struct{})
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "coop",
-		Steps: []durable.StepConfig{stateless("work/v1", func(ctx context.Context, inv durable.Invocation) error {
+		Steps: []engine.StepConfig{stateless("work/v1", func(ctx context.Context, inv durable.Invocation) error {
 			if inv.CancelRequested() {
 				return nil // cooperative resolution
 			}
@@ -39,8 +40,8 @@ func TestPreemptionCarriesCause(t *testing.T) {
 			return ctx.Err()
 		})},
 	})
-	e := durable.NewEngine(durabletest.NewMemStore(), fastRetry,
-		durable.WithLogger(discardTestLogger()))
+	e := engine.New(durabletest.NewMemStore(), fastRetry,
+		engine.WithLogger(discardTestLogger()))
 	pipe, err := def.Bind(e)
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
@@ -83,9 +84,9 @@ func TestStopCarriesCause(t *testing.T) {
 	)
 	running := make(chan struct{})
 	var once sync.Once
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "stoppable",
-		Steps: []durable.StepConfig{stateless("work/v1", func(ctx context.Context, inv durable.Invocation) error {
+		Steps: []engine.StepConfig{stateless("work/v1", func(ctx context.Context, inv durable.Invocation) error {
 			select {
 			case <-ctx.Done():
 				mu.Lock()
@@ -103,7 +104,7 @@ func TestStopCarriesCause(t *testing.T) {
 		})},
 	})
 	store := durabletest.NewMemStore()
-	e1 := durable.NewEngine(store, fastRetry, durable.WithLogger(discardTestLogger()))
+	e1 := engine.New(store, fastRetry, engine.WithLogger(discardTestLogger()))
 	pipe1, err := def.Bind(e1)
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
@@ -128,14 +129,14 @@ func TestStopCarriesCause(t *testing.T) {
 
 	// The run resumed under a new engine completes: shutdown was not
 	// cancellation.
-	def2 := durable.NewDefinition(durable.DefinitionConfig{
+	def2 := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "stoppable",
-		Steps: []durable.StepConfig{stateless("work/v1", func(ctx context.Context, inv durable.Invocation) error {
+		Steps: []engine.StepConfig{stateless("work/v1", func(ctx context.Context, inv durable.Invocation) error {
 			return nil
 		})},
 	})
-	e2 := durable.NewEngine(store, fastRetry, durable.WithRecoveryBackoff(0),
-		durable.WithLogger(discardTestLogger()))
+	e2 := engine.New(store, fastRetry, engine.WithRecoveryBackoff(0),
+		engine.WithLogger(discardTestLogger()))
 	pipe2, err := def2.Bind(e2)
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
@@ -168,9 +169,9 @@ func TestFailFastOnCancel(t *testing.T) {
 		unwound  atomic.Bool
 	)
 	running := make(chan struct{})
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "failfast",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			{
 				ID:     "prepare/v1",
 				Unwind: true,
@@ -190,9 +191,9 @@ func TestFailFastOnCancel(t *testing.T) {
 			}),
 		},
 	})
-	e := durable.NewEngine(durabletest.NewMemStore(), fastRetry,
-		durable.WithLogger(discardTestLogger()),
-		durable.WithMiddleware(durable.FailFastOnCancel()))
+	e := engine.New(durabletest.NewMemStore(), fastRetry,
+		engine.WithLogger(discardTestLogger()),
+		engine.WithMiddleware(durable.FailFastOnCancel()))
 	pipe, err := def.Bind(e)
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
@@ -234,9 +235,9 @@ func TestFailFastOnCancel(t *testing.T) {
 func TestFailFastShortCircuit(t *testing.T) {
 	var sawCancel atomic.Bool
 	tried := make(chan struct{}, 64)
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "shortcircuit",
-		Steps: []durable.StepConfig{stateless("flaky/v1", func(ctx context.Context, inv durable.Invocation) error {
+		Steps: []engine.StepConfig{stateless("flaky/v1", func(ctx context.Context, inv durable.Invocation) error {
 			if inv.CancelRequested() {
 				sawCancel.Store(true)
 			}
@@ -247,9 +248,9 @@ func TestFailFastShortCircuit(t *testing.T) {
 			return errors.New("transient")
 		})},
 	})
-	e := durable.NewEngine(durabletest.NewMemStore(), fastRetry,
-		durable.WithLogger(discardTestLogger()),
-		durable.WithMiddleware(durable.FailFastOnCancel()))
+	e := engine.New(durabletest.NewMemStore(), fastRetry,
+		engine.WithLogger(discardTestLogger()),
+		engine.WithMiddleware(durable.FailFastOnCancel()))
 	pipe, err := def.Bind(e)
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
@@ -292,9 +293,9 @@ func TestFailFastExcept(t *testing.T) {
 		attempts  atomic.Int64
 	)
 	running := make(chan struct{})
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "excepted",
-		Steps: []durable.StepConfig{stateless("careful/v1", func(ctx context.Context, inv durable.Invocation) error {
+		Steps: []engine.StepConfig{stateless("careful/v1", func(ctx context.Context, inv durable.Invocation) error {
 			attempts.Add(1)
 			if inv.CancelRequested() {
 				sawCancel.Store(true)
@@ -305,9 +306,9 @@ func TestFailFastExcept(t *testing.T) {
 			return ctx.Err()
 		})},
 	})
-	e := durable.NewEngine(durabletest.NewMemStore(), fastRetry,
-		durable.WithLogger(discardTestLogger()),
-		durable.WithMiddleware(durable.FailFastOnCancel(durable.FailFastExcept(
+	e := engine.New(durabletest.NewMemStore(), fastRetry,
+		engine.WithLogger(discardTestLogger()),
+		engine.WithMiddleware(durable.FailFastOnCancel(durable.FailFastExcept(
 			// A generated reference and a bare StepID both satisfy
 			// StepIdentifier; the ref form is what generated-code users
 			// write (orderspb.ChargePaymentStep).
@@ -350,14 +351,14 @@ func TestFailFastExcept(t *testing.T) {
 // wrapping *PreemptedError with no cancel anywhere is attributed as an
 // ordinary failure, never as canceled.
 func TestFabricatedPreemptionNotCanceled(t *testing.T) {
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "fabricated",
-		Steps: []durable.StepConfig{stateless("liar/v1", func(ctx context.Context, inv durable.Invocation) error {
+		Steps: []engine.StepConfig{stateless("liar/v1", func(ctx context.Context, inv durable.Invocation) error {
 			return durable.Fail(fmt.Errorf("pretend: %w", &durable.PreemptedError{Cause: "fake"}))
 		})},
 	})
-	e := durable.NewEngine(durabletest.NewMemStore(), fastRetry,
-		durable.WithLogger(discardTestLogger()))
+	e := engine.New(durabletest.NewMemStore(), fastRetry,
+		engine.WithLogger(discardTestLogger()))
 	pipe, err := def.Bind(e)
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
@@ -389,7 +390,7 @@ func TestFabricatedPreemptionNotCanceled(t *testing.T) {
 func TestFailFastShutdownUntouched(t *testing.T) {
 	running := make(chan struct{})
 	var once sync.Once
-	handler := func(done bool) durable.StepConfig {
+	handler := func(done bool) engine.StepConfig {
 		return stateless("work/v1", func(ctx context.Context, inv durable.Invocation) error {
 			if done {
 				return nil
@@ -400,10 +401,10 @@ func TestFailFastShutdownUntouched(t *testing.T) {
 		})
 	}
 	store := durabletest.NewMemStore()
-	e1 := durable.NewEngine(store, fastRetry, durable.WithLogger(discardTestLogger()),
-		durable.WithMiddleware(durable.FailFastOnCancel()))
-	pipe1, err := durable.NewDefinition(durable.DefinitionConfig{
-		ID: "shutdown", Steps: []durable.StepConfig{handler(false)},
+	e1 := engine.New(store, fastRetry, engine.WithLogger(discardTestLogger()),
+		engine.WithMiddleware(durable.FailFastOnCancel()))
+	pipe1, err := engine.NewDefinition(engine.DefinitionConfig{
+		ID: "shutdown", Steps: []engine.StepConfig{handler(false)},
 	}).Bind(e1)
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
@@ -420,11 +421,11 @@ func TestFailFastShutdownUntouched(t *testing.T) {
 		t.Fatalf("Stop: %v", err)
 	}
 
-	e2 := durable.NewEngine(store, fastRetry, durable.WithRecoveryBackoff(0),
-		durable.WithLogger(discardTestLogger()),
-		durable.WithMiddleware(durable.FailFastOnCancel()))
-	pipe2, err := durable.NewDefinition(durable.DefinitionConfig{
-		ID: "shutdown", Steps: []durable.StepConfig{handler(true)},
+	e2 := engine.New(store, fastRetry, engine.WithRecoveryBackoff(0),
+		engine.WithLogger(discardTestLogger()),
+		engine.WithMiddleware(durable.FailFastOnCancel()))
+	pipe2, err := engine.NewDefinition(engine.DefinitionConfig{
+		ID: "shutdown", Steps: []engine.StepConfig{handler(true)},
 	}).Bind(e2)
 	if err != nil {
 		t.Fatalf("Bind: %v", err)

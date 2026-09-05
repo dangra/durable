@@ -9,6 +9,7 @@ package machinespb
 import (
 	context "context"
 	durable "github.com/dangra/durable"
+	engine "github.com/dangra/durable/engine"
 	proto "google.golang.org/protobuf/proto"
 	sync "sync"
 )
@@ -281,7 +282,7 @@ func (x *ProvisionMachine) State[T proto.Message](step durable.StateStepRef[T]) 
 
 // ProvisionMachineDefinition is the unbound pipeline definition.
 type ProvisionMachineDefinition struct {
-	def *durable.Definition
+	def *engine.Definition
 }
 
 // NewProvisionMachine assembles the "provision-machine" pipeline definition
@@ -293,7 +294,7 @@ func NewProvisionMachine(
 	createMachine CreateMachineHandler,
 	reduce ProvisionMachineReducer,
 ) *ProvisionMachineDefinition {
-	return &ProvisionMachineDefinition{def: durable.NewDefinition(durable.DefinitionConfig{
+	return &ProvisionMachineDefinition{def: engine.NewDefinition(engine.DefinitionConfig{
 		ID:             "provision-machine",
 		ExclusionGroup: "machine-lifecycle",
 		NewInput:       func() proto.Message { return &ProvisionMachineInput{} },
@@ -303,7 +304,7 @@ func NewProvisionMachine(
 			defer provisionMachineViews.Delete(x)
 			return reduce(x)
 		},
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			{
 				ID: "validate/v1",
 				Run: func(ctx context.Context, core durable.Invocation) (proto.Message, error) {
@@ -354,7 +355,7 @@ func NewProvisionMachine(
 
 // Bind registers the definition with an engine. It is allowed only before
 // Engine.Start.
-func (d *ProvisionMachineDefinition) Bind(e *durable.Engine) (*ProvisionMachinePipeline, error) {
+func (d *ProvisionMachineDefinition) Bind(e *engine.Engine) (*ProvisionMachinePipeline, error) {
 	p, err := d.def.Bind(e)
 	if err != nil {
 		return nil, err
@@ -364,11 +365,11 @@ func (d *ProvisionMachineDefinition) Bind(e *durable.Engine) (*ProvisionMachineP
 
 // ProvisionMachinePipeline is the definition bound to an engine.
 type ProvisionMachinePipeline struct {
-	pipeline *durable.Pipeline
+	pipeline *engine.Pipeline
 }
 
 // Schedule creates a run for the resource slot or returns the active one.
-func (p *ProvisionMachinePipeline) Schedule(ctx context.Context, resource durable.ResourceID, input *ProvisionMachineInput, opts ...durable.ScheduleOption) (ProvisionMachineRun, bool, error) {
+func (p *ProvisionMachinePipeline) Schedule(ctx context.Context, resource durable.ResourceID, input *ProvisionMachineInput, opts ...engine.ScheduleOption) (ProvisionMachineRun, bool, error) {
 	run, created, err := p.pipeline.Schedule(ctx, resource, input, opts...)
 	if err != nil {
 		return ProvisionMachineRun{}, created, err
@@ -425,12 +426,12 @@ func (p *ProvisionMachinePipeline) Runs(ctx context.Context, resource durable.Re
 
 // ProvisionMachineRun is a typed handle to one run of the pipeline.
 type ProvisionMachineRun struct {
-	run durable.Run
+	run engine.Run
 }
 
 func (r ProvisionMachineRun) ID() durable.RunID { return r.run.ID() }
 
-func (r ProvisionMachineRun) Status(ctx context.Context) (durable.Status, error) {
+func (r ProvisionMachineRun) Status(ctx context.Context) (engine.Status, error) {
 	return r.run.Status(ctx)
 }
 
@@ -478,7 +479,7 @@ func (r ProvisionMachineRun) Wait(ctx context.Context) (ProvisionMachineResult, 
 
 // ProvisionMachineResult is the typed terminal result of a run.
 type ProvisionMachineResult struct {
-	durable.Result
+	engine.Result
 	output *ProvisionMachineOutput
 }
 
@@ -558,7 +559,7 @@ func (x *DecommissionMachine) State[T proto.Message](step durable.StateStepRef[T
 
 // DecommissionMachineDefinition is the unbound pipeline definition.
 type DecommissionMachineDefinition struct {
-	def *durable.Definition
+	def *engine.Definition
 }
 
 // NewDecommissionMachine assembles the "decommission-machine" pipeline definition
@@ -566,10 +567,10 @@ type DecommissionMachineDefinition struct {
 func NewDecommissionMachine(
 	releaseMachine ReleaseMachineHandler,
 ) *DecommissionMachineDefinition {
-	return &DecommissionMachineDefinition{def: durable.NewDefinition(durable.DefinitionConfig{
+	return &DecommissionMachineDefinition{def: engine.NewDefinition(engine.DefinitionConfig{
 		ID:             "decommission-machine",
 		ExclusionGroup: "machine-lifecycle",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			{
 				ID: "release-machine/v1",
 				Run: func(ctx context.Context, core durable.Invocation) (proto.Message, error) {
@@ -582,7 +583,7 @@ func NewDecommissionMachine(
 
 // Bind registers the definition with an engine. It is allowed only before
 // Engine.Start.
-func (d *DecommissionMachineDefinition) Bind(e *durable.Engine) (*DecommissionMachinePipeline, error) {
+func (d *DecommissionMachineDefinition) Bind(e *engine.Engine) (*DecommissionMachinePipeline, error) {
 	p, err := d.def.Bind(e)
 	if err != nil {
 		return nil, err
@@ -592,17 +593,17 @@ func (d *DecommissionMachineDefinition) Bind(e *durable.Engine) (*DecommissionMa
 
 // DecommissionMachinePipeline is the definition bound to an engine.
 type DecommissionMachinePipeline struct {
-	pipeline *durable.Pipeline
+	pipeline *engine.Pipeline
 }
 
 // Schedule creates a run for the resource slot or returns the active one.
-func (p *DecommissionMachinePipeline) Schedule(ctx context.Context, resource durable.ResourceID, opts ...durable.ScheduleOption) (durable.Run, bool, error) {
+func (p *DecommissionMachinePipeline) Schedule(ctx context.Context, resource durable.ResourceID, opts ...engine.ScheduleOption) (engine.Run, bool, error) {
 	run, created, err := p.pipeline.Schedule(ctx, resource, nil, opts...)
 	return run, created, err
 }
 
 // Run returns a handle to an existing run of this pipeline.
-func (p *DecommissionMachinePipeline) Run(ctx context.Context, id durable.RunID) (durable.Run, error) {
+func (p *DecommissionMachinePipeline) Run(ctx context.Context, id durable.RunID) (engine.Run, error) {
 	run, err := p.pipeline.Run(ctx, id)
 	return run, err
 }
@@ -610,20 +611,20 @@ func (p *DecommissionMachinePipeline) Run(ctx context.Context, id durable.RunID)
 // ActiveRun returns a handle to this pipeline's nonterminal run for a
 // resource, if one exists — a read-only observation for wait/inspect
 // flows; claiming the slot atomically remains Schedule's job.
-func (p *DecommissionMachinePipeline) ActiveRun(ctx context.Context, resource durable.ResourceID) (durable.Run, bool, error) {
+func (p *DecommissionMachinePipeline) ActiveRun(ctx context.Context, resource durable.ResourceID) (engine.Run, bool, error) {
 	run, ok, err := p.pipeline.ActiveRun(ctx, resource)
 	return run, ok, err
 }
 
 // Active returns handles for this pipeline's nonterminal runs.
-func (p *DecommissionMachinePipeline) Active(ctx context.Context) ([]durable.Run, error) {
+func (p *DecommissionMachinePipeline) Active(ctx context.Context) ([]engine.Run, error) {
 	runs, err := p.pipeline.Active(ctx)
 	return runs, err
 }
 
 // Runs returns handles for all runs of this pipeline against a resource,
 // oldest first.
-func (p *DecommissionMachinePipeline) Runs(ctx context.Context, resource durable.ResourceID) ([]durable.Run, error) {
+func (p *DecommissionMachinePipeline) Runs(ctx context.Context, resource durable.ResourceID) ([]engine.Run, error) {
 	runs, err := p.pipeline.Runs(ctx, resource)
 	return runs, err
 }

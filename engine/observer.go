@@ -1,8 +1,9 @@
-package durable
+package engine
 
 import (
 	"context"
 	"fmt"
+	"github.com/dangra/durable"
 	"github.com/dangra/durable/observe"
 	"github.com/dangra/durable/storedriver"
 	"runtime/debug"
@@ -115,7 +116,7 @@ func (e *Engine) emitStoreOp(ev observe.StoreOpEvent) {
 }
 
 // hasStoreObserver reports whether any installed observer subscribes to
-// StoreOp, deciding whether NewEngine wraps the storedriver.Store.
+// StoreOp, deciding whether New wraps the storedriver.Store.
 func (e *Engine) hasStoreObserver() bool {
 	for i := range e.observers {
 		if e.observers[i].StoreOp != nil {
@@ -145,21 +146,21 @@ func (s *observedStore) CreateRun(ctx context.Context, rec *storedriver.RunRecor
 	return existing, created, err
 }
 
-func (s *observedStore) GetRun(ctx context.Context, id RunID) (*storedriver.RunRecord, error) {
+func (s *observedStore) GetRun(ctx context.Context, id durable.RunID) (*storedriver.RunRecord, error) {
 	start := s.engine.clock.Now()
 	rec, err := s.inner.GetRun(ctx, id)
 	s.op("GetRun", false, start, err)
 	return rec, err
 }
 
-func (s *observedStore) ApplyTransition(ctx context.Context, id RunID, t storedriver.Transition) error {
+func (s *observedStore) ApplyTransition(ctx context.Context, id durable.RunID, t storedriver.Transition) error {
 	start := s.engine.clock.Now()
 	err := s.inner.ApplyTransition(ctx, id, t)
 	s.op("ApplyTransition", true, start, err)
 	return err
 }
 
-func (s *observedStore) RequestCancel(ctx context.Context, id RunID, req storedriver.CancelRequest) (bool, error) {
+func (s *observedStore) RequestCancel(ctx context.Context, id durable.RunID, req storedriver.CancelRequest) (bool, error) {
 	start := s.engine.clock.Now()
 	accepted, err := s.inner.RequestCancel(ctx, id, req)
 	s.op("RequestCancel", true, start, err)
@@ -180,7 +181,7 @@ func (s *observedStore) ListNonterminal(ctx context.Context) ([]*storedriver.Run
 	return recs, err
 }
 
-func (s *observedStore) ListRuns(ctx context.Context, pipeline PipelineID, resource ResourceID) ([]*storedriver.RunRecord, error) {
+func (s *observedStore) ListRuns(ctx context.Context, pipeline durable.PipelineID, resource durable.ResourceID) ([]*storedriver.RunRecord, error) {
 	start := s.engine.clock.Now()
 	recs, err := s.inner.ListRuns(ctx, pipeline, resource)
 	s.op("ListRuns", false, start, err)

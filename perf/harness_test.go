@@ -59,6 +59,7 @@ var fatInput = wrapperspb.Bytes(make([]byte, inputSize))
 type env struct {
 	store  *bboltstore.Store
 	writes *atomic.Int64
+	reads  *atomic.Int64
 	engine *durable.Engine
 	pipe   *durable.Pipeline
 }
@@ -74,14 +75,19 @@ type env struct {
 // Write-ness comes from StoreOpEvent.Write, which the engine's store
 // decorator declares method-by-method — a write method added to the
 // Store interface later is counted here without touching this file.
-func countingObserver(writes *atomic.Int64) observe.Observer {
+// Reads are counted too, for the scenarios whose cost is read-shaped
+// (the await gate re-checking a park's targets).
+func countingObserver(writes, reads *atomic.Int64) observe.Observer {
 	return observe.Observer{
 		StoreOp: func(ev observe.StoreOpEvent) {
 			// ReapTerminal is the one write op excluded by name: reaps
 			// count one logical delete per run via RunsReaped below,
 			// not one per batch call.
-			if ev.Write && ev.Op != "ReapTerminal" {
+			switch {
+			case ev.Write && ev.Op != "ReapTerminal":
 				writes.Add(1)
+			case !ev.Write:
+				reads.Add(1)
 			}
 		},
 		RunsReaped: func(count int) { writes.Add(int64(count)) },
@@ -96,7 +102,7 @@ func newEnv(b *testing.B, def *durable.Definition, opts ...durable.Option) *env 
 	if err != nil {
 		b.Fatal(err)
 	}
-	writes := new(atomic.Int64)
+	writes, reads := new(atomic.Int64), new(atomic.Int64)
 	opts = append([]durable.Option{
 		durable.WithConcurrency(32),
 		durable.WithRetryPolicy(durable.RetryPolicy{
@@ -104,7 +110,7 @@ func newEnv(b *testing.B, def *durable.Definition, opts ...durable.Option) *env 
 		}),
 		durable.WithRecoveryBackoff(0),
 		durable.WithLogger(discardLogger()),
-		durable.WithObserver(countingObserver(writes)),
+		durable.WithObserver(countingObserver(writes, reads)),
 	}, opts...)
 	e := durable.NewEngine(store, opts...)
 	pipe, err := def.Bind(e)
@@ -117,7 +123,7 @@ func newEnv(b *testing.B, def *durable.Definition, opts ...durable.Option) *env 
 		_ = e.Stop(ctx)
 		_ = store.Close()
 	})
-	return &env{store: store, writes: writes, engine: e, pipe: pipe}
+	return &env{store: store, writes: writes, reads: reads, engine: e, pipe: pipe}
 }
 
 func (v *env) start(b *testing.B) {

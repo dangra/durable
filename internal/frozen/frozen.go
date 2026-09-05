@@ -64,8 +64,10 @@ func (f *Map[K, V]) Len() int {
 // false. fn may use the map: before Freeze, Range iterates a snapshot
 // taken under the lock, so a Put from fn lands but is not visited.
 func (f *Map[K, V]) Range(fn func(K, V) bool) {
-	m := f.m
-	if !f.frozen.Load() {
+	var m map[K]V
+	if f.frozen.Load() {
+		m = f.m
+	} else {
 		f.mu.Lock()
 		m = maps.Clone(f.m)
 		f.mu.Unlock()

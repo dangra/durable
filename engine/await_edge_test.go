@@ -2,7 +2,7 @@
 // permanent errors, chained and unwind-phase parks, cancellation, and
 // restart; AwaitAll and AwaitAny fan-out, select loops, races, and cycles;
 // WithAwaitTimeout expiry, extension, and persistence.
-package durable_test
+package engine_test
 
 import (
 	"context"
@@ -19,6 +19,7 @@ import (
 	"github.com/dangra/durable"
 	"github.com/dangra/durable/bboltstore"
 	"github.com/dangra/durable/durabletest"
+	"github.com/dangra/durable/engine"
 	"github.com/dangra/durable/storedriver"
 	"google.golang.org/protobuf/proto"
 )
@@ -55,14 +56,14 @@ func (l *awaitedLog) all() []awaitedEntry {
 // The canonical schedule-then-await handler, with a hook that decides what
 // the woken attempt returns. It follows the documented contract to the
 // letter: "not woken" means "first execution", so it schedules the child.
-func scheduleThenAwait(childPipe **durable.Pipeline, log *awaitedLog, onWoken func(e awaitedEntry) error) func(context.Context, durable.Invocation) error {
+func scheduleThenAwait(childPipe **engine.Pipeline, log *awaitedLog, onWoken func(e awaitedEntry) error) func(context.Context, durable.Invocation) error {
 	return func(ctx context.Context, inv durable.Invocation) error {
 		e := log.record(inv)
 		if e.woken {
 			return onWoken(e)
 		}
 		run, _, err := (*childPipe).Schedule(ctx, "child-res", nil)
-		if conflict, ok := errors.AsType[*durable.ScheduleConflictError](err); ok {
+		if conflict, ok := errors.AsType[*engine.ScheduleConflictError](err); ok {
 			return durable.AwaitRun(conflict.RunID)
 		}
 		if err != nil {
@@ -77,12 +78,12 @@ func scheduleThenAwait(childPipe **durable.Pipeline, log *awaitedLog, onWoken fu
 // park has resolved — so it must still observe AwaitedRunID; otherwise a
 // contract-following handler respawns the child on every transient error.
 func TestAwaitWokenAttemptTransientErrorKeepsMemory(t *testing.T) {
-	var childPipe *durable.Pipeline
+	var childPipe *engine.Pipeline
 	var log awaitedLog
 	var wokenAttempts atomic.Int32
-	parent := durable.NewDefinition(durable.DefinitionConfig{
+	parent := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "edge-parent",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			stateless("p/v1", scheduleThenAwait(&childPipe, &log, func(e awaitedEntry) error {
 				if wokenAttempts.Add(1) == 1 {
 					return errors.New("transient: downstream flaked") // ordinary error → retry
@@ -123,12 +124,12 @@ func TestAwaitWokenAttemptTransientErrorKeepsMemory(t *testing.T) {
 // respawned; the step's unwind operation is a different operation and does
 // not inherit the forward operation's await memory.
 func TestAwaitWokenAttemptPermanentFailureUnwinds(t *testing.T) {
-	var childPipe *durable.Pipeline
+	var childPipe *engine.Pipeline
 	var log awaitedLog
 	var unwindLog awaitedLog
-	parent := durable.NewDefinition(durable.DefinitionConfig{
+	parent := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "edge-parent-fail",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			{
 				ID: "p/v1",
 				Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
@@ -174,13 +175,13 @@ func TestAwaitWokenAttemptPermanentFailureUnwinds(t *testing.T) {
 // attempt 2 parks, attempt 3 is the wake: counters are continuous, the
 // wake sees the memory, and the pre-park LastError is cleared on success.
 func TestAwaitTransientErrorBeforePark(t *testing.T) {
-	var childPipe *durable.Pipeline
+	var childPipe *engine.Pipeline
 	var log awaitedLog
 	var first atomic.Bool
 	inner := scheduleThenAwait(&childPipe, &log, func(e awaitedEntry) error { return nil })
-	parent := durable.NewDefinition(durable.DefinitionConfig{
+	parent := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "edge-parent-pre",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			stateless("p/v1", func(ctx context.Context, inv durable.Invocation) error {
 				if first.CompareAndSwap(false, true) {
 					log.record(inv)
@@ -218,12 +219,12 @@ func TestAwaitTransientErrorBeforePark(t *testing.T) {
 // Edge case 4: chained awaits. The wake from child A parks again on child
 // B; the second wake must report B, not A.
 func TestAwaitChainedParksReportLatestTarget(t *testing.T) {
-	var childPipe *durable.Pipeline
+	var childPipe *engine.Pipeline
 	var log awaitedLog
 	var ids sync.Map
-	parent := durable.NewDefinition(durable.DefinitionConfig{
+	parent := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "edge-parent-chain",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			stateless("p/v1", func(ctx context.Context, inv durable.Invocation) error {
 				e := log.record(inv)
 				if !e.woken {
@@ -268,12 +269,12 @@ func TestAwaitChainedParksReportLatestTarget(t *testing.T) {
 // hits a transient error. Same contract as forward: the retried unwind
 // attempt must still see the memory.
 func TestAwaitUnwindParkThenTransientError(t *testing.T) {
-	var childPipe *durable.Pipeline
+	var childPipe *engine.Pipeline
 	var log awaitedLog
 	var wokenAttempts atomic.Int32
-	parent := durable.NewDefinition(durable.DefinitionConfig{
+	parent := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "edge-parent-unwind",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			{
 				ID:     "cleanup-owner/v1",
 				Run:    func(ctx context.Context, inv durable.Invocation) (proto.Message, error) { return nil, nil },
@@ -324,9 +325,9 @@ func TestAwaitUnwindParkThenTransientError(t *testing.T) {
 func TestAwaitCancelBypassReportsTargetAndCancel(t *testing.T) {
 	release := make(chan struct{})
 	defer close(release)
-	target := durable.NewDefinition(durable.DefinitionConfig{
+	target := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "edge-cancel-target",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			stateless("t/v1", func(ctx context.Context, inv durable.Invocation) error {
 				select {
 				case <-release:
@@ -337,12 +338,12 @@ func TestAwaitCancelBypassReportsTargetAndCancel(t *testing.T) {
 			}),
 		},
 	})
-	var targetPipe *durable.Pipeline
+	var targetPipe *engine.Pipeline
 	var log awaitedLog
 	var cancelSeen atomic.Bool
-	waiter := durable.NewDefinition(durable.DefinitionConfig{
+	waiter := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "edge-cancel-waiter",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			stateless("w/v1", func(ctx context.Context, inv durable.Invocation) error {
 				log.record(inv)
 				if inv.CancelRequested() {
@@ -367,7 +368,7 @@ func TestAwaitCancelBypassReportsTargetAndCancel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Schedule waiter: %v", err)
 	}
-	waitForState(t, wRun, durable.RunStateAwaiting)
+	waitForState(t, wRun, engine.RunStateAwaiting)
 	if err := wRun.Cancel(context.Background(), "bye"); err != nil {
 		t.Fatalf("Cancel: %v", err)
 	}
@@ -375,7 +376,7 @@ func TestAwaitCancelBypassReportsTargetAndCancel(t *testing.T) {
 	if err != nil || !res.Canceled() {
 		t.Fatalf("Wait = %+v, %v; want canceled", res, err)
 	}
-	if st, _ := tRun.Status(context.Background()); st.State == durable.RunStateDone {
+	if st, _ := tRun.Status(context.Background()); st.State == engine.RunStateDone {
 		t.Fatal("target finished; the test did not exercise a bypass")
 	}
 	if !cancelSeen.Load() {
@@ -406,15 +407,15 @@ func TestAwaitRestartDuringWokenAttemptKeepsMemory(t *testing.T) {
 }
 
 func testAwaitRestartDuringWokenAttempt(t *testing.T, store storedriver.Store) {
-	var childPipe *durable.Pipeline
+	var childPipe *engine.Pipeline
 	var log awaitedLog
 	inWoken := make(chan struct{}, 1)
 	// Generation 1's woken attempt blocks until the engine stops, returning
 	// the ctx error like a well-behaved handler; generation 2's completes.
 	var gen atomic.Int32
-	parent := durable.NewDefinition(durable.DefinitionConfig{
+	parent := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "edge-parent-restart",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			stateless("p/v1", func(ctx context.Context, inv durable.Invocation) error {
 				return scheduleThenAwait(&childPipe, &log, func(e awaitedEntry) error {
 					if gen.Load() == 1 {
@@ -427,9 +428,9 @@ func testAwaitRestartDuringWokenAttempt(t *testing.T, store storedriver.Store) {
 			}),
 		},
 	})
-	boot := func() (*durable.Engine, *durable.Pipeline) {
+	boot := func() (*engine.Engine, *engine.Pipeline) {
 		gen.Add(1)
-		e := durable.NewEngine(store, fastRetry, durable.WithRecoveryBackoff(0))
+		e := engine.New(store, fastRetry, engine.WithRecoveryBackoff(0))
 		cp, err := trivialChild("edge-child-restart").Bind(e)
 		if err != nil {
 			t.Fatalf("Bind child: %v", err)
@@ -480,14 +481,14 @@ func testAwaitRestartDuringWokenAttempt(t *testing.T, store storedriver.Store) {
 // ordinary error does not lose the memory, and no child is respawned.
 func TestAwaitAllWakesOnceEveryTargetIsDone(t *testing.T) {
 	var g gates
-	var childPipe *durable.Pipeline
+	var childPipe *engine.Pipeline
 	var log awaitedLog
 	var wakes []durable.Wake
 	var mu sync.Mutex
 	var wokenAttempts atomic.Int32
-	parent := durable.NewDefinition(durable.DefinitionConfig{
+	parent := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "all-parent",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			stateless("p/v1", func(ctx context.Context, inv durable.Invocation) error {
 				e := log.record(inv)
 				if w, ok := inv.Awaited(); ok {
@@ -520,7 +521,7 @@ func TestAwaitAllWakesOnceEveryTargetIsDone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Schedule parent: %v", err)
 	}
-	st := waitForState(t, pRun, durable.RunStateAwaiting)
+	st := waitForState(t, pRun, engine.RunStateAwaiting)
 	if st.AwaitMode != durable.AwaitModeAll || len(st.AwaitingRunIDs) != 3 {
 		t.Fatalf("Status = %+v; want an all-of park on 3 children", st)
 	}
@@ -531,10 +532,10 @@ func TestAwaitAllWakesOnceEveryTargetIsDone(t *testing.T) {
 	g.open("child-2")
 	for _, id := range []durable.RunID{ids[0], ids[2]} {
 		run, _ := childPipe.Run(context.Background(), id)
-		waitForState(t, run, durable.RunStateDone)
+		waitForState(t, run, engine.RunStateDone)
 	}
 	time.Sleep(20 * time.Millisecond)
-	if st, _ := pRun.Status(context.Background()); st.State != durable.RunStateAwaiting {
+	if st, _ := pRun.Status(context.Background()); st.State != engine.RunStateAwaiting {
 		t.Fatalf("parent woke with a child still running: %v", st.State)
 	}
 	if got := log.all(); len(got) != 1 {
@@ -572,12 +573,12 @@ func TestAwaitAllWakesOnceEveryTargetIsDone(t *testing.T) {
 // shrinking park.
 func TestAwaitAnySelectLoopDrainsChildren(t *testing.T) {
 	var g gates
-	var childPipe *durable.Pipeline
+	var childPipe *engine.Pipeline
 	var mu sync.Mutex
 	var wakes []durable.Wake
-	parent := durable.NewDefinition(durable.DefinitionConfig{
+	parent := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "any-parent",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			stateless("p/v1", func(ctx context.Context, inv durable.Invocation) error {
 				if w, ok := inv.Awaited(); ok {
 					mu.Lock()
@@ -603,7 +604,7 @@ func TestAwaitAnySelectLoopDrainsChildren(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Schedule parent: %v", err)
 	}
-	st := waitForState(t, pRun, durable.RunStateAwaiting)
+	st := waitForState(t, pRun, engine.RunStateAwaiting)
 	if st.AwaitMode != durable.AwaitModeAny || len(st.AwaitingRunIDs) != 3 {
 		t.Fatalf("Status = %+v; want an any-of park on 3 children", st)
 	}
@@ -639,11 +640,11 @@ func TestAwaitAnySelectLoopDrainsChildren(t *testing.T) {
 // cancels the rest, which resolve as canceled.
 func TestAwaitAnyRaceCancelsLosers(t *testing.T) {
 	var g gates
-	var childPipe *durable.Pipeline
+	var childPipe *engine.Pipeline
 	var winner atomic.Value
-	parent := durable.NewDefinition(durable.DefinitionConfig{
+	parent := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "race-parent",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			stateless("p/v1", func(ctx context.Context, inv durable.Invocation) error {
 				if w, ok := inv.Awaited(); ok {
 					if len(w.Done) != 1 {
@@ -655,7 +656,7 @@ func TestAwaitAnyRaceCancelsLosers(t *testing.T) {
 						if err != nil {
 							return err
 						}
-						if err := run.Cancel(ctx, "lost the race"); err != nil && !errors.Is(err, durable.ErrRunTerminal) {
+						if err := run.Cancel(ctx, "lost the race"); err != nil && !errors.Is(err, engine.ErrRunTerminal) {
 							return err
 						}
 					}
@@ -676,7 +677,7 @@ func TestAwaitAnyRaceCancelsLosers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Schedule parent: %v", err)
 	}
-	st := waitForState(t, pRun, durable.RunStateAwaiting)
+	st := waitForState(t, pRun, engine.RunStateAwaiting)
 	ids := st.AwaitingRunIDs
 	g.open("child-2")
 	if res, err := pRun.Wait(context.Background()); err != nil || !res.Succeeded() {
@@ -697,11 +698,11 @@ func TestAwaitAnyRaceCancelsLosers(t *testing.T) {
 // A cancel bypassing an all-of park reports which targets had finished.
 func TestAwaitAllCancelBypassReportsDone(t *testing.T) {
 	var g gates
-	var childPipe *durable.Pipeline
+	var childPipe *engine.Pipeline
 	var bypass atomic.Pointer[durable.Wake]
-	parent := durable.NewDefinition(durable.DefinitionConfig{
+	parent := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "bypass-parent",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			stateless("p/v1", func(ctx context.Context, inv durable.Invocation) error {
 				if inv.CancelRequested() {
 					if w, ok := inv.Awaited(); ok {
@@ -724,10 +725,10 @@ func TestAwaitAllCancelBypassReportsDone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Schedule parent: %v", err)
 	}
-	ids := waitForState(t, pRun, durable.RunStateAwaiting).AwaitingRunIDs
+	ids := waitForState(t, pRun, engine.RunStateAwaiting).AwaitingRunIDs
 	g.open("child-0")
 	first, _ := childPipe.Run(context.Background(), ids[0])
-	waitForState(t, first, durable.RunStateDone)
+	waitForState(t, first, engine.RunStateDone)
 	if err := pRun.Cancel(context.Background(), "abandon"); err != nil {
 		t.Fatalf("Cancel: %v", err)
 	}
@@ -750,10 +751,10 @@ func TestAwaitAnyCycleIsInvalid(t *testing.T) {
 	var g gates
 	defer g.open("c")
 	store := durabletest.NewMemStore()
-	var pipeA, pipeB, pipeC *durable.Pipeline
-	defA := durable.NewDefinition(durable.DefinitionConfig{
+	var pipeA, pipeB, pipeC *engine.Pipeline
+	defA := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "cycle-any-a",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			stateless("a/v1", func(ctx context.Context, inv durable.Invocation) error {
 				if _, ok := inv.Awaited(); ok {
 					return nil
@@ -773,9 +774,9 @@ func TestAwaitAnyCycleIsInvalid(t *testing.T) {
 			}),
 		},
 	})
-	defB := durable.NewDefinition(durable.DefinitionConfig{
+	defB := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "cycle-any-b",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			stateless("b/v1", func(ctx context.Context, inv durable.Invocation) error {
 				if _, ok := inv.Awaited(); ok {
 					return nil
@@ -807,12 +808,12 @@ func TestAwaitAnyCycleIsInvalid(t *testing.T) {
 	}
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		for _, r := range []durable.Run{runA, runB} {
+		for _, r := range []engine.Run{runA, runB} {
 			st, err := r.Status(context.Background())
 			if err != nil {
 				t.Fatalf("Status: %v", err)
 			}
-			if st.State == durable.RunStateInvalid {
+			if st.State == engine.RunStateInvalid {
 				if !strings.Contains(st.InvalidReason, "await cycle") {
 					t.Fatalf("InvalidReason = %q", st.InvalidReason)
 				}
@@ -834,11 +835,11 @@ func TestAwaitAnyCycleIsInvalid(t *testing.T) {
 // the park collapse.
 func TestAwaitAllScheduleIsIdempotentAcrossRetry(t *testing.T) {
 	var g gates
-	var childPipe *durable.Pipeline
+	var childPipe *engine.Pipeline
 	var first atomic.Bool
-	parent := durable.NewDefinition(durable.DefinitionConfig{
+	parent := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "idem-parent",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			stateless("p/v1", func(ctx context.Context, inv durable.Invocation) error {
 				if w, ok := inv.Awaited(); ok {
 					if len(w.Targets) != 3 {
@@ -866,7 +867,7 @@ func TestAwaitAllScheduleIsIdempotentAcrossRetry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Schedule parent: %v", err)
 	}
-	if ids := waitForState(t, pRun, durable.RunStateAwaiting).AwaitingRunIDs; len(ids) != 3 {
+	if ids := waitForState(t, pRun, engine.RunStateAwaiting).AwaitingRunIDs; len(ids) != 3 {
 		t.Fatalf("parked on %v; want 3 distinct children", ids)
 	}
 	for i := 0; i < 3; i++ {
@@ -886,9 +887,9 @@ func TestAwaitAllScheduleIsIdempotentAcrossRetry(t *testing.T) {
 // An empty park is a handler bug, refused as an invalid run rather than
 // parked forever.
 func TestAwaitAllWithNoTargetsIsInvalid(t *testing.T) {
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "empty-await",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			stateless("s/v1", func(ctx context.Context, inv durable.Invocation) error {
 				return durable.AwaitAll(nil)
 			}),
@@ -896,7 +897,7 @@ func TestAwaitAllWithNoTargetsIsInvalid(t *testing.T) {
 	})
 	_, pipes := startEngine(t, durabletest.NewMemStore(), def)
 	run, _, _ := pipes[0].Schedule(context.Background(), "r", nil)
-	st := waitForState(t, run, durable.RunStateInvalid)
+	st := waitForState(t, run, engine.RunStateInvalid)
 	if !strings.Contains(st.InvalidReason, "no targets") {
 		t.Fatalf("InvalidReason = %q", st.InvalidReason)
 	}
@@ -909,11 +910,11 @@ func TestAwaitAllWithNoTargetsIsInvalid(t *testing.T) {
 // with a reason.
 func TestAwaitTimeoutExpiryIsAWake(t *testing.T) {
 	var g gates
-	var childPipe *durable.Pipeline
+	var childPipe *engine.Pipeline
 	var expiredWake atomic.Pointer[durable.Wake]
-	parent := durable.NewDefinition(durable.DefinitionConfig{
+	parent := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "timeout-parent",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			stateless("p/v1", func(ctx context.Context, inv durable.Invocation) error {
 				if w, ok := inv.Awaited(); ok {
 					if !w.Expired {
@@ -937,14 +938,14 @@ func TestAwaitTimeoutExpiryIsAWake(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Schedule parent: %v", err)
 	}
-	st := waitForState(t, pRun, durable.RunStateAwaiting)
+	st := waitForState(t, pRun, engine.RunStateAwaiting)
 	if st.AwaitDeadline.IsZero() {
 		t.Fatalf("Status = %+v; want a deadline", st)
 	}
 	ids := st.AwaitingRunIDs
 	g.open("child-0")
 	first, _ := childPipe.Run(context.Background(), ids[0])
-	waitForState(t, first, durable.RunStateDone)
+	waitForState(t, first, engine.RunStateDone)
 	defer g.open("child-1")
 
 	res, err := pRun.Wait(context.Background())
@@ -962,12 +963,12 @@ func TestAwaitTimeoutExpiryIsAWake(t *testing.T) {
 // target finishes first never reports expiry.
 func TestAwaitTimeoutExtendAndCompleteBeforeDeadline(t *testing.T) {
 	var g gates
-	var childPipe *durable.Pipeline
+	var childPipe *engine.Pipeline
 	var mu sync.Mutex
 	var wakes []durable.Wake
-	parent := durable.NewDefinition(durable.DefinitionConfig{
+	parent := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "extend-parent",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			stateless("p/v1", func(ctx context.Context, inv durable.Invocation) error {
 				if w, ok := inv.Awaited(); ok {
 					mu.Lock()
@@ -993,12 +994,12 @@ func TestAwaitTimeoutExtendAndCompleteBeforeDeadline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Schedule parent: %v", err)
 	}
-	first := waitForState(t, pRun, durable.RunStateAwaiting)
+	first := waitForState(t, pRun, engine.RunStateAwaiting)
 	// Wait for the first park to expire and the second, longer one to be in place.
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		st, _ := pRun.Status(context.Background())
-		if st.State == durable.RunStateAwaiting && st.AwaitDeadline.After(first.AwaitDeadline.Add(30*time.Second)) {
+		if st.State == engine.RunStateAwaiting && st.AwaitDeadline.After(first.AwaitDeadline.Add(30*time.Second)) {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -1028,11 +1029,11 @@ func TestAwaitTimeoutSurvivesRestart(t *testing.T) {
 	t.Cleanup(func() { _ = store.Close() })
 	var g gates
 	defer g.open("child-0")
-	var childPipe *durable.Pipeline
+	var childPipe *engine.Pipeline
 	var wake atomic.Pointer[durable.Wake]
-	parent := durable.NewDefinition(durable.DefinitionConfig{
+	parent := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "restart-deadline-parent",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			stateless("p/v1", func(ctx context.Context, inv durable.Invocation) error {
 				if w, ok := inv.Awaited(); ok {
 					wake.Store(&w)
@@ -1046,8 +1047,8 @@ func TestAwaitTimeoutSurvivesRestart(t *testing.T) {
 			}),
 		},
 	})
-	boot := func() (*durable.Engine, *durable.Pipeline) {
-		e := durable.NewEngine(store, fastRetry, durable.WithRecoveryBackoff(0))
+	boot := func() (*engine.Engine, *engine.Pipeline) {
+		e := engine.New(store, fastRetry, engine.WithRecoveryBackoff(0))
 		cp, err := gatedChild("restart-deadline-child", &g).Bind(e)
 		if err != nil {
 			t.Fatalf("Bind child: %v", err)
@@ -1067,7 +1068,7 @@ func TestAwaitTimeoutSurvivesRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Schedule parent: %v", err)
 	}
-	st := waitForState(t, pRun, durable.RunStateAwaiting)
+	st := waitForState(t, pRun, engine.RunStateAwaiting)
 	if err := e1.Stop(context.Background()); err != nil {
 		t.Fatalf("Stop: %v", err)
 	}
@@ -1092,10 +1093,10 @@ func TestAwaitTimeoutSurvivesRestart(t *testing.T) {
 func TestAwaitTimeoutNonPositiveIsNoDeadline(t *testing.T) {
 	var g gates
 	defer g.open("child-0")
-	var childPipe *durable.Pipeline
-	parent := durable.NewDefinition(durable.DefinitionConfig{
+	var childPipe *engine.Pipeline
+	parent := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "nodeadline-parent",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			stateless("p/v1", func(ctx context.Context, inv durable.Invocation) error {
 				if _, ok := inv.Awaited(); ok {
 					return nil
@@ -1114,7 +1115,7 @@ func TestAwaitTimeoutNonPositiveIsNoDeadline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Schedule parent: %v", err)
 	}
-	if st := waitForState(t, pRun, durable.RunStateAwaiting); !st.AwaitDeadline.IsZero() {
+	if st := waitForState(t, pRun, engine.RunStateAwaiting); !st.AwaitDeadline.IsZero() {
 		t.Fatalf("Status = %+v; want no deadline", st)
 	}
 }
@@ -1124,9 +1125,9 @@ func TestAwaitTimeoutNonPositiveIsNoDeadline(t *testing.T) {
 // rather than parking it on nothing.
 func TestAwaitEmptyParkFromStoreIsInvalid(t *testing.T) {
 	store := durabletest.NewMemStore()
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "corrupt-park",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			stateless("s/v1", func(ctx context.Context, inv durable.Invocation) error {
 				return durable.Fail(errors.New("must not run: the park is refused first"))
 			}),
@@ -1152,7 +1153,7 @@ func TestAwaitEmptyParkFromStoreIsInvalid(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	st := waitForState(t, run, durable.RunStateInvalid)
+	st := waitForState(t, run, engine.RunStateInvalid)
 	if !strings.Contains(st.InvalidReason, "no targets") {
 		t.Fatalf("InvalidReason = %q", st.InvalidReason)
 	}

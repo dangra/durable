@@ -1,6 +1,6 @@
 // Scheduling and time: input validation, run identity, delayed starts,
 // and retention.
-package durable_test
+package engine_test
 
 import (
 	"context"
@@ -11,6 +11,7 @@ import (
 
 	"github.com/dangra/durable"
 	"github.com/dangra/durable/durabletest"
+	"github.com/dangra/durable/engine"
 	"github.com/dangra/durable/storedriver"
 	"github.com/oklog/ulid/v2"
 	"google.golang.org/protobuf/proto"
@@ -18,19 +19,19 @@ import (
 )
 
 func TestScheduleValidation(t *testing.T) {
-	withInput := durable.NewDefinition(durable.DefinitionConfig{
+	withInput := engine.NewDefinition(engine.DefinitionConfig{
 		ID:       "with-input",
-		Steps:    []durable.StepConfig{stateless("s/v1", func(context.Context, durable.Invocation) error { return nil })},
+		Steps:    []engine.StepConfig{stateless("s/v1", func(context.Context, durable.Invocation) error { return nil })},
 		NewInput: func() proto.Message { return &wrapperspb.StringValue{} },
 	})
 
 	// Before Start.
-	e := durable.NewEngine(durabletest.NewMemStore())
+	e := engine.New(durabletest.NewMemStore())
 	p, err := withInput.Bind(e)
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
 	}
-	if _, _, err := p.Schedule(context.Background(), "r", str("x")); !errors.Is(err, durable.ErrEngineNotStarted) {
+	if _, _, err := p.Schedule(context.Background(), "r", str("x")); !errors.Is(err, engine.ErrNotStarted) {
 		t.Fatalf("Schedule before Start = %v, want ErrEngineNotStarted", err)
 	}
 	if err := e.Start(context.Background()); err != nil {
@@ -47,9 +48,9 @@ func TestScheduleValidation(t *testing.T) {
 func TestDelayedStart(t *testing.T) {
 	const delay = 80 * time.Millisecond
 	var ranAt atomic.Int64
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "delayed",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			stateless("s/v1", func(ctx context.Context, inv durable.Invocation) error {
 				ranAt.Store(time.Now().UnixNano())
 				return nil
@@ -60,7 +61,7 @@ func TestDelayedStart(t *testing.T) {
 	p := pipes[0]
 
 	scheduledAt := time.Now()
-	run, created, err := p.Schedule(context.Background(), "r", nil, durable.StartAfter(delay))
+	run, created, err := p.Schedule(context.Background(), "r", nil, engine.StartAfter(delay))
 	if err != nil || !created {
 		t.Fatalf("Schedule = created=%v err=%v", created, err)
 	}
@@ -69,7 +70,7 @@ func TestDelayedStart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Status: %v", err)
 	}
-	if st.State != durable.RunStateScheduled {
+	if st.State != engine.RunStateScheduled {
 		t.Fatalf("State = %v, want scheduled", st.State)
 	}
 	if st.NextAttemptAt.IsZero() {
@@ -78,7 +79,7 @@ func TestDelayedStart(t *testing.T) {
 
 	// The start time is not part of duplicate-scheduling identity:
 	// an equivalent Schedule with a different start returns the same run.
-	run2, created, err := p.Schedule(context.Background(), "r", nil, durable.StartAt(time.Now().Add(time.Hour)))
+	run2, created, err := p.Schedule(context.Background(), "r", nil, engine.StartAt(time.Now().Add(time.Hour)))
 	if err != nil || created || run2.ID() != run.ID() {
 		t.Fatalf("dedup Schedule = %s created=%v err=%v, want existing %s", run2.ID(), created, err, run.ID())
 	}
@@ -93,9 +94,9 @@ func TestDelayedStart(t *testing.T) {
 }
 
 func TestRunIDsAreULIDs(t *testing.T) {
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "ulids",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			stateless("s/v1", func(context.Context, durable.Invocation) error { return nil }),
 		},
 	})
@@ -138,9 +139,9 @@ func TestRetentionReapsOnlyOldTerminalRuns(t *testing.T) {
 	})
 
 	blocked := make(chan struct{})
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "retained",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			stateless("s/v1", func(ctx context.Context, inv durable.Invocation) error {
 				if inv.ResourceID() == "stuck" {
 					select {
@@ -154,10 +155,10 @@ func TestRetentionReapsOnlyOldTerminalRuns(t *testing.T) {
 		},
 	})
 
-	e := durable.NewEngine(store, fastRetry,
-		durable.WithClock(fake),
-		durable.WithRecoveryBackoff(0),
-		durable.WithRetention(durable.RetentionPolicy{
+	e := engine.New(store, fastRetry,
+		engine.WithClock(fake),
+		engine.WithRecoveryBackoff(0),
+		engine.WithRetention(engine.RetentionPolicy{
 			TerminalAfter: time.Hour,
 			Interval:      time.Minute,
 		}),
@@ -194,7 +195,7 @@ func TestRetentionReapsOnlyOldTerminalRuns(t *testing.T) {
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		fake.Advance(2 * time.Hour)
-		if _, err := store.GetRun(context.Background(), done.ID()); errors.Is(err, durable.ErrRunNotFound) {
+		if _, err := store.GetRun(context.Background(), done.ID()); errors.Is(err, engine.ErrRunNotFound) {
 			break
 		}
 		if time.Now().After(deadline) {

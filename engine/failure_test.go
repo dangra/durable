@@ -1,6 +1,6 @@
 // Failure attribution: kind and reason through the error chain, on the
 // forward and unwind paths, and error-text sanitizing.
-package durable_test
+package engine_test
 
 import (
 	"context"
@@ -13,6 +13,7 @@ import (
 	"github.com/dangra/durable"
 	"github.com/dangra/durable/bboltstore"
 	"github.com/dangra/durable/durabletest"
+	"github.com/dangra/durable/engine"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -25,11 +26,11 @@ func (e *classifiedError) Error() string                    { return e.msg }
 func (e *classifiedError) FailureKind() durable.FailureKind { return durable.FailureKindUser }
 func (e *classifiedError) FailureReason() string            { return "invalid-image" }
 
-func failingRun(t *testing.T, id durable.PipelineID, fail error) durable.Result {
+func failingRun(t *testing.T, id durable.PipelineID, fail error) engine.Result {
 	t.Helper()
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID: id,
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			stateless("s/v1", func(ctx context.Context, inv durable.Invocation) error {
 				return fail
 			}),
@@ -78,9 +79,9 @@ func TestFailureAttribution(t *testing.T) {
 }
 
 func TestUnwindFailureAttribution(t *testing.T) {
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "attr-unwind",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			{
 				ID:     "a/v1",
 				Unwind: true,
@@ -116,9 +117,9 @@ func TestUnwindFailureAttribution(t *testing.T) {
 // carry on, through both the retry and the permanent-failure paths.
 func TestInvalidUTF8ErrorsDoNotWedge(t *testing.T) {
 	raw := "raw \xff\xfe bytes"
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "utf8",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			stateless("flaky/v1", func(ctx context.Context, inv durable.Invocation) error {
 				if inv.Attempt() == 1 {
 					return errors.New(raw) // ordinary error -> LastError

@@ -1,6 +1,6 @@
 // Cancellation: scheduled, in-flight, and terminal runs, and the race
 // between an organic failure and a cancel request.
-package durable_test
+package engine_test
 
 import (
 	"context"
@@ -12,13 +12,14 @@ import (
 
 	"github.com/dangra/durable"
 	"github.com/dangra/durable/durabletest"
+	"github.com/dangra/durable/engine"
 	"google.golang.org/protobuf/proto"
 )
 
 func TestCancelScheduledRunFreesSlot(t *testing.T) {
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "cancel-scheduled",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			stateless("s/v1", func(ctx context.Context, inv durable.Invocation) error {
 				t.Error("step of canceled scheduled run executed")
 				return nil
@@ -28,7 +29,7 @@ func TestCancelScheduledRunFreesSlot(t *testing.T) {
 	_, pipes := startEngine(t, durabletest.NewMemStore(), def)
 	p := pipes[0]
 
-	run, _, err := p.Schedule(context.Background(), "r", nil, durable.StartAfter(time.Hour))
+	run, _, err := p.Schedule(context.Background(), "r", nil, engine.StartAfter(time.Hour))
 	if err != nil {
 		t.Fatalf("Schedule: %v", err)
 	}
@@ -46,7 +47,7 @@ func TestCancelScheduledRunFreesSlot(t *testing.T) {
 		t.Fatalf("RootFailure = %+v", res.RootFailure)
 	}
 	// The slot is free again immediately.
-	if _, created, err := p.Schedule(context.Background(), "r", nil, durable.StartAfter(time.Hour)); err != nil || !created {
+	if _, created, err := p.Schedule(context.Background(), "r", nil, engine.StartAfter(time.Hour)); err != nil || !created {
 		t.Fatalf("post-cancel Schedule = created=%v err=%v", created, err)
 	}
 }
@@ -66,9 +67,9 @@ func TestCancelPreemptsAndUnwinds(t *testing.T) {
 		return nil
 	}
 	blocked := make(chan struct{})
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "cancel-midflight",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			{
 				ID:     "a/v1",
 				Unwind: true,
@@ -136,9 +137,9 @@ func TestCancelPreemptsAndUnwinds(t *testing.T) {
 }
 
 func TestCancelTerminalRun(t *testing.T) {
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "cancel-terminal",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			stateless("s/v1", func(context.Context, durable.Invocation) error { return nil }),
 		},
 	})
@@ -147,16 +148,16 @@ func TestCancelTerminalRun(t *testing.T) {
 	if res, err := run.Wait(context.Background()); err != nil || !res.Succeeded() {
 		t.Fatalf("Wait = %+v, %v", res, err)
 	}
-	if err := run.Cancel(context.Background(), "too late"); !errors.Is(err, durable.ErrRunTerminal) {
+	if err := run.Cancel(context.Background(), "too late"); !errors.Is(err, engine.ErrRunTerminal) {
 		t.Fatalf("Cancel = %v, want ErrRunTerminal", err)
 	}
 }
 
 func TestOrganicFailureBeatsCancel(t *testing.T) {
 	blocked := make(chan struct{})
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "cancel-organic",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			stateless("s/v1", func(ctx context.Context, inv durable.Invocation) error {
 				if inv.CancelRequested() {
 					return durable.Fail(errors.New("broken anyway"))

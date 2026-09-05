@@ -1,6 +1,6 @@
 // Middleware: ordering, phases, escalation to a permanent failure, and
 // context propagation into handlers.
-package durable_test
+package engine_test
 
 import (
 	"context"
@@ -12,6 +12,7 @@ import (
 
 	"github.com/dangra/durable"
 	"github.com/dangra/durable/durabletest"
+	"github.com/dangra/durable/engine"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -35,10 +36,10 @@ func TestMiddlewareOrderingAndPhases(t *testing.T) {
 	}
 
 	store := durabletest.NewMemStore()
-	e := durable.NewEngine(store, fastRetry, durable.WithMiddleware(mw("outer"), mw("inner")))
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	e := engine.New(store, fastRetry, engine.WithMiddleware(mw("outer"), mw("inner")))
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "mw",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			{
 				ID:     "a/v1",
 				Unwind: true,
@@ -103,16 +104,16 @@ func TestMiddlewareCanEscalateToFail(t *testing.T) {
 		}
 	}
 	var attempts atomic.Uint64
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "escalating",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			stateless("s/v1", func(ctx context.Context, inv durable.Invocation) error {
 				attempts.Store(inv.Attempt())
 				return errors.New("would ordinarily retry")
 			}),
 		},
 	})
-	e := durable.NewEngine(durabletest.NewMemStore(), fastRetry, durable.WithMiddleware(escalate))
+	e := engine.New(durabletest.NewMemStore(), fastRetry, engine.WithMiddleware(escalate))
 	p, _ := def.Bind(e)
 	if err := e.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -137,9 +138,9 @@ func TestMiddlewareContextReachesHandlers(t *testing.T) {
 			return next(context.WithValue(ctx, ctxKey{}, "present"), inv)
 		}
 	}
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "ctxpipe",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			stateless("s/v1", func(ctx context.Context, inv durable.Invocation) error {
 				if ctx.Value(ctxKey{}) != "present" {
 					return durable.Fail(errors.New("middleware context value missing"))
@@ -148,7 +149,7 @@ func TestMiddlewareContextReachesHandlers(t *testing.T) {
 			}),
 		},
 	})
-	e := durable.NewEngine(durabletest.NewMemStore(), fastRetry, durable.WithMiddleware(inject))
+	e := engine.New(durabletest.NewMemStore(), fastRetry, engine.WithMiddleware(inject))
 	p, _ := def.Bind(e)
 	if err := e.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)

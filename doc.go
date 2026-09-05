@@ -12,29 +12,16 @@
 // forward and unwind frontiers. See the spec/ directory for the full
 // specification.
 //
-// # The API in five groups
+// # The handler contract
 //
-// Alphabetical godoc flattens this package; it reads better in its five
+// This package is what handler code programs against, and nothing else:
+// the types a step handler receives, the ways it can resolve, and the
+// vocabulary shared with the rest of the module. Running an engine,
+// scheduling Runs, and declaring pipelines by hand live in the engine
+// package; handler files import only this one.
+//
+// Alphabetical godoc flattens the package; it reads better in three
 // working groups:
-//
-// Declaring pipelines. Generated code (protoc-gen-durable over
-// durable.v1 proto options) is the primary path; NewDefinition with
-// DefinitionConfig and StepConfig is the hand-rolled equivalent the
-// generated code itself uses. StepRef and StateStepRef are the step
-// references generated packages export (StepIdentifier is the interface
-// both satisfy), LookupState and StateSource power typed state reads,
-// and ReduceView is what a Reducer folds.
-//
-// Running an engine. NewEngine over a storedriver implementation, the
-// With* Options, Start, Stop (graceful with WithDrainTimeout), and
-// Stats.
-//
-// Scheduling and watching runs. Pipeline.Schedule with ScheduleOptions
-// (WithAnnotations, StartAt, StartAfter) or an engine-wide
-// ScheduleAnnotator; the Run handle (Wait, Cancel, Status); Result,
-// Status, RunState, Outcome, and the failure records; the identity
-// types; ScheduleConflictError, PipelineMismatchError, InvalidRunError,
-// and the Err* sentinels.
 //
 // Writing handlers. Invocation carries input, prior state, and attempt
 // metadata; it is an interface the engine implements, and
@@ -43,14 +30,23 @@
 // returned ctx.Err() included), Fail with FailOptions and
 // kind/reason attribution, or AwaitRun, AwaitAll, and AwaitAny to park on
 // other Runs, bounded by WithAwaitTimeout (the woken attempt reads the
-// park back through Awaited).
-// Middleware wraps every attempt (AwaitRequest and FailureInfo classify
-// results; PreemptedError and ErrEngineStopping name why an attempt ctx
-// died); FailFastOnCancel with FailFastExcept opts preemption-safe
-// pipelines out of cooperative cancellation.
+// park back through Awaited). Unwind handlers additionally receive the
+// Failure being unwound.
 //
-// Observing. Logging below; observe holds the Observer event surface,
-// contrib/durableotel the packaged OpenTelemetry adapter.
+// Middleware. Handler and Middleware are the net/http-shaped operation
+// layer every attempt passes through (installed with
+// engine.WithMiddleware). AwaitRequest, AwaitTimeout, FailureInfo,
+// FailureCause, and FailureReason classify a handler's return the way
+// the engine will; PreemptedError and ErrEngineStopping name why an
+// attempt ctx died; FailFastOnCancel with FailFastExcept opts
+// preemption-safe pipelines out of cooperative cancellation.
+//
+// Vocabulary. StepRef and StateStepRef are the step references generated
+// packages export (StepIdentifier is the interface both satisfy),
+// LookupState and StateSource power typed state reads, and ReduceView is
+// what a Reducer folds. The identity, phase, outcome, park, and
+// failure-record types are aliases of the kernel package's, so a
+// durable.RunID is a kernel.RunID wherever it appears.
 //
 // # Logging
 //
@@ -90,10 +86,13 @@
 //
 // # Package map
 //
-// This package is the whole user API: declaring pipelines (generated
-// code plus NewDefinition for hand-rolled ones), running an engine, and
-// writing handlers. The rest of the module serves narrower audiences:
+// This package is the handler contract. The rest of the module serves
+// the other audiences:
 //
+//   - engine runs pipelines: New, the With* options, Start and Stop,
+//     binding generated definitions (and NewDefinition for hand-rolled
+//     ones), Pipeline.Schedule, the Run handle, Result and Status. It is
+//     the wiring side of an application.
 //   - kernel is the shared vocabulary — identities, phases, outcomes,
 //     parks, failure records — that every other package builds on. This
 //     package aliases all of it, so user code never imports kernel.

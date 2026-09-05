@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dangra/durable"
+	"github.com/dangra/durable/engine"
 )
 
 func discardLogger() *slog.Logger { return slog.New(slog.DiscardHandler) }
@@ -70,13 +70,13 @@ func BenchmarkRetryStorm(b *testing.B) {
 
 type dualEnv struct {
 	env         *env
-	stormPipe   *durable.Pipeline
-	healthyPipe *durable.Pipeline
+	stormPipe   *engine.Pipeline
+	healthyPipe *engine.Pipeline
 }
 
-func newStorePair(b *testing.B, storm, healthy *durable.Definition) (*dualEnv, error) {
+func newStorePair(b *testing.B, storm, healthy *engine.Definition) (*dualEnv, error) {
 	v := newEnv(b, storm)
-	healthyPipe, err := healthy.Bind(v.engine)
+	healthyPipe, err := healthy.Bind(v.eng)
 	if err != nil {
 		return nil, err
 	}

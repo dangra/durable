@@ -1,4 +1,6 @@
-package durable
+package engine
+
+import "github.com/dangra/durable"
 
 import "time"
 
@@ -52,35 +54,35 @@ func (s RunState) String() string {
 // Result is the terminal result of a Run. An invalid nonterminal Run does
 // not produce a Result.
 type Result struct {
-	Outcome Outcome
+	Outcome durable.Outcome
 
-	RootFailure    *RootFailure
-	UnwindFailures []UnwindFailure
+	RootFailure    *durable.RootFailure
+	UnwindFailures []durable.UnwindFailure
 }
 
-func (r Result) Succeeded() bool { return r.Outcome == OutcomeSuccess }
+func (r Result) Succeeded() bool { return r.Outcome == durable.OutcomeSuccess }
 
-func (r Result) Failed() bool { return r.Outcome == OutcomeFailure }
+func (r Result) Failed() bool { return r.Outcome == durable.OutcomeFailure }
 
 // Canceled reports whether the Run terminated because of a cancellation
 // request. A canceled Run is a failed Run whose RootFailure carries
 // FailureKindCanceled; a Run whose operation permanently failed on its own
 // while a cancellation was pending reports Failed but not Canceled.
 func (r Result) Canceled() bool {
-	return r.RootFailure != nil && r.RootFailure.Kind == FailureKindCanceled
+	return r.RootFailure != nil && r.RootFailure.Kind == durable.FailureKindCanceled
 }
 
 // Status is a point-in-time observation of a Run.
 type Status struct {
-	PipelineID PipelineID
-	ResourceID ResourceID
-	RunID      RunID
+	PipelineID durable.PipelineID
+	ResourceID durable.ResourceID
+	RunID      durable.RunID
 
-	Phase Phase
+	Phase durable.Phase
 	State RunState
 
 	// StepID and Attempt describe the current operation, when one exists.
-	StepID  StepID
+	StepID  durable.StepID
 	Attempt uint64
 
 	NextAttemptAt time.Time
@@ -93,7 +95,7 @@ type Status struct {
 	LastErrorAt time.Time
 
 	// Outcome is set only for terminal Runs.
-	Outcome *Outcome
+	Outcome *durable.Outcome
 
 	// InvalidReason is set when State is RunStateInvalid.
 	InvalidReason string
@@ -107,8 +109,8 @@ type Status struct {
 	// State is RunStateAwaiting: the Runs whose termination this Run is
 	// parked on, how the park resolves, and when it expires (zero for a
 	// park without WithAwaitTimeout).
-	AwaitingRunIDs []RunID
-	AwaitMode      AwaitMode
+	AwaitingRunIDs []durable.RunID
+	AwaitMode      durable.AwaitMode
 	AwaitDeadline  time.Time
 
 	// ThrottledClass is set when State is RunStateThrottled: the

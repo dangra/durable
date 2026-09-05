@@ -6,10 +6,10 @@
 // The complete integration is declared once, at engine construction:
 //
 //	obs, _ := durableotel.NewObserver()
-//	engine := durable.NewEngine(store,
-//		durable.WithMiddleware(durableotel.Middleware()),
-//		durable.WithObserver(obs),
-//		durable.WithScheduleAnnotator(durableotel.Annotator()))
+//	engine := engine.New(store,
+//		engine.WithMiddleware(durableotel.Middleware()),
+//		engine.WithObserver(obs),
+//		engine.WithScheduleAnnotator(durableotel.Annotator()))
 //	// ... and per request, nothing to remember:
 //	pipe.Schedule(ctx, resource, input)
 //
@@ -136,7 +136,7 @@ func WithPropagator(p propagation.TextMapPropagator) Option {
 //
 //	pipe.Schedule(reqCtx, res, in, durableotel.WithTraceContext(reqCtx,
 //		durableotel.WithBaggage()))
-//	durable.WithMiddleware(durableotel.Middleware(durableotel.WithBaggage()))
+//	engine.WithMiddleware(durableotel.Middleware(durableotel.WithBaggage()))
 //
 // Handlers read members with baggage.FromContext(ctx); WithSpanBaggage
 // surfaces them on attempt spans. Baggage rides the Run and every
@@ -175,7 +175,7 @@ func WithSpanBaggage(keys ...string) Option {
 // the attribute name. It surfaces domain identity persisted at Schedule
 // time (a machine ID, a tenant) on every span of the Run:
 //
-//	pipe.Schedule(ctx, res, input, durable.WithAnnotations(
+//	pipe.Schedule(ctx, res, input, engine.WithAnnotations(
 //		map[string]string{"machine.id": id}))
 //	durableotel.Middleware(durableotel.WithSpanAnnotations("machine.id"))
 //

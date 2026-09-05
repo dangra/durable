@@ -1,7 +1,7 @@
 // The forward path of one run: success and state commit, ordinary-error
 // retries, panics, permanent failure and unwind, and the last-error
 // surface while retrying.
-package durable_test
+package engine_test
 
 import (
 	"context"
@@ -15,15 +15,16 @@ import (
 
 	"github.com/dangra/durable"
 	"github.com/dangra/durable/durabletest"
+	"github.com/dangra/durable/engine"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
 func TestForwardSuccessWithReducer(t *testing.T) {
 	selectRef := refFor("select-host/v1")
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "provision",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			stateless("validate/v1", func(ctx context.Context, inv durable.Invocation) error {
 				in, ok := inv.InputMessage().(*wrapperspb.StringValue)
 				if !ok || in.GetValue() != "ord" {
@@ -77,9 +78,9 @@ func TestForwardSuccessWithReducer(t *testing.T) {
 
 func TestRetryUntilSuccess(t *testing.T) {
 	var attempts atomic.Uint64
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "retrying",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			stateless("flaky/v1", func(ctx context.Context, inv durable.Invocation) error {
 				attempts.Store(inv.Attempt())
 				if inv.Attempt() < 3 {
@@ -104,9 +105,9 @@ func TestRetryUntilSuccess(t *testing.T) {
 }
 
 func TestHandlerPanicIsRetried(t *testing.T) {
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "panicky",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			stateless("boom/v1", func(ctx context.Context, inv durable.Invocation) error {
 				if inv.Attempt() == 1 {
 					panic("kaboom")
@@ -129,9 +130,9 @@ func TestPermanentFailureUnwinds(t *testing.T) {
 	var unwoundSteps []durable.StepID
 	var failureSeenByA durable.Failure
 
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "failing",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			{
 				ID:     "a/v1",
 				Unwind: true,
@@ -210,9 +211,9 @@ func TestPermanentFailureUnwinds(t *testing.T) {
 
 func TestLastErrorSurfacedDuringRetries(t *testing.T) {
 	release := make(chan struct{})
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "lasterr",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			stateless("s/v1", func(ctx context.Context, inv durable.Invocation) error {
 				select {
 				case <-release:

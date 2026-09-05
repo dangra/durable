@@ -11,6 +11,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/dangra/durable"
+	"github.com/dangra/durable/engine"
 )
 
 // BenchmarkAwaitFanIn is the release-train shape inverted from
@@ -31,9 +32,9 @@ func BenchmarkAwaitFanIn(b *testing.B) {
 		ch, _ := gates.LoadOrStore(r, make(chan struct{}))
 		return ch.(chan struct{})
 	}
-	child := durable.NewDefinition(durable.DefinitionConfig{
+	child := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "fanin-child",
-		Steps: []durable.StepConfig{{
+		Steps: []engine.StepConfig{{
 			ID: "fanin-child-hold/v1",
 			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				entered.Add(1)
@@ -46,11 +47,11 @@ func BenchmarkAwaitFanIn(b *testing.B) {
 			},
 		}},
 	})
-	var childPipe *durable.Pipeline
+	var childPipe *engine.Pipeline
 	var iter atomic.Int64
-	parent := durable.NewDefinition(durable.DefinitionConfig{
+	parent := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "fanin-parent",
-		Steps: []durable.StepConfig{{
+		Steps: []engine.StepConfig{{
 			ID: "fanin-parent-ship/v1",
 			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				if w, ok := inv.Awaited(); ok {
@@ -74,9 +75,9 @@ func BenchmarkAwaitFanIn(b *testing.B) {
 	})
 	// Every child holds a worker slot while blocked; size the pool for
 	// the whole population plus the parent and its wakes.
-	v := newEnv(b, parent, durable.WithConcurrency(children+16))
+	v := newEnv(b, parent, engine.WithConcurrency(children+16))
 	parentPipe := v.pipe
-	cp, err := child.Bind(v.engine)
+	cp, err := child.Bind(v.eng)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -99,7 +100,7 @@ func BenchmarkAwaitFanIn(b *testing.B) {
 			}
 			time.Sleep(100 * time.Microsecond)
 		}
-		if err := waitAllAwaiting([]durable.Run{pRun}); err != nil {
+		if err := waitAllAwaiting([]engine.Run{pRun}); err != nil {
 			b.Fatal(err)
 		}
 

@@ -16,24 +16,25 @@ import (
 	"github.com/dangra/durable"
 	"github.com/dangra/durable/contrib/durableotel"
 	"github.com/dangra/durable/durabletest"
+	"github.com/dangra/durable/engine"
 )
 
-var fastRetry = durable.WithRetryPolicy(durable.RetryPolicy{
+var fastRetry = engine.WithRetryPolicy(engine.RetryPolicy{
 	Initial: time.Millisecond, Max: 5 * time.Millisecond, Multiplier: 2,
 })
 
-func quietLogger() durable.Option {
-	return durable.WithLogger(slog.New(slog.DiscardHandler))
+func quietLogger() engine.Option {
+	return engine.WithLogger(slog.New(slog.DiscardHandler))
 }
 
 // sagaDef is a two-step pipeline exercising every span shape: a
 // retrying step with an unwind, then a permanent failure that triggers
 // the unwind. Its attempts: prepare forward 1 (retry), prepare forward
 // 2, explode forward 1 (permanent), prepare unwind 1.
-func sagaDef() *durable.Definition {
-	return durable.NewDefinition(durable.DefinitionConfig{
+func sagaDef() *engine.Definition {
+	return engine.NewDefinition(engine.DefinitionConfig{
 		ID: "saga",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			{
 				ID:     "prepare/v1",
 				Unwind: true,
@@ -60,18 +61,18 @@ func sagaDef() *durable.Definition {
 
 // runSaga executes sagaDef on a fresh engine wired with the given extra
 // options and returns the schedule-side origin span context.
-func runSaga(t *testing.T, schedule []durable.ScheduleOption, opts ...durable.Option) {
+func runSaga(t *testing.T, schedule []engine.ScheduleOption, opts ...engine.Option) {
 	t.Helper()
-	engine := durable.NewEngine(durabletest.NewMemStore(),
-		append([]durable.Option{fastRetry, quietLogger()}, opts...)...)
-	pipe, err := sagaDef().Bind(engine)
+	eng := engine.New(durabletest.NewMemStore(),
+		append([]engine.Option{fastRetry, quietLogger()}, opts...)...)
+	pipe, err := sagaDef().Bind(eng)
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
 	}
-	if err := engine.Start(t.Context()); err != nil {
+	if err := eng.Start(t.Context()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	defer engine.Stop(t.Context())
+	defer eng.Stop(t.Context())
 
 	run, _, err := pipe.Schedule(t.Context(), "res-1", nil, schedule...)
 	if err != nil {
@@ -113,8 +114,8 @@ func TestMiddlewareSpansLinkToOrigin(t *testing.T) {
 	reqCtx, requestSpan := tracer.Start(t.Context(), "POST /saga")
 	origin := requestSpan.SpanContext()
 	runSaga(t,
-		[]durable.ScheduleOption{durableotel.WithTraceContext(reqCtx)},
-		durable.WithMiddleware(durableotel.Middleware(durableotel.WithTracerProvider(tp))))
+		[]engine.ScheduleOption{durableotel.WithTraceContext(reqCtx)},
+		engine.WithMiddleware(durableotel.Middleware(durableotel.WithTracerProvider(tp))))
 	requestSpan.End()
 
 	// Span names are low-cardinality "<step> <phase>"; the attempt
@@ -193,7 +194,7 @@ func TestMiddlewareWithoutOrigin(t *testing.T) {
 	defer tp.Shutdown(t.Context())
 
 	runSaga(t, nil,
-		durable.WithMiddleware(durableotel.Middleware(durableotel.WithTracerProvider(tp))))
+		engine.WithMiddleware(durableotel.Middleware(durableotel.WithTracerProvider(tp))))
 
 	spans := recorder.Ended()
 	if len(spans) != 4 {
@@ -219,9 +220,9 @@ func TestMiddlewareAwaitIsNotAnError(t *testing.T) {
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
 	defer tp.Shutdown(t.Context())
 
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "awaiter",
-		Steps: []durable.StepConfig{{
+		Steps: []engine.StepConfig{{
 			ID: "wait/v1",
 			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				if _, woken := inv.AwaitedRunID(); !woken {
@@ -231,16 +232,16 @@ func TestMiddlewareAwaitIsNotAnError(t *testing.T) {
 			},
 		}},
 	})
-	engine := durable.NewEngine(durabletest.NewMemStore(), fastRetry, quietLogger(),
-		durable.WithMiddleware(durableotel.Middleware(durableotel.WithTracerProvider(tp))))
-	pipe, err := def.Bind(engine)
+	eng := engine.New(durabletest.NewMemStore(), fastRetry, quietLogger(),
+		engine.WithMiddleware(durableotel.Middleware(durableotel.WithTracerProvider(tp))))
+	pipe, err := def.Bind(eng)
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
 	}
-	if err := engine.Start(t.Context()); err != nil {
+	if err := eng.Start(t.Context()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	defer engine.Stop(t.Context())
+	defer eng.Stop(t.Context())
 
 	run, _, err := pipe.Schedule(t.Context(), "res-1", nil)
 	if err != nil {
@@ -281,9 +282,9 @@ func TestMiddlewarePanicRecordedAndRethrown(t *testing.T) {
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
 	defer tp.Shutdown(t.Context())
 
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "panicky",
-		Steps: []durable.StepConfig{{
+		Steps: []engine.StepConfig{{
 			ID: "boom/v1",
 			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				if inv.Attempt() == 1 {
@@ -293,22 +294,22 @@ func TestMiddlewarePanicRecordedAndRethrown(t *testing.T) {
 			},
 		}},
 	})
-	engine := durable.NewEngine(durabletest.NewMemStore(), fastRetry, quietLogger(),
-		durable.WithMiddleware(durableotel.Middleware(durableotel.WithTracerProvider(tp))))
-	pipe, err := def.Bind(engine)
+	eng := engine.New(durabletest.NewMemStore(), fastRetry, quietLogger(),
+		engine.WithMiddleware(durableotel.Middleware(durableotel.WithTracerProvider(tp))))
+	pipe, err := def.Bind(eng)
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
 	}
-	if err := engine.Start(t.Context()); err != nil {
+	if err := eng.Start(t.Context()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	defer engine.Stop(t.Context())
+	defer eng.Stop(t.Context())
 	run, _, err := pipe.Schedule(t.Context(), "res-1", nil)
 	if err != nil {
 		t.Fatalf("Schedule: %v", err)
 	}
 	if res, err := run.Wait(t.Context()); err != nil || res.Outcome != durable.OutcomeSuccess {
-		t.Fatalf("Wait = %v, %v; want success — the panic must reach the engine as a retryable", res, err)
+		t.Fatalf("Wait = %v, %v; want success — the panic must reach the eng as a retryable", res, err)
 	}
 
 	panicked := 0
@@ -349,11 +350,11 @@ func TestWithSpanAnnotations(t *testing.T) {
 	defer tp.Shutdown(t.Context())
 
 	runSaga(t,
-		[]durable.ScheduleOption{durable.WithAnnotations(map[string]string{
+		[]engine.ScheduleOption{engine.WithAnnotations(map[string]string{
 			"machine.id": "m-42",
 			"tenant":     "acme",
 		})},
-		durable.WithMiddleware(durableotel.Middleware(
+		engine.WithMiddleware(durableotel.Middleware(
 			durableotel.WithTracerProvider(tp),
 			durableotel.WithSpanAnnotations("machine.id", "absent-key"))))
 
@@ -387,8 +388,8 @@ func TestWithTraceContextRoundTrip(t *testing.T) {
 	engineOpt := durableotel.WithTraceContext(ctx)
 	// The ScheduleOption is opaque; observe its effect through a real
 	// schedule.
-	engine := durable.NewEngine(durabletest.NewMemStore(), fastRetry, quietLogger(),
-		durable.WithMiddleware(func(next durable.Handler) durable.Handler {
+	eng := engine.New(durabletest.NewMemStore(), fastRetry, quietLogger(),
+		engine.WithMiddleware(func(next durable.Handler) durable.Handler {
 			return func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				for k, v := range inv.Annotations() {
 					got[k] = v
@@ -396,23 +397,23 @@ func TestWithTraceContextRoundTrip(t *testing.T) {
 				return next(ctx, inv)
 			}
 		}))
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "probe",
-		Steps: []durable.StepConfig{{
+		Steps: []engine.StepConfig{{
 			ID: "noop/v1",
 			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				return nil, nil
 			},
 		}},
 	})
-	pipe, err := def.Bind(engine)
+	pipe, err := def.Bind(eng)
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
 	}
-	if err := engine.Start(t.Context()); err != nil {
+	if err := eng.Start(t.Context()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	defer engine.Stop(t.Context())
+	defer eng.Stop(t.Context())
 	run, _, err := pipe.Schedule(t.Context(), "res-1", nil, engineOpt)
 	if err != nil {
 		t.Fatalf("Schedule: %v", err)

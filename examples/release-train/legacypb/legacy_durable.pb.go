@@ -8,6 +8,7 @@ package legacypb
 import (
 	context "context"
 	durable "github.com/dangra/durable"
+	engine "github.com/dangra/durable/engine"
 	proto "google.golang.org/protobuf/proto"
 	sync "sync"
 )
@@ -234,7 +235,7 @@ func (x *DeployService) State[T proto.Message](step durable.StateStepRef[T]) (T,
 
 // DeployServiceDefinition is the unbound pipeline definition.
 type DeployServiceDefinition struct {
-	def *durable.Definition
+	def *engine.Definition
 }
 
 // NewDeployService assembles the "deploy-service" pipeline definition
@@ -245,7 +246,7 @@ func NewDeployService(
 	shiftTraffic ShiftTrafficHandler,
 	reduce DeployServiceReducer,
 ) *DeployServiceDefinition {
-	return &DeployServiceDefinition{def: durable.NewDefinition(durable.DefinitionConfig{
+	return &DeployServiceDefinition{def: engine.NewDefinition(engine.DefinitionConfig{
 		ID:       "deploy-service",
 		NewInput: func() proto.Message { return &DeployServiceInput{} },
 		Reduce: func(view durable.ReduceView) proto.Message {
@@ -254,7 +255,7 @@ func NewDeployService(
 			defer deployServiceViews.Delete(x)
 			return reduce(x)
 		},
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			{
 				ID:       "provision-env/v1",
 				Unwind:   true,
@@ -302,7 +303,7 @@ func NewDeployService(
 
 // Bind registers the definition with an engine. It is allowed only before
 // Engine.Start.
-func (d *DeployServiceDefinition) Bind(e *durable.Engine) (*DeployServicePipeline, error) {
+func (d *DeployServiceDefinition) Bind(e *engine.Engine) (*DeployServicePipeline, error) {
 	p, err := d.def.Bind(e)
 	if err != nil {
 		return nil, err
@@ -312,11 +313,11 @@ func (d *DeployServiceDefinition) Bind(e *durable.Engine) (*DeployServicePipelin
 
 // DeployServicePipeline is the definition bound to an engine.
 type DeployServicePipeline struct {
-	pipeline *durable.Pipeline
+	pipeline *engine.Pipeline
 }
 
 // Schedule creates a run for the resource slot or returns the active one.
-func (p *DeployServicePipeline) Schedule(ctx context.Context, resource durable.ResourceID, input *DeployServiceInput, opts ...durable.ScheduleOption) (DeployServiceRun, bool, error) {
+func (p *DeployServicePipeline) Schedule(ctx context.Context, resource durable.ResourceID, input *DeployServiceInput, opts ...engine.ScheduleOption) (DeployServiceRun, bool, error) {
 	run, created, err := p.pipeline.Schedule(ctx, resource, input, opts...)
 	if err != nil {
 		return DeployServiceRun{}, created, err
@@ -373,12 +374,12 @@ func (p *DeployServicePipeline) Runs(ctx context.Context, resource durable.Resou
 
 // DeployServiceRun is a typed handle to one run of the pipeline.
 type DeployServiceRun struct {
-	run durable.Run
+	run engine.Run
 }
 
 func (r DeployServiceRun) ID() durable.RunID { return r.run.ID() }
 
-func (r DeployServiceRun) Status(ctx context.Context) (durable.Status, error) {
+func (r DeployServiceRun) Status(ctx context.Context) (engine.Status, error) {
 	return r.run.Status(ctx)
 }
 
@@ -426,7 +427,7 @@ func (r DeployServiceRun) Wait(ctx context.Context) (DeployServiceResult, error)
 
 // DeployServiceResult is the typed terminal result of a run.
 type DeployServiceResult struct {
-	durable.Result
+	engine.Result
 	output *DeployServiceOutput
 }
 

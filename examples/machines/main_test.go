@@ -8,27 +8,28 @@ import (
 
 	"github.com/dangra/durable"
 	"github.com/dangra/durable/durabletest"
+	"github.com/dangra/durable/engine"
 	"github.com/dangra/durable/examples/machines/machinespb"
 )
 
 func startProvision(t *testing.T, c *cloud) *machinespb.ProvisionMachinePipeline {
 	t.Helper()
-	engine := durable.NewEngine(durabletest.NewMemStore(), durable.WithRetryPolicy(durable.RetryPolicy{
+	eng := engine.New(durabletest.NewMemStore(), engine.WithRetryPolicy(engine.RetryPolicy{
 		Initial:    time.Millisecond,
 		Max:        5 * time.Millisecond,
 		Multiplier: 2,
 	}))
-	provision, err := newProvisionMachine(c).Bind(engine)
+	provision, err := newProvisionMachine(c).Bind(eng)
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
 	}
-	if err := engine.Start(context.Background()); err != nil {
+	if err := eng.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		_ = engine.Stop(ctx)
+		_ = eng.Stop(ctx)
 	})
 	return provision
 }
@@ -141,15 +142,15 @@ func TestFuncAdapters(t *testing.T) {
 		reduceProvisionMachine,
 	)
 
-	engine := durable.NewEngine(durabletest.NewMemStore())
-	provision, err := def.Bind(engine)
+	eng := engine.New(durabletest.NewMemStore())
+	provision, err := def.Bind(eng)
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
 	}
-	if err := engine.Start(context.Background()); err != nil {
+	if err := eng.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	defer engine.Stop(context.Background())
+	defer eng.Stop(context.Background())
 
 	run, _, err := provision.Schedule(context.Background(), "machine-4", &machinespb.ProvisionMachineInput{
 		Region:   "ord",
@@ -171,19 +172,19 @@ func TestExclusionGroup(t *testing.T) {
 	c := newCloud()
 	c.createGate = make(chan struct{})
 
-	engine := durable.NewEngine(durabletest.NewMemStore())
-	provision, err := newProvisionMachine(c).Bind(engine)
+	eng := engine.New(durabletest.NewMemStore())
+	provision, err := newProvisionMachine(c).Bind(eng)
 	if err != nil {
 		t.Fatalf("Bind provision: %v", err)
 	}
-	decommission, err := newDecommissionMachine(c).Bind(engine)
+	decommission, err := newDecommissionMachine(c).Bind(eng)
 	if err != nil {
 		t.Fatalf("Bind decommission: %v", err)
 	}
-	if err := engine.Start(context.Background()); err != nil {
+	if err := eng.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	defer engine.Stop(context.Background())
+	defer eng.Stop(context.Background())
 
 	run, _, err := provision.Schedule(context.Background(), "machine-9", &machinespb.ProvisionMachineInput{
 		Region: "ord", MemoryMb: 1024,
@@ -194,7 +195,7 @@ func TestExclusionGroup(t *testing.T) {
 
 	// The group slot is held: decommission is rejected, naming the blocker.
 	_, created, err := decommission.Schedule(context.Background(), "machine-9")
-	var conflict *durable.ScheduleConflictError
+	var conflict *engine.ScheduleConflictError
 	if !errors.As(err, &conflict) || created {
 		t.Fatalf("decommission Schedule = created=%v err=%v, want ScheduleConflictError", created, err)
 	}

@@ -8,6 +8,7 @@ package orderspb
 import (
 	context "context"
 	durable "github.com/dangra/durable"
+	engine "github.com/dangra/durable/engine"
 	proto "google.golang.org/protobuf/proto"
 	sync "sync"
 )
@@ -230,7 +231,7 @@ func (x *FulfillOrder) State[T proto.Message](step durable.StateStepRef[T]) (T, 
 
 // FulfillOrderDefinition is the unbound pipeline definition.
 type FulfillOrderDefinition struct {
-	def *durable.Definition
+	def *engine.Definition
 }
 
 // NewFulfillOrder assembles the "fulfill-order" pipeline definition
@@ -241,7 +242,7 @@ func NewFulfillOrder(
 	ship ShipHandler,
 	reduce FulfillOrderReducer,
 ) *FulfillOrderDefinition {
-	return &FulfillOrderDefinition{def: durable.NewDefinition(durable.DefinitionConfig{
+	return &FulfillOrderDefinition{def: engine.NewDefinition(engine.DefinitionConfig{
 		ID:       "fulfill-order",
 		NewInput: func() proto.Message { return &FulfillOrderInput{} },
 		Reduce: func(view durable.ReduceView) proto.Message {
@@ -250,7 +251,7 @@ func NewFulfillOrder(
 			defer fulfillOrderViews.Delete(x)
 			return reduce(x)
 		},
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			{
 				ID:       "reserve-stock/v1",
 				Unwind:   true,
@@ -298,7 +299,7 @@ func NewFulfillOrder(
 
 // Bind registers the definition with an engine. It is allowed only before
 // Engine.Start.
-func (d *FulfillOrderDefinition) Bind(e *durable.Engine) (*FulfillOrderPipeline, error) {
+func (d *FulfillOrderDefinition) Bind(e *engine.Engine) (*FulfillOrderPipeline, error) {
 	p, err := d.def.Bind(e)
 	if err != nil {
 		return nil, err
@@ -308,11 +309,11 @@ func (d *FulfillOrderDefinition) Bind(e *durable.Engine) (*FulfillOrderPipeline,
 
 // FulfillOrderPipeline is the definition bound to an engine.
 type FulfillOrderPipeline struct {
-	pipeline *durable.Pipeline
+	pipeline *engine.Pipeline
 }
 
 // Schedule creates a run for the resource slot or returns the active one.
-func (p *FulfillOrderPipeline) Schedule(ctx context.Context, resource durable.ResourceID, input *FulfillOrderInput, opts ...durable.ScheduleOption) (FulfillOrderRun, bool, error) {
+func (p *FulfillOrderPipeline) Schedule(ctx context.Context, resource durable.ResourceID, input *FulfillOrderInput, opts ...engine.ScheduleOption) (FulfillOrderRun, bool, error) {
 	run, created, err := p.pipeline.Schedule(ctx, resource, input, opts...)
 	if err != nil {
 		return FulfillOrderRun{}, created, err
@@ -369,12 +370,12 @@ func (p *FulfillOrderPipeline) Runs(ctx context.Context, resource durable.Resour
 
 // FulfillOrderRun is a typed handle to one run of the pipeline.
 type FulfillOrderRun struct {
-	run durable.Run
+	run engine.Run
 }
 
 func (r FulfillOrderRun) ID() durable.RunID { return r.run.ID() }
 
-func (r FulfillOrderRun) Status(ctx context.Context) (durable.Status, error) {
+func (r FulfillOrderRun) Status(ctx context.Context) (engine.Status, error) {
 	return r.run.Status(ctx)
 }
 
@@ -422,7 +423,7 @@ func (r FulfillOrderRun) Wait(ctx context.Context) (FulfillOrderResult, error) {
 
 // FulfillOrderResult is the typed terminal result of a run.
 type FulfillOrderResult struct {
-	durable.Result
+	engine.Result
 	output *FulfillOrderOutput
 }
 

@@ -13,6 +13,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/dangra/durable"
+	"github.com/dangra/durable/engine"
 )
 
 func open(t *testing.T, path string) *Store {
@@ -92,19 +93,19 @@ func TestSlotSemantics(t *testing.T) {
 		t.Fatalf("ListRuns = %d, %v; want 2", len(runs), err)
 	}
 
-	if _, err := s.GetRun(ctx, "missing"); !errors.Is(err, durable.ErrRunNotFound) {
+	if _, err := s.GetRun(ctx, "missing"); !errors.Is(err, engine.ErrRunNotFound) {
 		t.Fatalf("GetRun(missing) = %v, want ErrRunNotFound", err)
 	}
 }
 
 func TestEngineSurvivesRestart(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "durable.db")
-	fastRetry := durable.WithRetryPolicy(durable.RetryPolicy{Initial: time.Millisecond, Max: 5 * time.Millisecond, Multiplier: 2})
+	fastRetry := engine.WithRetryPolicy(engine.RetryPolicy{Initial: time.Millisecond, Max: 5 * time.Millisecond, Multiplier: 2})
 
-	makeDef := func(succeed *bool) *durable.Definition {
-		return durable.NewDefinition(durable.DefinitionConfig{
+	makeDef := func(succeed *bool) *engine.Definition {
+		return engine.NewDefinition(engine.DefinitionConfig{
 			ID: "restartable",
-			Steps: []durable.StepConfig{{
+			Steps: []engine.StepConfig{{
 				ID: "only/v1",
 				Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 					if !*succeed {
@@ -118,7 +119,7 @@ func TestEngineSurvivesRestart(t *testing.T) {
 
 	// First process: the step keeps failing; stop with the run unresolved.
 	s1 := open(t, path)
-	e1 := durable.NewEngine(s1, fastRetry)
+	e1 := engine.New(s1, fastRetry)
 	no := false
 	p1, err := makeDef(&no).Bind(e1)
 	if err != nil {
@@ -154,7 +155,7 @@ func TestEngineSurvivesRestart(t *testing.T) {
 
 	// Second process: reopen the database, recover, and finish the run.
 	s2 := open(t, path)
-	e2 := durable.NewEngine(s2, fastRetry, durable.WithRecoveryBackoff(0))
+	e2 := engine.New(s2, fastRetry, engine.WithRecoveryBackoff(0))
 	yes := true
 	p2, err := makeDef(&yes).Bind(e2)
 	if err != nil {
@@ -184,7 +185,7 @@ func TestRequestCancel(t *testing.T) {
 		t.Fatalf("CreateRun = created=%v err=%v", created, err)
 	}
 
-	if _, err := s.RequestCancel(ctx, "missing", storedriver.CancelRequest{}); !errors.Is(err, durable.ErrRunNotFound) {
+	if _, err := s.RequestCancel(ctx, "missing", storedriver.CancelRequest{}); !errors.Is(err, engine.ErrRunNotFound) {
 		t.Fatalf("RequestCancel(missing) = %v, want ErrRunNotFound", err)
 	}
 
@@ -222,7 +223,7 @@ func TestRequestCancel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("terminal ApplyTransition: %v", err)
 	}
-	if _, err := s.RequestCancel(ctx, "run-c", storedriver.CancelRequest{}); !errors.Is(err, durable.ErrRunTerminal) {
+	if _, err := s.RequestCancel(ctx, "run-c", storedriver.CancelRequest{}); !errors.Is(err, engine.ErrRunTerminal) {
 		t.Fatalf("RequestCancel(terminal) = %v, want ErrRunTerminal", err)
 	}
 }
@@ -310,7 +311,7 @@ func TestReapTerminal(t *testing.T) {
 
 	// Old terminal runs are fully gone; every component is deleted.
 	for _, id := range []durable.RunID{"old-1", "old-2"} {
-		if _, err := s.GetRun(ctx, id); !errors.Is(err, durable.ErrRunNotFound) {
+		if _, err := s.GetRun(ctx, id); !errors.Is(err, engine.ErrRunNotFound) {
 			t.Fatalf("GetRun(%s) = %v, want ErrRunNotFound", id, err)
 		}
 	}

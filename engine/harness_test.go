@@ -1,7 +1,7 @@
 // Shared fixtures for the engine test suite: the fast retry policy,
 // engine construction and start, step and state shorthands, gated child
 // pipelines, and polling helpers.
-package durable_test
+package engine_test
 
 import (
 	"context"
@@ -12,12 +12,13 @@ import (
 	"time"
 
 	"github.com/dangra/durable"
+	"github.com/dangra/durable/engine"
 	"github.com/dangra/durable/storedriver"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
-var fastRetry = durable.WithRetryPolicy(durable.RetryPolicy{
+var fastRetry = engine.WithRetryPolicy(engine.RetryPolicy{
 	Initial:    time.Millisecond,
 	Max:        5 * time.Millisecond,
 	Multiplier: 2,
@@ -33,8 +34,8 @@ func refFor(id durable.StepID) durable.StateStepRef[*wrapperspb.StringValue] {
 	return durable.NewStateStepRef(id, newString)
 }
 
-func stateless(id durable.StepID, run func(context.Context, durable.Invocation) error) durable.StepConfig {
-	return durable.StepConfig{
+func stateless(id durable.StepID, run func(context.Context, durable.Invocation) error) engine.StepConfig {
+	return engine.StepConfig{
 		ID: id,
 		Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 			return nil, run(ctx, inv)
@@ -42,10 +43,10 @@ func stateless(id durable.StepID, run func(context.Context, durable.Invocation) 
 	}
 }
 
-func startEngine(t *testing.T, store storedriver.Store, defs ...*durable.Definition) (*durable.Engine, []*durable.Pipeline) {
+func startEngine(t *testing.T, store storedriver.Store, defs ...*engine.Definition) (*engine.Engine, []*engine.Pipeline) {
 	t.Helper()
-	e := durable.NewEngine(store, fastRetry, durable.WithRecoveryBackoff(0))
-	var pipes []*durable.Pipeline
+	e := engine.New(store, fastRetry, engine.WithRecoveryBackoff(0))
+	var pipes []*engine.Pipeline
 	for _, d := range defs {
 		p, err := d.Bind(e)
 		if err != nil {
@@ -83,7 +84,7 @@ func seedRun(t *testing.T, store storedriver.Store, pipeline durable.PipelineID,
 	return rec.RunID
 }
 
-func waitForState(t *testing.T, run durable.Run, want durable.RunState) durable.Status {
+func waitForState(t *testing.T, run engine.Run, want engine.RunState) engine.Status {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
@@ -101,10 +102,10 @@ func waitForState(t *testing.T, run durable.Run, want durable.RunState) durable.
 	}
 }
 
-func trivialChild(id durable.PipelineID) *durable.Definition {
-	return durable.NewDefinition(durable.DefinitionConfig{
+func trivialChild(id durable.PipelineID) *engine.Definition {
+	return engine.NewDefinition(engine.DefinitionConfig{
 		ID: id,
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			stateless("c/v1", func(ctx context.Context, inv durable.Invocation) error { return nil }),
 		},
 	})
@@ -135,10 +136,10 @@ func (g *gates) open(r durable.ResourceID) { close(g.get(r)) }
 
 // gatedChild completes when its resource's gate opens, and resolves
 // promptly on cancellation.
-func gatedChild(id durable.PipelineID, g *gates) *durable.Definition {
-	return durable.NewDefinition(durable.DefinitionConfig{
+func gatedChild(id durable.PipelineID, g *gates) *engine.Definition {
+	return engine.NewDefinition(engine.DefinitionConfig{
 		ID: id,
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			stateless("c/v1", func(ctx context.Context, inv durable.Invocation) error {
 				if inv.CancelRequested() {
 					return nil
@@ -156,7 +157,7 @@ func gatedChild(id durable.PipelineID, g *gates) *durable.Definition {
 
 // scheduleChildren schedules n children on deterministic resources, so a
 // retry of the scheduling attempt gets the same runs back.
-func scheduleChildren(ctx context.Context, pipe *durable.Pipeline, n int) ([]durable.RunID, error) {
+func scheduleChildren(ctx context.Context, pipe *engine.Pipeline, n int) ([]durable.RunID, error) {
 	ids := make([]durable.RunID, 0, n)
 	for i := 0; i < n; i++ {
 		run, _, err := pipe.Schedule(ctx, durable.ResourceID(fmt.Sprintf("child-%d", i)), nil)
@@ -168,7 +169,7 @@ func scheduleChildren(ctx context.Context, pipe *durable.Pipeline, n int) ([]dur
 	return ids, nil
 }
 
-func waitForAwaiting(t *testing.T, run durable.Run, want []durable.RunID) durable.Status {
+func waitForAwaiting(t *testing.T, run engine.Run, want []durable.RunID) engine.Status {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
@@ -176,7 +177,7 @@ func waitForAwaiting(t *testing.T, run durable.Run, want []durable.RunID) durabl
 		if err != nil {
 			t.Fatalf("Status: %v", err)
 		}
-		if st.State == durable.RunStateAwaiting && slices.Equal(st.AwaitingRunIDs, want) {
+		if st.State == engine.RunStateAwaiting && slices.Equal(st.AwaitingRunIDs, want) {
 			return st
 		}
 		if time.Now().After(deadline) {

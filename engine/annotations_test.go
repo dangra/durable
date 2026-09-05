@@ -1,4 +1,4 @@
-package durable_test
+package engine_test
 
 import (
 	"context"
@@ -11,6 +11,7 @@ import (
 
 	"github.com/dangra/durable"
 	"github.com/dangra/durable/durabletest"
+	"github.com/dangra/durable/engine"
 	"github.com/dangra/durable/observe"
 )
 
@@ -36,9 +37,9 @@ func TestTracePropagationPattern(t *testing.T) {
 		}
 	}
 
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "traced",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			{
 				ID:     "prepare/v1",
 				Unwind: true,
@@ -65,10 +66,10 @@ func TestTracePropagationPattern(t *testing.T) {
 		RunScheduled: func(ev observe.RunEvent) { mu.Lock(); scheduled = ev; mu.Unlock() },
 		RunTerminal:  func(ev observe.RunTerminalEvent) { mu.Lock(); terminal = ev; mu.Unlock() },
 	}
-	boot := func() (*durable.Engine, *durable.Pipeline) {
-		e := durable.NewEngine(store, fastRetry, durable.WithRecoveryBackoff(0),
-			durable.WithLogger(discardTestLogger()),
-			durable.WithMiddleware(tracing), durable.WithObserver(obs))
+	boot := func() (*engine.Engine, *engine.Pipeline) {
+		e := engine.New(store, fastRetry, engine.WithRecoveryBackoff(0),
+			engine.WithLogger(discardTestLogger()),
+			engine.WithMiddleware(tracing), engine.WithObserver(obs))
 		pipe, err := def.Bind(e)
 		if err != nil {
 			t.Fatalf("Bind: %v", err)
@@ -84,9 +85,9 @@ func TestTracePropagationPattern(t *testing.T) {
 	// come back from the store, not from process memory.
 	e, pipe := boot()
 	run, _, err := pipe.Schedule(context.Background(), "res-1", nil,
-		durable.WithAnnotations(map[string]string{"traceparent": traceparent}),
-		durable.WithAnnotations(map[string]string{"tenant": "acme"}), // options merge
-		durable.StartAfter(30*time.Millisecond))
+		engine.WithAnnotations(map[string]string{"traceparent": traceparent}),
+		engine.WithAnnotations(map[string]string{"tenant": "acme"}), // options merge
+		engine.StartAfter(30*time.Millisecond))
 	if err != nil {
 		t.Fatalf("Schedule: %v", err)
 	}
@@ -147,9 +148,9 @@ func TestTracePropagationPattern(t *testing.T) {
 // invalid UTF-8 is rejected at Schedule.
 func TestAnnotationsDedupAndValidation(t *testing.T) {
 	hold := make(chan struct{})
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "annotated",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			stateless("hold/v1", func(ctx context.Context, inv durable.Invocation) error {
 				select {
 				case <-hold:
@@ -164,14 +165,14 @@ func TestAnnotationsDedupAndValidation(t *testing.T) {
 	pipe := pipes[0]
 
 	first, created, err := pipe.Schedule(context.Background(), "res-1", nil,
-		durable.WithAnnotations(map[string]string{"origin": "first"}))
+		engine.WithAnnotations(map[string]string{"origin": "first"}))
 	if err != nil || !created {
 		t.Fatalf("Schedule: created=%v err=%v", created, err)
 	}
 	// Same input, different annotations: dedup returns the active Run,
 	// whose annotations win.
 	dup, created, err := pipe.Schedule(context.Background(), "res-1", nil,
-		durable.WithAnnotations(map[string]string{"origin": "second"}))
+		engine.WithAnnotations(map[string]string{"origin": "second"}))
 	if err != nil || created || dup.ID() != first.ID() {
 		t.Fatalf("dedup Schedule = %v created=%v err=%v", dup.ID(), created, err)
 	}
@@ -198,7 +199,7 @@ func TestAnnotationsDedupAndValidation(t *testing.T) {
 		"key":   {"k\xff": "v"},
 		"value": {"k": "v\xff"},
 	} {
-		if _, _, err := pipe.Schedule(context.Background(), "res-3", nil, durable.WithAnnotations(m)); err == nil {
+		if _, _, err := pipe.Schedule(context.Background(), "res-3", nil, engine.WithAnnotations(m)); err == nil {
 			t.Fatalf("Schedule accepted invalid UTF-8 annotation %s", name)
 		}
 	}

@@ -8,6 +8,7 @@ import (
 	"go.opentelemetry.io/otel/metric"
 
 	"github.com/dangra/durable"
+	"github.com/dangra/durable/engine"
 	"github.com/dangra/durable/observe"
 )
 
@@ -28,7 +29,7 @@ var (
 
 // NewObserver returns a observe.Observer that translates engine
 // lifecycle events into OpenTelemetry metrics, for installation via
-// durable.WithObserver. Instruments, all under the durable.* namespace
+// engine.WithObserver. Instruments, all under the durable.* namespace
 // with durations in seconds:
 //
 //   - durable.runs.scheduled      counter    {pipeline}
@@ -167,7 +168,7 @@ func NewObserver(opts ...Option) (observe.Observer, error) {
 //
 // The returned Registration unregisters the callback; unregister before
 // discarding the engine.
-func RegisterStats(engine *durable.Engine, opts ...Option) (metric.Registration, error) {
+func RegisterStats(eng *engine.Engine, opts ...Option) (metric.Registration, error) {
 	cfg := newConfig(opts)
 	meter := cfg.meterProvider.Meter(ScopeName)
 
@@ -192,7 +193,7 @@ func RegisterStats(engine *durable.Engine, opts ...Option) (metric.Registration,
 	}
 
 	return meter.RegisterCallback(func(_ context.Context, o metric.Observer) error {
-		st := engine.Stats()
+		st := eng.Stats()
 		o.ObserveInt64(active, int64(st.ActiveRuns))
 		o.ObserveInt64(awaiting, int64(st.AwaitingRuns))
 		o.ObserveInt64(throttled, int64(st.ThrottledRuns))

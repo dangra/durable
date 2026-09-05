@@ -7,24 +7,24 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/dangra/durable"
 	"github.com/dangra/durable/durabletest"
+	"github.com/dangra/durable/engine"
 	"github.com/dangra/durable/examples/machines/machinespb"
 )
 
 func main() {
 	ctx := context.Background()
 
-	engine := durable.NewEngine(durabletest.NewMemStore(),
-		durable.WithConcurrencyClass("host-capacity-api", 2))
-	provision, err := newProvisionMachine(newCloud()).Bind(engine)
+	eng := engine.New(durabletest.NewMemStore(),
+		engine.WithConcurrencyClass("host-capacity-api", 2))
+	provision, err := newProvisionMachine(newCloud()).Bind(eng)
 	if err != nil {
 		log.Fatal(err)
 	}
-	if err := engine.Start(ctx); err != nil {
+	if err := eng.Start(ctx); err != nil {
 		log.Fatal(err)
 	}
-	defer engine.Stop(ctx)
+	defer eng.Stop(ctx)
 
 	run, created, err := provision.Schedule(ctx, "machine-123", &machinespb.ProvisionMachineInput{
 		Region:   "ord",

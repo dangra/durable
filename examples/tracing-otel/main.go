@@ -40,6 +40,7 @@ import (
 	"github.com/dangra/durable"
 	"github.com/dangra/durable/contrib/durableotel"
 	"github.com/dangra/durable/durabletest"
+	"github.com/dangra/durable/engine"
 	"github.com/dangra/durable/examples/tracing-otel/orderspb"
 )
 
@@ -116,11 +117,11 @@ func run(ctx context.Context) (*tracetest.SpanRecorder, trace.SpanContext, order
 	// Propagation intent is declared once, here: the Annotator injects
 	// whatever trace context rides the ctx of every future Schedule
 	// call, so no call site has anything to remember.
-	engine := durable.NewEngine(durabletest.NewMemStore(),
-		durable.WithRetryPolicy(durable.RetryPolicy{Initial: time.Millisecond, Max: 5 * time.Millisecond, Multiplier: 2}),
-		durable.WithLogger(slog.New(slog.DiscardHandler)),
-		durable.WithMiddleware(durableotel.Middleware(durableotel.WithTracerProvider(tp))),
-		durable.WithScheduleAnnotator(durableotel.Annotator()))
+	eng := engine.New(durabletest.NewMemStore(),
+		engine.WithRetryPolicy(engine.RetryPolicy{Initial: time.Millisecond, Max: 5 * time.Millisecond, Multiplier: 2}),
+		engine.WithLogger(slog.New(slog.DiscardHandler)),
+		engine.WithMiddleware(durableotel.Middleware(durableotel.WithTracerProvider(tp))),
+		engine.WithScheduleAnnotator(durableotel.Annotator()))
 	w := &warehouse{}
 	pipe, err := orderspb.NewFulfillOrder(
 		&reserveStock{w}, &chargePayment{w: w, tracer: tracer}, ship{},
@@ -128,14 +129,14 @@ func run(ctx context.Context) (*tracetest.SpanRecorder, trace.SpanContext, order
 			s, _ := o.State(orderspb.ShipStep)
 			return &orderspb.FulfillOrderOutput{ShipmentId: s.GetShipmentId()}
 		},
-	).Bind(engine)
+	).Bind(eng)
 	if err != nil {
 		return nil, trace.SpanContext{}, orderspb.FulfillOrderResult{}, err
 	}
-	if err := engine.Start(ctx); err != nil {
+	if err := eng.Start(ctx); err != nil {
 		return nil, trace.SpanContext{}, orderspb.FulfillOrderResult{}, err
 	}
-	defer engine.Stop(ctx)
+	defer eng.Stop(ctx)
 
 	// The scheduling side: an ordinary request span, and a bare Schedule
 	// call — the engine's Annotator injects reqCtx's trace context into

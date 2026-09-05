@@ -1,4 +1,4 @@
-package durable_test
+package engine_test
 
 import (
 	"context"
@@ -16,6 +16,7 @@ import (
 	"github.com/dangra/durable"
 	"github.com/dangra/durable/bboltstore"
 	"github.com/dangra/durable/durabletest"
+	"github.com/dangra/durable/engine"
 )
 
 // The crash-restart model stress exercises durable's core promise: an
@@ -56,11 +57,11 @@ const (
 	crashRuns     = 14
 )
 
-func crashPipeline(seed uint64) *durable.Definition {
-	var steps []durable.StepConfig
+func crashPipeline(seed uint64) *engine.Definition {
+	var steps []engine.StepConfig
 	for i := 0; i < crashSteps; i++ {
 		id := durable.StepID(fmt.Sprintf("crash-step-%d/v1", i))
-		sc := durable.StepConfig{
+		sc := engine.StepConfig{
 			ID:     id,
 			Unwind: i < crashSteps-1,
 			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
@@ -91,15 +92,15 @@ func crashPipeline(seed uint64) *durable.Definition {
 		}
 		steps = append(steps, sc)
 	}
-	return durable.NewDefinition(durable.DefinitionConfig{ID: "crash", Steps: steps})
+	return engine.NewDefinition(engine.DefinitionConfig{ID: "crash", Steps: steps})
 }
 
 // waiterPipeline parks on a scripted target Run via AwaitRun, covering
 // await parks and watcher recovery across restarts.
-func waiterPipeline(target func(durable.ResourceID) durable.RunID) *durable.Definition {
-	return durable.NewDefinition(durable.DefinitionConfig{
+func waiterPipeline(target func(durable.ResourceID) durable.RunID) *engine.Definition {
+	return engine.NewDefinition(engine.DefinitionConfig{
 		ID: "crash-waiter",
-		Steps: []durable.StepConfig{{
+		Steps: []engine.StepConfig{{
 			ID: "await/v1",
 			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				if _, ok := inv.AwaitedRunID(); ok {
@@ -146,11 +147,11 @@ func runCrashScenario(t *testing.T, seed uint64, store storedriver.Store) {
 	waiter := waiterPipeline(func(res durable.ResourceID) durable.RunID { return targetOf[res] })
 
 	// boot builds a fresh engine over the shared store — a "process".
-	boot := func() (*durable.Engine, *durable.Pipeline, *durable.Pipeline) {
+	boot := func() (*engine.Engine, *engine.Pipeline, *engine.Pipeline) {
 		t.Helper()
-		e := durable.NewEngine(store, fastRetry,
-			durable.WithRecoveryBackoff(0), durable.WithConcurrency(8),
-			durable.WithLogger(discardTestLogger()))
+		e := engine.New(store, fastRetry,
+			engine.WithRecoveryBackoff(0), engine.WithConcurrency(8),
+			engine.WithLogger(discardTestLogger()))
 		crashPipe, err := def.Bind(e)
 		if err != nil {
 			t.Fatalf("Bind crash: %v", err)
@@ -164,7 +165,7 @@ func runCrashScenario(t *testing.T, seed uint64, store storedriver.Store) {
 		}
 		return e, crashPipe, waitPipe
 	}
-	stop := func(e *durable.Engine) {
+	stop := func(e *engine.Engine) {
 		t.Helper()
 		sctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
@@ -179,9 +180,9 @@ func runCrashScenario(t *testing.T, seed uint64, store storedriver.Store) {
 	var crashIDs, waiterIDs []durable.RunID
 	for i := 0; i < crashRuns; i++ {
 		res := durable.ResourceID(fmt.Sprintf("res-%d", i))
-		var opts []durable.ScheduleOption
+		var opts []engine.ScheduleOption
 		if i%5 == 0 {
-			opts = append(opts, durable.StartAfter(5*time.Millisecond))
+			opts = append(opts, engine.StartAfter(5*time.Millisecond))
 		}
 		run, created, err := crashPipe.Schedule(ctx, res, nil, opts...)
 		if err != nil || !created {
@@ -212,7 +213,7 @@ func runCrashScenario(t *testing.T, seed uint64, store storedriver.Store) {
 		}
 		if err := run.Cancel(ctx, "crash-round cancel"); err == nil {
 			canceled[victim] = true
-		} else if !errors.Is(err, durable.ErrRunTerminal) {
+		} else if !errors.Is(err, engine.ErrRunTerminal) {
 			t.Fatalf("Cancel(%s): %v", victim, err)
 		}
 		stop(e)
@@ -223,7 +224,7 @@ func runCrashScenario(t *testing.T, seed uint64, store storedriver.Store) {
 	defer stop(e)
 	drain, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
-	results := map[durable.RunID]durable.Result{}
+	results := map[durable.RunID]engine.Result{}
 	for _, id := range crashIDs {
 		run, err := crashPipe.Run(ctx, id)
 		if err != nil {
@@ -310,7 +311,7 @@ func runCrashScenario(t *testing.T, seed uint64, store storedriver.Store) {
 		if err != nil {
 			t.Fatalf("Status(%s): %v", id, err)
 		}
-		if st.State != durable.RunStateDone || st.Outcome == nil || *st.Outcome != result.Outcome {
+		if st.State != engine.RunStateDone || st.Outcome == nil || *st.Outcome != result.Outcome {
 			t.Fatalf("run %s Status %+v disagrees with Wait outcome %v", id, st, result.Outcome)
 		}
 	}

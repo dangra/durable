@@ -13,6 +13,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/dangra/durable"
+	"github.com/dangra/durable/engine"
 )
 
 // WithTraceContext returns a ScheduleOption that injects ctx's trace
@@ -26,28 +27,28 @@ import (
 //
 // For injection on every Schedule without per-call-site options, prefer
 // Annotator.
-func WithTraceContext(ctx context.Context, opts ...Option) durable.ScheduleOption {
+func WithTraceContext(ctx context.Context, opts ...Option) engine.ScheduleOption {
 	cfg := newConfig(opts)
-	return durable.WithAnnotations(inject(ctx, cfg))
+	return engine.WithAnnotations(inject(ctx, cfg))
 }
 
-// Annotator returns a durable.ScheduleAnnotator that injects the
+// Annotator returns a engine.ScheduleAnnotator that injects the
 // scheduling ctx's trace context (and baggage, with WithBaggage) into
 // every Run's annotations. Installed once at engine construction, it
 // removes the per-call-site burden entirely — a pipeline handed to a
 // subsystem propagates whatever already rides the ctx the subsystem
 // passes to Schedule anyway:
 //
-//	engine := durable.NewEngine(store,
-//		durable.WithMiddleware(durableotel.Middleware(durableotel.WithBaggage())),
-//		durable.WithScheduleAnnotator(durableotel.Annotator(durableotel.WithBaggage())))
+//	engine := engine.New(store,
+//		engine.WithMiddleware(durableotel.Middleware(durableotel.WithBaggage())),
+//		engine.WithScheduleAnnotator(durableotel.Annotator(durableotel.WithBaggage())))
 //	// anywhere, with nothing to remember:
 //	pipe.Schedule(reqCtx, resource, input)
 //
 // An explicit WithAnnotations or WithTraceContext at a call site still
 // wins on key conflicts. Configure the same propagation options here
 // and on Middleware.
-func Annotator(opts ...Option) durable.ScheduleAnnotator {
+func Annotator(opts ...Option) engine.ScheduleAnnotator {
 	cfg := newConfig(opts)
 	return func(ctx context.Context) map[string]string {
 		return inject(ctx, cfg)

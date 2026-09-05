@@ -1,6 +1,6 @@
 // Evolving a deployment with runs in flight: recovery across engines,
 // retired and removed steps, reducer repair, and invalidity.
-package durable_test
+package engine_test
 
 import (
 	"context"
@@ -11,6 +11,7 @@ import (
 
 	"github.com/dangra/durable"
 	"github.com/dangra/durable/durabletest"
+	"github.com/dangra/durable/engine"
 	"github.com/dangra/durable/storedriver"
 	"google.golang.org/protobuf/proto"
 )
@@ -19,10 +20,10 @@ func TestRecoveryResumesAcrossEngines(t *testing.T) {
 	store := durabletest.NewMemStore()
 	var attempts atomic.Uint64
 
-	makeDef := func(succeed bool) *durable.Definition {
-		return durable.NewDefinition(durable.DefinitionConfig{
+	makeDef := func(succeed bool) *engine.Definition {
+		return engine.NewDefinition(engine.DefinitionConfig{
 			ID: "recoverable",
-			Steps: []durable.StepConfig{
+			Steps: []engine.StepConfig{
 				stateless("only/v1", func(ctx context.Context, inv durable.Invocation) error {
 					attempts.Store(inv.Attempt())
 					if !succeed {
@@ -35,7 +36,7 @@ func TestRecoveryResumesAcrossEngines(t *testing.T) {
 	}
 
 	// Deployment 1: the step never succeeds.
-	e1 := durable.NewEngine(store, fastRetry)
+	e1 := engine.New(store, fastRetry)
 	p1, _ := makeDef(false).Bind(e1)
 	if err := e1.Start(context.Background()); err != nil {
 		t.Fatalf("Start1: %v", err)
@@ -57,7 +58,7 @@ func TestRecoveryResumesAcrossEngines(t *testing.T) {
 	attemptsAtShutdown := attempts.Load()
 
 	// Deployment 2: same store, corrected handler.
-	e2 := durable.NewEngine(store, fastRetry, durable.WithRecoveryBackoff(0))
+	e2 := engine.New(store, fastRetry, engine.WithRecoveryBackoff(0))
 	p2, _ := makeDef(true).Bind(e2)
 	if err := e2.Start(context.Background()); err != nil {
 		t.Fatalf("Start2: %v", err)
@@ -84,9 +85,9 @@ func TestRetiredStepIsBypassed(t *testing.T) {
 	})
 
 	var bRan, cRan atomic.Bool
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "evolving",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			stateless("a/v1", func(context.Context, durable.Invocation) error { return nil }),
 			{
 				ID:      "b/v1",
@@ -128,9 +129,9 @@ func TestRetiredUnresolvedStepContinues(t *testing.T) {
 	})
 
 	var bAttempt atomic.Uint64
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "evolving",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			stateless("a/v1", func(context.Context, durable.Invocation) error { return nil }),
 			{
 				ID:      "b/v1",
@@ -161,9 +162,9 @@ func TestUnresolvedStepRemovedIsInvalid(t *testing.T) {
 		"b/v1": {ForwardStatus: storedriver.OpUnresolved, ForwardAttempts: 1},
 	})
 
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "evolving",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			stateless("a/v1", func(context.Context, durable.Invocation) error { return nil }),
 			// b/v1 removed while unresolved.
 			stateless("c/v1", func(context.Context, durable.Invocation) error { return nil }),
@@ -173,14 +174,14 @@ func TestUnresolvedStepRemovedIsInvalid(t *testing.T) {
 
 	run, _ := pipes[0].Run(context.Background(), runID)
 	_, err := run.Wait(context.Background())
-	if _, ok := errors.AsType[*durable.InvalidRunError](err); !ok {
+	if _, ok := errors.AsType[*engine.InvalidRunError](err); !ok {
 		t.Fatalf("Wait = %v, want InvalidRunError", err)
 	}
 	st, err := run.Status(context.Background())
 	if err != nil {
 		t.Fatalf("Status: %v", err)
 	}
-	if st.State != durable.RunStateInvalid || st.InvalidReason == "" {
+	if st.State != engine.RunStateInvalid || st.InvalidReason == "" {
 		t.Fatalf("Status = %+v, want RunStateInvalid with reason", st)
 	}
 }
@@ -188,10 +189,10 @@ func TestUnresolvedStepRemovedIsInvalid(t *testing.T) {
 func TestInvalidReducerRepairedByRedeploy(t *testing.T) {
 	store := durabletest.NewMemStore()
 
-	makeDef := func(broken bool) *durable.Definition {
-		return durable.NewDefinition(durable.DefinitionConfig{
+	makeDef := func(broken bool) *engine.Definition {
+		return engine.NewDefinition(engine.DefinitionConfig{
 			ID: "reduced",
-			Steps: []durable.StepConfig{
+			Steps: []engine.StepConfig{
 				stateless("s/v1", func(context.Context, durable.Invocation) error { return nil }),
 			},
 			Reduce: func(v durable.ReduceView) proto.Message {
@@ -204,7 +205,7 @@ func TestInvalidReducerRepairedByRedeploy(t *testing.T) {
 	}
 
 	// Deployment 1: broken reducer invalidates the Run without retry loops.
-	e1 := durable.NewEngine(store, fastRetry)
+	e1 := engine.New(store, fastRetry)
 	p1, _ := makeDef(true).Bind(e1)
 	if err := e1.Start(context.Background()); err != nil {
 		t.Fatalf("Start1: %v", err)
@@ -214,7 +215,7 @@ func TestInvalidReducerRepairedByRedeploy(t *testing.T) {
 		t.Fatalf("Schedule: %v", err)
 	}
 	_, err = run.Wait(context.Background())
-	if _, ok := errors.AsType[*durable.InvalidRunError](err); !ok {
+	if _, ok := errors.AsType[*engine.InvalidRunError](err); !ok {
 		t.Fatalf("Wait = %v, want InvalidRunError", err)
 	}
 	if err := e1.Stop(context.Background()); err != nil {
@@ -222,7 +223,7 @@ func TestInvalidReducerRepairedByRedeploy(t *testing.T) {
 	}
 
 	// Deployment 2: corrected reducer completes the same nonterminal Run.
-	e2 := durable.NewEngine(store, fastRetry, durable.WithRecoveryBackoff(0))
+	e2 := engine.New(store, fastRetry, engine.WithRecoveryBackoff(0))
 	p2, _ := makeDef(false).Bind(e2)
 	if err := e2.Start(context.Background()); err != nil {
 		t.Fatalf("Start2: %v", err)
@@ -240,9 +241,9 @@ func TestInvalidReducerRepairedByRedeploy(t *testing.T) {
 }
 
 func TestNilStateFromStateProducingHandlerIsInvalid(t *testing.T) {
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "nilstate",
-		Steps: []durable.StepConfig{
+		Steps: []engine.StepConfig{
 			{
 				ID:       "s/v1",
 				HasState: true,
@@ -255,7 +256,7 @@ func TestNilStateFromStateProducingHandlerIsInvalid(t *testing.T) {
 	_, pipes := startEngine(t, durabletest.NewMemStore(), def)
 	run, _, _ := pipes[0].Schedule(context.Background(), "r", nil)
 	_, err := run.Wait(context.Background())
-	if _, ok := errors.AsType[*durable.InvalidRunError](err); !ok {
+	if _, ok := errors.AsType[*engine.InvalidRunError](err); !ok {
 		t.Fatalf("Wait = %v, want InvalidRunError", err)
 	}
 }

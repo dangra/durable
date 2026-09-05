@@ -117,6 +117,18 @@ func AwaitRequest(err error) (Await, bool) {
 	return Await{}, false
 }
 
+// AwaitTimeout reports the relative timeout a park resolution carries
+// from WithAwaitTimeout, zero when it has none or err is not a park. The
+// engine turns it into Await.Deadline with its own clock at parking time;
+// AwaitRequest's Await therefore has a zero Deadline before the park is
+// recorded.
+func AwaitTimeout(err error) time.Duration {
+	if ar, ok := asAwait(err); ok {
+		return ar.timeout
+	}
+	return 0
+}
+
 // asAwait reports whether err is a park resolution.
 func asAwait(err error) (*awaitResolution, bool) {
 	if ar, ok := errors.AsType[*awaitResolution](err); ok {

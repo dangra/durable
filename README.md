@@ -67,14 +67,14 @@ Run it:
 
 ```go
 store, _ := bboltstore.Open("machines.db")
-engine := durable.NewEngine(store)
+eng := engine.New(store)
 
 provision, _ := machinespb.NewProvisionMachine(
     validate{}, &selectHost{}, &reserveCapacity{}, &createMachine{},
     reduceProvisionMachine,
-).Bind(engine)
+).Bind(eng)
 
-engine.Start(ctx)
+eng.Start(ctx)
 
 run, created, _ := provision.Schedule(ctx, "machine-123", input)
 result, _ := run.Wait(ctx)
@@ -104,10 +104,10 @@ construction:
 
 ```go
 obs, _ := durableotel.NewObserver()
-engine := durable.NewEngine(store,
-    durable.WithMiddleware(durableotel.Middleware()),
-    durable.WithObserver(obs),
-    durable.WithScheduleAnnotator(durableotel.Annotator()))
+eng := engine.New(store,
+    engine.WithMiddleware(durableotel.Middleware()),
+    engine.WithObserver(obs),
+    engine.WithScheduleAnnotator(durableotel.Annotator()))
 
 // anywhere, by any subsystem, with the provision pipeline from above —
 // propagation rides the request's ctx:

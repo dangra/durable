@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// FakeClock is a deterministic durable.Clock for tests. Time moves only
+// FakeClock is a deterministic engine.Clock for tests. Time moves only
 // through Advance.
 type FakeClock struct {
 	mu     sync.Mutex

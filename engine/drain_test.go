@@ -1,4 +1,4 @@
-package durable_test
+package engine_test
 
 import (
 	"context"
@@ -9,6 +9,7 @@ import (
 
 	"github.com/dangra/durable"
 	"github.com/dangra/durable/durabletest"
+	"github.com/dangra/durable/engine"
 )
 
 // TestDrainLetsAttemptFinish pins the graceful path: with a drain
@@ -21,9 +22,9 @@ func TestDrainLetsAttemptFinish(t *testing.T) {
 		ctxErr error = errors.New("unset")
 	)
 	running, release := make(chan struct{}), make(chan struct{})
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "drained",
-		Steps: []durable.StepConfig{stateless("work/v1", func(ctx context.Context, inv durable.Invocation) error {
+		Steps: []engine.StepConfig{stateless("work/v1", func(ctx context.Context, inv durable.Invocation) error {
 			close(running)
 			<-release
 			mu.Lock()
@@ -33,8 +34,8 @@ func TestDrainLetsAttemptFinish(t *testing.T) {
 		})},
 	})
 	store := durabletest.NewMemStore()
-	e := durable.NewEngine(store, fastRetry, durable.WithLogger(discardTestLogger()),
-		durable.WithDrainTimeout(30*time.Second))
+	e := engine.New(store, fastRetry, engine.WithLogger(discardTestLogger()),
+		engine.WithDrainTimeout(30*time.Second))
 	pipe, err := def.Bind(e)
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
@@ -67,11 +68,11 @@ func TestDrainLetsAttemptFinish(t *testing.T) {
 
 	// The attempt's success committed and the run completed during the
 	// drain — the restarted engine sees it terminal immediately.
-	e2 := durable.NewEngine(store, fastRetry, durable.WithRecoveryBackoff(0),
-		durable.WithLogger(discardTestLogger()))
-	pipe3, err := durable.NewDefinition(durable.DefinitionConfig{
+	e2 := engine.New(store, fastRetry, engine.WithRecoveryBackoff(0),
+		engine.WithLogger(discardTestLogger()))
+	pipe3, err := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "drained",
-		Steps: []durable.StepConfig{stateless("work/v1", func(ctx context.Context, inv durable.Invocation) error {
+		Steps: []engine.StepConfig{stateless("work/v1", func(ctx context.Context, inv durable.Invocation) error {
 			t.Error("handler re-executed; the drained attempt must have committed")
 			return nil
 		})},
@@ -105,9 +106,9 @@ func TestDrainDeadlinePreempts(t *testing.T) {
 		cause error
 	)
 	running := make(chan struct{})
-	def := durable.NewDefinition(durable.DefinitionConfig{
+	def := engine.NewDefinition(engine.DefinitionConfig{
 		ID: "stubborn",
-		Steps: []durable.StepConfig{stateless("work/v1", func(ctx context.Context, inv durable.Invocation) error {
+		Steps: []engine.StepConfig{stateless("work/v1", func(ctx context.Context, inv durable.Invocation) error {
 			close(running)
 			<-ctx.Done()
 			mu.Lock()
@@ -116,9 +117,9 @@ func TestDrainDeadlinePreempts(t *testing.T) {
 			return ctx.Err()
 		})},
 	})
-	e := durable.NewEngine(durabletest.NewMemStore(), fastRetry,
-		durable.WithLogger(discardTestLogger()),
-		durable.WithDrainTimeout(50*time.Millisecond))
+	e := engine.New(durabletest.NewMemStore(), fastRetry,
+		engine.WithLogger(discardTestLogger()),
+		engine.WithDrainTimeout(50*time.Millisecond))
 	pipe, err := def.Bind(e)
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
@@ -152,7 +153,7 @@ func TestDrainStartsNoNewAttempts(t *testing.T) {
 		gate = make(chan struct{})
 	)
 	running := make(chan struct{})
-	step := func(id durable.StepID) durable.StepConfig {
+	step := func(id durable.StepID) engine.StepConfig {
 		return stateless(id, func(ctx context.Context, inv durable.Invocation) error {
 			mu.Lock()
 			ran = append(ran, string(inv.StepID()))
@@ -165,10 +166,10 @@ func TestDrainStartsNoNewAttempts(t *testing.T) {
 		})
 	}
 	store := durabletest.NewMemStore()
-	e := durable.NewEngine(store, fastRetry, durable.WithLogger(discardTestLogger()),
-		durable.WithDrainTimeout(30*time.Second))
-	pipe, err := durable.NewDefinition(durable.DefinitionConfig{
-		ID: "twostep", Steps: []durable.StepConfig{step("first/v1"), step("second/v1")},
+	e := engine.New(store, fastRetry, engine.WithLogger(discardTestLogger()),
+		engine.WithDrainTimeout(30*time.Second))
+	pipe, err := engine.NewDefinition(engine.DefinitionConfig{
+		ID: "twostep", Steps: []engine.StepConfig{step("first/v1"), step("second/v1")},
 	}).Bind(e)
 	if err != nil {
 		t.Fatalf("Bind: %v", err)

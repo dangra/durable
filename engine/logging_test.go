@@ -15,6 +15,7 @@ import (
 	"github.com/dangra/durable"
 	"github.com/dangra/durable/durabletest"
 	"github.com/dangra/durable/engine"
+	"github.com/dangra/durable/pipelinedef"
 )
 
 // lockedBuffer serializes writes from concurrent engine goroutines.
@@ -35,13 +36,13 @@ func (l *lockedBuffer) String() string {
 	return l.b.String()
 }
 
-func startLoggingEngine(t *testing.T, def *engine.Definition) (*lockedBuffer, *engine.Pipeline) {
+func startLoggingEngine(t *testing.T, def *pipelinedef.Definition) (*lockedBuffer, *engine.Pipeline) {
 	t.Helper()
 	buf := &lockedBuffer{}
 	logger := slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	e := engine.New(durabletest.NewMemStore(),
 		fastRetry, engine.WithRecoveryBackoff(0), engine.WithLogger(logger))
-	pipe, err := def.Bind(e)
+	pipe, err := e.Bind(def)
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
 	}
@@ -91,9 +92,9 @@ func mustLog(t *testing.T, buf *lockedBuffer, wants ...string) {
 // emits each lifecycle event at its documented level with the canonical
 // keys, and that Invocation.Logger pre-attaches the same keys.
 func TestLoggingLifecycle(t *testing.T) {
-	def := engine.NewDefinition(engine.DefinitionConfig{
+	def := pipelinedef.New(pipelinedef.Config{
 		ID: "logging",
-		Steps: []engine.StepConfig{
+		Steps: []pipelinedef.Step{
 			{
 				ID:     "flaky/v1",
 				Unwind: true,
@@ -143,9 +144,9 @@ func TestLoggingLifecycle(t *testing.T) {
 // TestLoggingCancel asserts the cancellation request and its acceptance
 // are logged, including the cause.
 func TestLoggingCancel(t *testing.T) {
-	def := engine.NewDefinition(engine.DefinitionConfig{
+	def := pipelinedef.New(pipelinedef.Config{
 		ID: "logging-cancel",
-		Steps: []engine.StepConfig{
+		Steps: []pipelinedef.Step{
 			stateless("never-runs/v1", func(ctx context.Context, inv durable.Invocation) error {
 				return nil
 			}),

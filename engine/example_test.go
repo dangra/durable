@@ -9,6 +9,7 @@ import (
 	"github.com/dangra/durable"
 	"github.com/dangra/durable/durabletest"
 	"github.com/dangra/durable/engine"
+	"github.com/dangra/durable/pipelinedef"
 )
 
 // ExampleWithMiddleware installs a logging middleware around every
@@ -23,16 +24,16 @@ func ExampleWithMiddleware() {
 	}
 
 	eng := engine.New(durabletest.NewMemStore(), engine.WithMiddleware(logging))
-	def := engine.NewDefinition(engine.DefinitionConfig{
+	def := pipelinedef.New(pipelinedef.Config{
 		ID: "greeter",
-		Steps: []engine.StepConfig{{
+		Steps: []pipelinedef.Step{{
 			ID: "hello/v1",
 			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				return nil, nil
 			},
 		}},
 	})
-	pipeline, err := def.Bind(eng)
+	pipeline, err := eng.Bind(def)
 	if err != nil {
 		panic(err)
 	}

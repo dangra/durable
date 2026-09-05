@@ -15,6 +15,7 @@ import (
 
 	"github.com/dangra/durable"
 	"github.com/dangra/durable/engine"
+	"github.com/dangra/durable/pipelinedef"
 )
 
 // The coordination scenarios use small inputs deliberately: they measure
@@ -55,9 +56,9 @@ func BenchmarkSupersedeCycle(b *testing.B) {
 		return sig
 	}
 
-	def := engine.NewDefinition(engine.DefinitionConfig{
+	def := pipelinedef.New(pipelinedef.Config{
 		ID: "supersede",
-		Steps: []engine.StepConfig{{
+		Steps: []pipelinedef.Step{{
 			ID:     "supersede-apply/v1",
 			Unwind: true,
 			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
@@ -157,9 +158,9 @@ func BenchmarkAwaitFanout(b *testing.B) {
 		release      atomic.Pointer[chan struct{}]
 		enteredCount atomic.Int64
 	)
-	target := engine.NewDefinition(engine.DefinitionConfig{
+	target := pipelinedef.New(pipelinedef.Config{
 		ID: "fan-target",
-		Steps: []engine.StepConfig{{
+		Steps: []pipelinedef.Step{{
 			ID: "fan-target-hold/v1",
 			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				enteredCount.Add(1)
@@ -176,9 +177,9 @@ func BenchmarkAwaitFanout(b *testing.B) {
 	// directly: the driver already knows the ID, and a lookup scan here
 	// would charge unrelated store-scan costs — growing with the terminal
 	// population left behind by earlier iterations — to the wake metrics.
-	waiter := engine.NewDefinition(engine.DefinitionConfig{
+	waiter := pipelinedef.New(pipelinedef.Config{
 		ID: "fan-waiter",
-		Steps: []engine.StepConfig{{
+		Steps: []pipelinedef.Step{{
 			ID: "fan-waiter-wait/v1",
 			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				if _, ok := inv.AwaitedRunID(); ok {
@@ -194,7 +195,7 @@ func BenchmarkAwaitFanout(b *testing.B) {
 	// need workers besides — size the pool for the whole population.
 	v := newEnv(b, target, engine.WithConcurrency(pairs*2+16))
 	targetPipe := v.pipe
-	waiterPipe, err := waiter.Bind(v.eng)
+	waiterPipe, err := v.eng.Bind(waiter)
 	if err != nil {
 		b.Fatal(err)
 	}

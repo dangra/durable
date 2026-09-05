@@ -12,6 +12,7 @@ import (
 
 	"github.com/dangra/durable"
 	"github.com/dangra/durable/engine"
+	"github.com/dangra/durable/pipelinedef"
 )
 
 // BenchmarkAwaitFanIn is the release-train shape inverted from
@@ -32,9 +33,9 @@ func BenchmarkAwaitFanIn(b *testing.B) {
 		ch, _ := gates.LoadOrStore(r, make(chan struct{}))
 		return ch.(chan struct{})
 	}
-	child := engine.NewDefinition(engine.DefinitionConfig{
+	child := pipelinedef.New(pipelinedef.Config{
 		ID: "fanin-child",
-		Steps: []engine.StepConfig{{
+		Steps: []pipelinedef.Step{{
 			ID: "fanin-child-hold/v1",
 			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				entered.Add(1)
@@ -49,9 +50,9 @@ func BenchmarkAwaitFanIn(b *testing.B) {
 	})
 	var childPipe *engine.Pipeline
 	var iter atomic.Int64
-	parent := engine.NewDefinition(engine.DefinitionConfig{
+	parent := pipelinedef.New(pipelinedef.Config{
 		ID: "fanin-parent",
-		Steps: []engine.StepConfig{{
+		Steps: []pipelinedef.Step{{
 			ID: "fanin-parent-ship/v1",
 			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				if w, ok := inv.Awaited(); ok {
@@ -77,7 +78,7 @@ func BenchmarkAwaitFanIn(b *testing.B) {
 	// the whole population plus the parent and its wakes.
 	v := newEnv(b, parent, engine.WithConcurrency(children+16))
 	parentPipe := v.pipe
-	cp, err := child.Bind(v.eng)
+	cp, err := v.eng.Bind(child)
 	if err != nil {
 		b.Fatal(err)
 	}

@@ -13,6 +13,7 @@ import (
 	"github.com/dangra/durable"
 	"github.com/dangra/durable/durabletest"
 	"github.com/dangra/durable/engine"
+	"github.com/dangra/durable/pipelinedef"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -37,9 +38,9 @@ func TestMiddlewareOrderingAndPhases(t *testing.T) {
 
 	store := durabletest.NewMemStore()
 	e := engine.New(store, fastRetry, engine.WithMiddleware(mw("outer"), mw("inner")))
-	def := engine.NewDefinition(engine.DefinitionConfig{
+	def := pipelinedef.New(pipelinedef.Config{
 		ID: "mw",
-		Steps: []engine.StepConfig{
+		Steps: []pipelinedef.Step{
 			{
 				ID:     "a/v1",
 				Unwind: true,
@@ -58,7 +59,7 @@ func TestMiddlewareOrderingAndPhases(t *testing.T) {
 			}),
 		},
 	})
-	p, err := def.Bind(e)
+	p, err := e.Bind(def)
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
 	}
@@ -104,9 +105,9 @@ func TestMiddlewareCanEscalateToFail(t *testing.T) {
 		}
 	}
 	var attempts atomic.Uint64
-	def := engine.NewDefinition(engine.DefinitionConfig{
+	def := pipelinedef.New(pipelinedef.Config{
 		ID: "escalating",
-		Steps: []engine.StepConfig{
+		Steps: []pipelinedef.Step{
 			stateless("s/v1", func(ctx context.Context, inv durable.Invocation) error {
 				attempts.Store(inv.Attempt())
 				return errors.New("would ordinarily retry")
@@ -114,7 +115,7 @@ func TestMiddlewareCanEscalateToFail(t *testing.T) {
 		},
 	})
 	e := engine.New(durabletest.NewMemStore(), fastRetry, engine.WithMiddleware(escalate))
-	p, _ := def.Bind(e)
+	p, _ := e.Bind(def)
 	if err := e.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -138,9 +139,9 @@ func TestMiddlewareContextReachesHandlers(t *testing.T) {
 			return next(context.WithValue(ctx, ctxKey{}, "present"), inv)
 		}
 	}
-	def := engine.NewDefinition(engine.DefinitionConfig{
+	def := pipelinedef.New(pipelinedef.Config{
 		ID: "ctxpipe",
-		Steps: []engine.StepConfig{
+		Steps: []pipelinedef.Step{
 			stateless("s/v1", func(ctx context.Context, inv durable.Invocation) error {
 				if ctx.Value(ctxKey{}) != "present" {
 					return durable.Fail(errors.New("middleware context value missing"))
@@ -150,7 +151,7 @@ func TestMiddlewareContextReachesHandlers(t *testing.T) {
 		},
 	})
 	e := engine.New(durabletest.NewMemStore(), fastRetry, engine.WithMiddleware(inject))
-	p, _ := def.Bind(e)
+	p, _ := e.Bind(def)
 	if err := e.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}

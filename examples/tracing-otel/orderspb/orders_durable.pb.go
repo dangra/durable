@@ -9,18 +9,19 @@ import (
 	context "context"
 	durable "github.com/dangra/durable"
 	engine "github.com/dangra/durable/engine"
+	pipelinedef "github.com/dangra/durable/pipelinedef"
 	proto "google.golang.org/protobuf/proto"
 	sync "sync"
 )
 
 // ReserveStockStep is the typed reference to the state-producing step "reserve-stock/v1".
-var ReserveStockStep = durable.NewStateStepRef("reserve-stock/v1", func() *ReserveStock { return &ReserveStock{} })
+var ReserveStockStep = pipelinedef.StateStepRef("reserve-stock/v1", func() *ReserveStock { return &ReserveStock{} })
 
 // ChargePaymentStep is the typed reference to the state-producing step "charge-payment/v1".
-var ChargePaymentStep = durable.NewStateStepRef("charge-payment/v1", func() *ChargePayment { return &ChargePayment{} })
+var ChargePaymentStep = pipelinedef.StateStepRef("charge-payment/v1", func() *ChargePayment { return &ChargePayment{} })
 
 // ShipStep is the typed reference to the state-producing step "ship/v1".
-var ShipStep = durable.NewStateStepRef("ship/v1", func() *Ship { return &Ship{} })
+var ShipStep = pipelinedef.StateStepRef("ship/v1", func() *Ship { return &Ship{} })
 
 // ReserveStockInvocation is passed to ReserveStockHandler methods.
 type ReserveStockInvocation struct {
@@ -231,7 +232,7 @@ func (x *FulfillOrder) State[T proto.Message](step durable.StateStepRef[T]) (T, 
 
 // FulfillOrderDefinition is the unbound pipeline definition.
 type FulfillOrderDefinition struct {
-	def *engine.Definition
+	def *pipelinedef.Definition
 }
 
 // NewFulfillOrder assembles the "fulfill-order" pipeline definition
@@ -242,7 +243,7 @@ func NewFulfillOrder(
 	ship ShipHandler,
 	reduce FulfillOrderReducer,
 ) *FulfillOrderDefinition {
-	return &FulfillOrderDefinition{def: engine.NewDefinition(engine.DefinitionConfig{
+	return &FulfillOrderDefinition{def: pipelinedef.New(pipelinedef.Config{
 		ID:       "fulfill-order",
 		NewInput: func() proto.Message { return &FulfillOrderInput{} },
 		Reduce: func(view durable.ReduceView) proto.Message {
@@ -251,7 +252,7 @@ func NewFulfillOrder(
 			defer fulfillOrderViews.Delete(x)
 			return reduce(x)
 		},
-		Steps: []engine.StepConfig{
+		Steps: []pipelinedef.Step{
 			{
 				ID:       "reserve-stock/v1",
 				Unwind:   true,
@@ -300,7 +301,7 @@ func NewFulfillOrder(
 // Bind registers the definition with an engine. It is allowed only before
 // Engine.Start.
 func (d *FulfillOrderDefinition) Bind(e *engine.Engine) (*FulfillOrderPipeline, error) {
-	p, err := d.def.Bind(e)
+	p, err := e.Bind(d.def)
 	if err != nil {
 		return nil, err
 	}

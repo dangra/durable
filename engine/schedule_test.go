@@ -12,6 +12,7 @@ import (
 	"github.com/dangra/durable"
 	"github.com/dangra/durable/durabletest"
 	"github.com/dangra/durable/engine"
+	"github.com/dangra/durable/pipelinedef"
 	"github.com/dangra/durable/storedriver"
 	"github.com/oklog/ulid/v2"
 	"google.golang.org/protobuf/proto"
@@ -19,15 +20,15 @@ import (
 )
 
 func TestScheduleValidation(t *testing.T) {
-	withInput := engine.NewDefinition(engine.DefinitionConfig{
+	withInput := pipelinedef.New(pipelinedef.Config{
 		ID:       "with-input",
-		Steps:    []engine.StepConfig{stateless("s/v1", func(context.Context, durable.Invocation) error { return nil })},
+		Steps:    []pipelinedef.Step{stateless("s/v1", func(context.Context, durable.Invocation) error { return nil })},
 		NewInput: func() proto.Message { return &wrapperspb.StringValue{} },
 	})
 
 	// Before Start.
 	e := engine.New(durabletest.NewMemStore())
-	p, err := withInput.Bind(e)
+	p, err := e.Bind(withInput)
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
 	}
@@ -48,9 +49,9 @@ func TestScheduleValidation(t *testing.T) {
 func TestDelayedStart(t *testing.T) {
 	const delay = 80 * time.Millisecond
 	var ranAt atomic.Int64
-	def := engine.NewDefinition(engine.DefinitionConfig{
+	def := pipelinedef.New(pipelinedef.Config{
 		ID: "delayed",
-		Steps: []engine.StepConfig{
+		Steps: []pipelinedef.Step{
 			stateless("s/v1", func(ctx context.Context, inv durable.Invocation) error {
 				ranAt.Store(time.Now().UnixNano())
 				return nil
@@ -94,9 +95,9 @@ func TestDelayedStart(t *testing.T) {
 }
 
 func TestRunIDsAreULIDs(t *testing.T) {
-	def := engine.NewDefinition(engine.DefinitionConfig{
+	def := pipelinedef.New(pipelinedef.Config{
 		ID: "ulids",
-		Steps: []engine.StepConfig{
+		Steps: []pipelinedef.Step{
 			stateless("s/v1", func(context.Context, durable.Invocation) error { return nil }),
 		},
 	})
@@ -139,9 +140,9 @@ func TestRetentionReapsOnlyOldTerminalRuns(t *testing.T) {
 	})
 
 	blocked := make(chan struct{})
-	def := engine.NewDefinition(engine.DefinitionConfig{
+	def := pipelinedef.New(pipelinedef.Config{
 		ID: "retained",
-		Steps: []engine.StepConfig{
+		Steps: []pipelinedef.Step{
 			stateless("s/v1", func(ctx context.Context, inv durable.Invocation) error {
 				if inv.ResourceID() == "stuck" {
 					select {
@@ -163,7 +164,7 @@ func TestRetentionReapsOnlyOldTerminalRuns(t *testing.T) {
 			Interval:      time.Minute,
 		}),
 	)
-	p, err := def.Bind(e)
+	p, err := e.Bind(def)
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
 	}

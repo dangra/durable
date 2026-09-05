@@ -230,7 +230,7 @@ func (r *RunRecord) Clone() *RunRecord {
 //
 // Identifiers reaching a Store are NUL-free valid UTF-8, and free-text
 // fields (messages, reasons, causes) and annotation keys and values are
-// valid UTF-8 — NewDefinition, Schedule, and the engine's recording
+// valid UTF-8 — Engine.Bind, Schedule, and the engine's recording
 // sites enforce it — so implementations may use NUL as a key separator
 // and protobuf string fields for text.
 type Store interface {

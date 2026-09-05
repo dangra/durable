@@ -42,7 +42,8 @@
 // preemption-safe pipelines out of cooperative cancellation.
 //
 // Vocabulary. StepRef and StateStepRef are the step references generated
-// packages export (StepIdentifier is the interface both satisfy),
+// packages export, built by pipelinedef (StepIdentifier is the interface
+// both satisfy),
 // LookupState and StateSource power typed state reads, and ReduceView is
 // what a Reducer folds. The identity, phase, outcome, park, and
 // failure-record types are aliases of the kernel package's, so a
@@ -90,9 +91,11 @@
 // the other audiences:
 //
 //   - engine runs pipelines: New, the With* options, Start and Stop,
-//     binding generated definitions (and NewDefinition for hand-rolled
-//     ones), Pipeline.Schedule, the Run handle, Result and Status. It is
+//     Bind, Pipeline.Schedule, the Run handle, Result and Status. It is
 //     the wiring side of an application.
+//   - pipelinedef is the type-erased pipeline description generated
+//     code builds and Engine.Bind validates; hand-rolled definitions use
+//     it too. Application code does not import it.
 //   - kernel is the shared vocabulary — identities, phases, outcomes,
 //     parks, failure records — that every other package builds on. This
 //     package aliases all of it, so user code never imports kernel.

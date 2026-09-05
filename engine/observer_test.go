@@ -16,6 +16,7 @@ import (
 	"github.com/dangra/durable/durabletest"
 	"github.com/dangra/durable/engine"
 	"github.com/dangra/durable/observe"
+	"github.com/dangra/durable/pipelinedef"
 )
 
 func discardTestLogger() *slog.Logger { return slog.New(slog.DiscardHandler) }
@@ -55,7 +56,7 @@ func (l *eventLog) locked(fn func()) {
 	fn()
 }
 
-func startObservedEngine(t *testing.T, log *eventLog, defs []*engine.Definition, opts ...engine.Option) (*engine.Engine, []*engine.Pipeline) {
+func startObservedEngine(t *testing.T, log *eventLog, defs []*pipelinedef.Definition, opts ...engine.Option) (*engine.Engine, []*engine.Pipeline) {
 	t.Helper()
 	opts = append([]engine.Option{
 		fastRetry, engine.WithRecoveryBackoff(0), engine.WithObserver(log.observer()),
@@ -64,7 +65,7 @@ func startObservedEngine(t *testing.T, log *eventLog, defs []*engine.Definition,
 	e := engine.New(durabletest.NewMemStore(), opts...)
 	var pipes []*engine.Pipeline
 	for _, def := range defs {
-		pipe, err := def.Bind(e)
+		pipe, err := e.Bind(def)
 		if err != nil {
 			t.Fatalf("Bind: %v", err)
 		}
@@ -84,9 +85,9 @@ func startObservedEngine(t *testing.T, log *eventLog, defs []*engine.Definition,
 // TestObserverLifecycle drives retry, success, permanent failure, and
 // unwind, asserting the full event sequence with attribution.
 func TestObserverLifecycle(t *testing.T) {
-	def := engine.NewDefinition(engine.DefinitionConfig{
+	def := pipelinedef.New(pipelinedef.Config{
 		ID: "observed",
-		Steps: []engine.StepConfig{
+		Steps: []pipelinedef.Step{
 			{
 				ID:     "flaky/v1",
 				Unwind: true,
@@ -106,7 +107,7 @@ func TestObserverLifecycle(t *testing.T) {
 		},
 	})
 	log := &eventLog{}
-	_, pipes := startObservedEngine(t, log, []*engine.Definition{def})
+	_, pipes := startObservedEngine(t, log, []*pipelinedef.Definition{def})
 	pipe := pipes[0]
 
 	run, _, err := pipe.Schedule(context.Background(), "res-1", nil)
@@ -194,14 +195,14 @@ func TestObserverLifecycle(t *testing.T) {
 // RunUnwinding with FailureKindCanceled and that a delayed run shows in
 // Stats as delayed.
 func TestObserverCancel(t *testing.T) {
-	def := engine.NewDefinition(engine.DefinitionConfig{
+	def := pipelinedef.New(pipelinedef.Config{
 		ID: "observed-cancel",
-		Steps: []engine.StepConfig{
+		Steps: []pipelinedef.Step{
 			stateless("never/v1", func(ctx context.Context, inv durable.Invocation) error { return nil }),
 		},
 	})
 	log := &eventLog{}
-	e, pipes := startObservedEngine(t, log, []*engine.Definition{def})
+	e, pipes := startObservedEngine(t, log, []*pipelinedef.Definition{def})
 	pipe := pipes[0]
 
 	run, _, err := pipe.Schedule(context.Background(), "res-1", nil, engine.StartAfter(time.Hour))
@@ -239,9 +240,9 @@ func TestObserverCancel(t *testing.T) {
 // wakes emit WaiterWoken with the awaited target.
 func TestObserverAwaitWake(t *testing.T) {
 	release := make(chan struct{})
-	target := engine.NewDefinition(engine.DefinitionConfig{
+	target := pipelinedef.New(pipelinedef.Config{
 		ID: "await-target",
-		Steps: []engine.StepConfig{
+		Steps: []pipelinedef.Step{
 			stateless("hold/v1", func(ctx context.Context, inv durable.Invocation) error {
 				select {
 				case <-release:
@@ -253,9 +254,9 @@ func TestObserverAwaitWake(t *testing.T) {
 		},
 	})
 	var targetID durable.RunID
-	waiter := engine.NewDefinition(engine.DefinitionConfig{
+	waiter := pipelinedef.New(pipelinedef.Config{
 		ID: "await-waiter",
-		Steps: []engine.StepConfig{
+		Steps: []pipelinedef.Step{
 			stateless("wait/v1", func(ctx context.Context, inv durable.Invocation) error {
 				if _, ok := inv.AwaitedRunID(); ok {
 					return nil
@@ -265,7 +266,7 @@ func TestObserverAwaitWake(t *testing.T) {
 		},
 	})
 	log := &eventLog{}
-	e, pipes := startObservedEngine(t, log, []*engine.Definition{target, waiter})
+	e, pipes := startObservedEngine(t, log, []*pipelinedef.Definition{target, waiter})
 	targetPipe, waiterPipe := pipes[0], pipes[1]
 
 	trun, _, err := targetPipe.Schedule(context.Background(), "res-t", nil)
@@ -313,9 +314,9 @@ func TestObserverAwaitWake(t *testing.T) {
 func TestObserverClassWaitAndStats(t *testing.T) {
 	entered := make(chan struct{}, 1)
 	release := make(chan struct{})
-	def := engine.NewDefinition(engine.DefinitionConfig{
+	def := pipelinedef.New(pipelinedef.Config{
 		ID: "observed-class",
-		Steps: []engine.StepConfig{{
+		Steps: []pipelinedef.Step{{
 			ID:               "gated/v1",
 			ConcurrencyClass: "boot",
 			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
@@ -330,7 +331,7 @@ func TestObserverClassWaitAndStats(t *testing.T) {
 		}},
 	})
 	log := &eventLog{}
-	e, pipes := startObservedEngine(t, log, []*engine.Definition{def}, engine.WithConcurrencyClass("boot", 1))
+	e, pipes := startObservedEngine(t, log, []*pipelinedef.Definition{def}, engine.WithConcurrencyClass("boot", 1))
 	pipe := pipes[0]
 
 	first, _, err := pipe.Schedule(context.Background(), "res-1", nil)
@@ -374,9 +375,9 @@ func TestObserverClassWaitAndStats(t *testing.T) {
 func TestObserverCancelThrottledRun(t *testing.T) {
 	entered := make(chan struct{}, 2)
 	release := make(chan struct{})
-	def := engine.NewDefinition(engine.DefinitionConfig{
+	def := pipelinedef.New(pipelinedef.Config{
 		ID: "observed-cancel-throttle",
-		Steps: []engine.StepConfig{{
+		Steps: []pipelinedef.Step{{
 			ID:               "gated/v1",
 			ConcurrencyClass: "boot",
 			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
@@ -391,7 +392,7 @@ func TestObserverCancelThrottledRun(t *testing.T) {
 		}},
 	})
 	log := &eventLog{}
-	e, pipes := startObservedEngine(t, log, []*engine.Definition{def}, engine.WithConcurrencyClass("boot", 1))
+	e, pipes := startObservedEngine(t, log, []*pipelinedef.Definition{def}, engine.WithConcurrencyClass("boot", 1))
 	pipe := pipes[0]
 
 	holder, _, err := pipe.Schedule(context.Background(), "res-hold", nil)
@@ -446,9 +447,9 @@ func TestObserverCancelThrottledRun(t *testing.T) {
 // when the abandoned target later completes.
 func TestObserverCancelAwaitingRun(t *testing.T) {
 	release := make(chan struct{})
-	target := engine.NewDefinition(engine.DefinitionConfig{
+	target := pipelinedef.New(pipelinedef.Config{
 		ID: "cancel-await-target",
-		Steps: []engine.StepConfig{
+		Steps: []pipelinedef.Step{
 			stateless("hold/v1", func(ctx context.Context, inv durable.Invocation) error {
 				select {
 				case <-release:
@@ -460,9 +461,9 @@ func TestObserverCancelAwaitingRun(t *testing.T) {
 		},
 	})
 	var targetID durable.RunID
-	waiter := engine.NewDefinition(engine.DefinitionConfig{
+	waiter := pipelinedef.New(pipelinedef.Config{
 		ID: "cancel-await-waiter",
-		Steps: []engine.StepConfig{
+		Steps: []pipelinedef.Step{
 			stateless("wait/v1", func(ctx context.Context, inv durable.Invocation) error {
 				if _, ok := inv.AwaitedRunID(); ok {
 					return nil
@@ -472,7 +473,7 @@ func TestObserverCancelAwaitingRun(t *testing.T) {
 		},
 	})
 	log := &eventLog{}
-	e, pipes := startObservedEngine(t, log, []*engine.Definition{target, waiter})
+	e, pipes := startObservedEngine(t, log, []*pipelinedef.Definition{target, waiter})
 	targetPipe, waiterPipe := pipes[0], pipes[1]
 
 	trun, _, err := targetPipe.Schedule(context.Background(), "res-t", nil)
@@ -522,9 +523,9 @@ func TestObserverCancelAwaitingRun(t *testing.T) {
 func TestObserverCancelHandsOnWake(t *testing.T) {
 	entered := make(chan durable.ResourceID, 3)
 	release := make(chan struct{})
-	def := engine.NewDefinition(engine.DefinitionConfig{
+	def := pipelinedef.New(pipelinedef.Config{
 		ID: "observed-hand-on",
-		Steps: []engine.StepConfig{{
+		Steps: []pipelinedef.Step{{
 			ID:               "gated/v1",
 			ConcurrencyClass: "boot",
 			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
@@ -539,7 +540,7 @@ func TestObserverCancelHandsOnWake(t *testing.T) {
 		}},
 	})
 	log := &eventLog{}
-	e, pipes := startObservedEngine(t, log, []*engine.Definition{def}, engine.WithConcurrencyClass("boot", 1))
+	e, pipes := startObservedEngine(t, log, []*pipelinedef.Definition{def}, engine.WithConcurrencyClass("boot", 1))
 	pipe := pipes[0]
 
 	holder, _, err := pipe.Schedule(context.Background(), "res-hold", nil)
@@ -595,10 +596,10 @@ func TestObserverCancelHandsOnWake(t *testing.T) {
 // invalidStateDef builds a pipeline whose single HasState step returns
 // (nil, nil) once gate closes — the state violation that marks the Run
 // invalid for the current deployment.
-func invalidStateDef(id durable.PipelineID, gate chan struct{}) *engine.Definition {
-	return engine.NewDefinition(engine.DefinitionConfig{
+func invalidStateDef(id durable.PipelineID, gate chan struct{}) *pipelinedef.Definition {
+	return pipelinedef.New(pipelinedef.Config{
 		ID: id,
-		Steps: []engine.StepConfig{{
+		Steps: []pipelinedef.Step{{
 			ID:       "nil-state/v1",
 			HasState: true,
 			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
@@ -620,7 +621,7 @@ func invalidStateDef(id durable.PipelineID, gate chan struct{}) *engine.Definiti
 func TestObserverInvalidIdempotent(t *testing.T) {
 	def := invalidStateDef("observed-invalid", nil)
 	log := &eventLog{}
-	_, pipes := startObservedEngine(t, log, []*engine.Definition{def})
+	_, pipes := startObservedEngine(t, log, []*pipelinedef.Definition{def})
 	pipe := pipes[0]
 
 	run, _, err := pipe.Schedule(context.Background(), "res-1", nil)
@@ -651,9 +652,9 @@ func TestObserverInvalidTargetNoSpuriousWake(t *testing.T) {
 	gate := make(chan struct{})
 	target := invalidStateDef("invalid-target", gate)
 	var targetID durable.RunID
-	waiter := engine.NewDefinition(engine.DefinitionConfig{
+	waiter := pipelinedef.New(pipelinedef.Config{
 		ID: "invalid-target-waiter",
-		Steps: []engine.StepConfig{
+		Steps: []pipelinedef.Step{
 			stateless("wait/v1", func(ctx context.Context, inv durable.Invocation) error {
 				if _, ok := inv.AwaitedRunID(); ok {
 					return nil
@@ -663,7 +664,7 @@ func TestObserverInvalidTargetNoSpuriousWake(t *testing.T) {
 		},
 	})
 	log := &eventLog{}
-	e, pipes := startObservedEngine(t, log, []*engine.Definition{target, waiter})
+	e, pipes := startObservedEngine(t, log, []*pipelinedef.Definition{target, waiter})
 	targetPipe, waiterPipe := pipes[0], pipes[1]
 
 	trun, _, err := targetPipe.Schedule(context.Background(), "res-t", nil)
@@ -721,15 +722,15 @@ func TestObserverInvalidTargetNoSpuriousWake(t *testing.T) {
 func TestObserverReapedPerBatch(t *testing.T) {
 	const runs = 300 // > one 256-run reap batch
 	store := durabletest.NewMemStore()
-	def := engine.NewDefinition(engine.DefinitionConfig{
+	def := pipelinedef.New(pipelinedef.Config{
 		ID: "observed-reap",
-		Steps: []engine.StepConfig{
+		Steps: []pipelinedef.Step{
 			stateless("noop/v1", func(ctx context.Context, inv durable.Invocation) error { return nil }),
 		},
 	})
 
 	seeder := engine.New(store, fastRetry, engine.WithRecoveryBackoff(0), engine.WithLogger(discardTestLogger()))
-	pipe, err := def.Bind(seeder)
+	pipe, err := seeder.Bind(def)
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
 	}
@@ -759,7 +760,7 @@ func TestObserverReapedPerBatch(t *testing.T) {
 			reaps = append(reaps, n)
 			log.mu.Unlock()
 		}}))
-	if _, err := def.Bind(reaper); err != nil {
+	if _, err := reaper.Bind(def); err != nil {
 		t.Fatalf("Bind reaper: %v", err)
 	}
 	if err := reaper.Start(context.Background()); err != nil {
@@ -795,9 +796,9 @@ func TestObserverReapedPerBatch(t *testing.T) {
 // TestObserverPanicIsolated asserts a panicking callback neither affects
 // the Run nor later observers.
 func TestObserverPanicIsolated(t *testing.T) {
-	def := engine.NewDefinition(engine.DefinitionConfig{
+	def := pipelinedef.New(pipelinedef.Config{
 		ID: "observed-panic",
-		Steps: []engine.StepConfig{
+		Steps: []pipelinedef.Step{
 			stateless("ok/v1", func(ctx context.Context, inv durable.Invocation) error { return nil }),
 		},
 	})
@@ -808,7 +809,7 @@ func TestObserverPanicIsolated(t *testing.T) {
 	e := engine.New(durabletest.NewMemStore(),
 		fastRetry, engine.WithRecoveryBackoff(0), engine.WithLogger(discardTestLogger()),
 		engine.WithObserver(panicky), engine.WithObserver(log.observer()))
-	pipe, err := def.Bind(e)
+	pipe, err := e.Bind(def)
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
 	}

@@ -14,15 +14,16 @@ import (
 	"github.com/dangra/durable"
 	"github.com/dangra/durable/durabletest"
 	"github.com/dangra/durable/engine"
+	"github.com/dangra/durable/pipelinedef"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
 func TestDuplicateScheduling(t *testing.T) {
 	release := make(chan struct{})
-	def := engine.NewDefinition(engine.DefinitionConfig{
+	def := pipelinedef.New(pipelinedef.Config{
 		ID: "dedup",
-		Steps: []engine.StepConfig{
+		Steps: []pipelinedef.Step{
 			stateless("wait/v1", func(ctx context.Context, inv durable.Invocation) error {
 				select {
 				case <-release:
@@ -81,11 +82,11 @@ func TestDuplicateScheduling(t *testing.T) {
 
 func TestExclusionGroupSemantics(t *testing.T) {
 	release := make(chan struct{})
-	blocking := func(id durable.PipelineID, group string) *engine.Definition {
-		return engine.NewDefinition(engine.DefinitionConfig{
+	blocking := func(id durable.PipelineID, group string) *pipelinedef.Definition {
+		return pipelinedef.New(pipelinedef.Config{
 			ID:             id,
 			ExclusionGroup: group,
-			Steps: []engine.StepConfig{
+			Steps: []pipelinedef.Step{
 				stateless("s-"+durable.StepID(id)+"/v1", func(ctx context.Context, inv durable.Invocation) error {
 					select {
 					case <-release:
@@ -142,9 +143,9 @@ func TestExclusionGroupSemantics(t *testing.T) {
 
 func TestActiveRun(t *testing.T) {
 	release := make(chan struct{})
-	def := engine.NewDefinition(engine.DefinitionConfig{
+	def := pipelinedef.New(pipelinedef.Config{
 		ID: "observed",
-		Steps: []engine.StepConfig{
+		Steps: []pipelinedef.Step{
 			stateless("s/v1", func(ctx context.Context, inv durable.Invocation) error {
 				select {
 				case <-release:
@@ -186,9 +187,9 @@ func TestSupersedeReconcile(t *testing.T) {
 	var unwound []string
 	started := make(chan struct{})
 	var startedOnce sync.Once
-	def := engine.NewDefinition(engine.DefinitionConfig{
+	def := pipelinedef.New(pipelinedef.Config{
 		ID: "versioned",
-		Steps: []engine.StepConfig{
+		Steps: []pipelinedef.Step{
 			{
 				ID:     "apply/v1",
 				Unwind: true,
@@ -278,10 +279,10 @@ func TestConcurrencyClassLimitsExecution(t *testing.T) {
 		peak       atomic.Int64
 	)
 	release := make(chan struct{})
-	def := engine.NewDefinition(engine.DefinitionConfig{
+	def := pipelinedef.New(pipelinedef.Config{
 		ID:               "throttled-pipe",
 		ConcurrencyClass: "snapshots",
-		Steps: []engine.StepConfig{
+		Steps: []pipelinedef.Step{
 			stateless("s/v1", func(ctx context.Context, inv durable.Invocation) error {
 				n := concurrent.Add(1)
 				defer concurrent.Add(-1)
@@ -302,7 +303,7 @@ func TestConcurrencyClassLimitsExecution(t *testing.T) {
 	})
 	e := engine.New(durabletest.NewMemStore(), fastRetry,
 		engine.WithConcurrencyClass("snapshots", 1))
-	p, err := def.Bind(e)
+	p, err := e.Bind(def)
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
 	}
@@ -365,10 +366,10 @@ func TestUnconfiguredClassIsUnlimited(t *testing.T) {
 		peak       atomic.Int64
 	)
 	gate := make(chan struct{})
-	def := engine.NewDefinition(engine.DefinitionConfig{
+	def := pipelinedef.New(pipelinedef.Config{
 		ID:               "unlimited-pipe",
 		ConcurrencyClass: "never-configured",
-		Steps: []engine.StepConfig{
+		Steps: []pipelinedef.Step{
 			stateless("s/v1", func(ctx context.Context, inv durable.Invocation) error {
 				n := concurrent.Add(1)
 				defer concurrent.Add(-1)
@@ -417,10 +418,10 @@ func TestCancelBypassesThrottle(t *testing.T) {
 	defer close(release)
 	holderEntered := make(chan struct{})
 	var enteredOnce sync.Once
-	def := engine.NewDefinition(engine.DefinitionConfig{
+	def := pipelinedef.New(pipelinedef.Config{
 		ID:               "throttle-cancel",
 		ConcurrencyClass: "narrow",
-		Steps: []engine.StepConfig{
+		Steps: []pipelinedef.Step{
 			stateless("s/v1", func(ctx context.Context, inv durable.Invocation) error {
 				if inv.CancelRequested() {
 					return nil
@@ -439,7 +440,7 @@ func TestCancelBypassesThrottle(t *testing.T) {
 	})
 	e := engine.New(durabletest.NewMemStore(), fastRetry,
 		engine.WithConcurrencyClass("narrow", 1))
-	p, _ := def.Bind(e)
+	p, _ := e.Bind(def)
 	if err := e.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}

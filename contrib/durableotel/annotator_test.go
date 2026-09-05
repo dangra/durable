@@ -15,6 +15,7 @@ import (
 	"github.com/dangra/durable/contrib/durableotel"
 	"github.com/dangra/durable/durabletest"
 	"github.com/dangra/durable/engine"
+	"github.com/dangra/durable/pipelinedef"
 )
 
 // TestAnnotatorEngineWide is the declare-once DX story: with Annotator
@@ -30,9 +31,9 @@ func TestAnnotatorEngineWide(t *testing.T) {
 		mu   sync.Mutex
 		seen = map[string]string{}
 	)
-	def := engine.NewDefinition(engine.DefinitionConfig{
+	def := pipelinedef.New(pipelinedef.Config{
 		ID: "declared-once",
-		Steps: []engine.StepConfig{{
+		Steps: []pipelinedef.Step{{
 			ID: "probe/v1",
 			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				mu.Lock()
@@ -48,7 +49,7 @@ func TestAnnotatorEngineWide(t *testing.T) {
 		engine.WithMiddleware(durableotel.Middleware(
 			durableotel.WithTracerProvider(tp), durableotel.WithBaggage())),
 		engine.WithScheduleAnnotator(durableotel.Annotator(durableotel.WithBaggage())))
-	pipe, err := def.Bind(eng)
+	pipe, err := eng.Bind(def)
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
 	}

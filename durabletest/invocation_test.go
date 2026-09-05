@@ -12,11 +12,12 @@ import (
 
 	"github.com/dangra/durable"
 	"github.com/dangra/durable/durabletest"
+	"github.com/dangra/durable/pipelinedef"
 )
 
 var (
-	nameStep  = durable.NewStateStepRef("name/v1", func() *wrapperspb.StringValue { return &wrapperspb.StringValue{} })
-	countStep = durable.NewStateStepRef("count/v1", func() *wrapperspb.Int32Value { return &wrapperspb.Int32Value{} })
+	nameStep  = pipelinedef.StateStepRef("name/v1", func() *wrapperspb.StringValue { return &wrapperspb.StringValue{} })
+	countStep = pipelinedef.StateStepRef("count/v1", func() *wrapperspb.Int32Value { return &wrapperspb.Int32Value{} })
 )
 
 func TestFakeInvocationDefaults(t *testing.T) {

@@ -13,6 +13,7 @@ import (
 	"github.com/dangra/durable/durabletest"
 	"github.com/dangra/durable/engine"
 	"github.com/dangra/durable/observe"
+	"github.com/dangra/durable/pipelinedef"
 )
 
 // TestTracePropagationPattern is the documented tracing shape end to
@@ -37,9 +38,9 @@ func TestTracePropagationPattern(t *testing.T) {
 		}
 	}
 
-	def := engine.NewDefinition(engine.DefinitionConfig{
+	def := pipelinedef.New(pipelinedef.Config{
 		ID: "traced",
-		Steps: []engine.StepConfig{
+		Steps: []pipelinedef.Step{
 			{
 				ID:     "prepare/v1",
 				Unwind: true,
@@ -70,7 +71,7 @@ func TestTracePropagationPattern(t *testing.T) {
 		e := engine.New(store, fastRetry, engine.WithRecoveryBackoff(0),
 			engine.WithLogger(discardTestLogger()),
 			engine.WithMiddleware(tracing), engine.WithObserver(obs))
-		pipe, err := def.Bind(e)
+		pipe, err := e.Bind(def)
 		if err != nil {
 			t.Fatalf("Bind: %v", err)
 		}
@@ -148,9 +149,9 @@ func TestTracePropagationPattern(t *testing.T) {
 // invalid UTF-8 is rejected at Schedule.
 func TestAnnotationsDedupAndValidation(t *testing.T) {
 	hold := make(chan struct{})
-	def := engine.NewDefinition(engine.DefinitionConfig{
+	def := pipelinedef.New(pipelinedef.Config{
 		ID: "annotated",
-		Steps: []engine.StepConfig{
+		Steps: []pipelinedef.Step{
 			stateless("hold/v1", func(ctx context.Context, inv durable.Invocation) error {
 				select {
 				case <-hold:

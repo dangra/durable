@@ -15,16 +15,16 @@ import (
 
 	"github.com/dangra/durable"
 	"github.com/dangra/durable/durabletest"
-	"github.com/dangra/durable/engine"
+	"github.com/dangra/durable/pipelinedef"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
 func TestForwardSuccessWithReducer(t *testing.T) {
 	selectRef := refFor("select-host/v1")
-	def := engine.NewDefinition(engine.DefinitionConfig{
+	def := pipelinedef.New(pipelinedef.Config{
 		ID: "provision",
-		Steps: []engine.StepConfig{
+		Steps: []pipelinedef.Step{
 			stateless("validate/v1", func(ctx context.Context, inv durable.Invocation) error {
 				in, ok := inv.InputMessage().(*wrapperspb.StringValue)
 				if !ok || in.GetValue() != "ord" {
@@ -78,9 +78,9 @@ func TestForwardSuccessWithReducer(t *testing.T) {
 
 func TestRetryUntilSuccess(t *testing.T) {
 	var attempts atomic.Uint64
-	def := engine.NewDefinition(engine.DefinitionConfig{
+	def := pipelinedef.New(pipelinedef.Config{
 		ID: "retrying",
-		Steps: []engine.StepConfig{
+		Steps: []pipelinedef.Step{
 			stateless("flaky/v1", func(ctx context.Context, inv durable.Invocation) error {
 				attempts.Store(inv.Attempt())
 				if inv.Attempt() < 3 {
@@ -105,9 +105,9 @@ func TestRetryUntilSuccess(t *testing.T) {
 }
 
 func TestHandlerPanicIsRetried(t *testing.T) {
-	def := engine.NewDefinition(engine.DefinitionConfig{
+	def := pipelinedef.New(pipelinedef.Config{
 		ID: "panicky",
-		Steps: []engine.StepConfig{
+		Steps: []pipelinedef.Step{
 			stateless("boom/v1", func(ctx context.Context, inv durable.Invocation) error {
 				if inv.Attempt() == 1 {
 					panic("kaboom")
@@ -130,9 +130,9 @@ func TestPermanentFailureUnwinds(t *testing.T) {
 	var unwoundSteps []durable.StepID
 	var failureSeenByA durable.Failure
 
-	def := engine.NewDefinition(engine.DefinitionConfig{
+	def := pipelinedef.New(pipelinedef.Config{
 		ID: "failing",
-		Steps: []engine.StepConfig{
+		Steps: []pipelinedef.Step{
 			{
 				ID:     "a/v1",
 				Unwind: true,
@@ -211,9 +211,9 @@ func TestPermanentFailureUnwinds(t *testing.T) {
 
 func TestLastErrorSurfacedDuringRetries(t *testing.T) {
 	release := make(chan struct{})
-	def := engine.NewDefinition(engine.DefinitionConfig{
+	def := pipelinedef.New(pipelinedef.Config{
 		ID: "lasterr",
-		Steps: []engine.StepConfig{
+		Steps: []pipelinedef.Step{
 			stateless("s/v1", func(ctx context.Context, inv durable.Invocation) error {
 				select {
 				case <-release:

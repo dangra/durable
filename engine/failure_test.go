@@ -14,6 +14,7 @@ import (
 	"github.com/dangra/durable/bboltstore"
 	"github.com/dangra/durable/durabletest"
 	"github.com/dangra/durable/engine"
+	"github.com/dangra/durable/pipelinedef"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -28,9 +29,9 @@ func (e *classifiedError) FailureReason() string            { return "invalid-im
 
 func failingRun(t *testing.T, id durable.PipelineID, fail error) engine.Result {
 	t.Helper()
-	def := engine.NewDefinition(engine.DefinitionConfig{
+	def := pipelinedef.New(pipelinedef.Config{
 		ID: id,
-		Steps: []engine.StepConfig{
+		Steps: []pipelinedef.Step{
 			stateless("s/v1", func(ctx context.Context, inv durable.Invocation) error {
 				return fail
 			}),
@@ -79,9 +80,9 @@ func TestFailureAttribution(t *testing.T) {
 }
 
 func TestUnwindFailureAttribution(t *testing.T) {
-	def := engine.NewDefinition(engine.DefinitionConfig{
+	def := pipelinedef.New(pipelinedef.Config{
 		ID: "attr-unwind",
-		Steps: []engine.StepConfig{
+		Steps: []pipelinedef.Step{
 			{
 				ID:     "a/v1",
 				Unwind: true,
@@ -117,9 +118,9 @@ func TestUnwindFailureAttribution(t *testing.T) {
 // carry on, through both the retry and the permanent-failure paths.
 func TestInvalidUTF8ErrorsDoNotWedge(t *testing.T) {
 	raw := "raw \xff\xfe bytes"
-	def := engine.NewDefinition(engine.DefinitionConfig{
+	def := pipelinedef.New(pipelinedef.Config{
 		ID: "utf8",
-		Steps: []engine.StepConfig{
+		Steps: []pipelinedef.Step{
 			stateless("flaky/v1", func(ctx context.Context, inv durable.Invocation) error {
 				if inv.Attempt() == 1 {
 					return errors.New(raw) // ordinary error -> LastError

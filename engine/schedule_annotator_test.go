@@ -11,6 +11,7 @@ import (
 	"github.com/dangra/durable/durabletest"
 	"github.com/dangra/durable/engine"
 	"github.com/dangra/durable/observe"
+	"github.com/dangra/durable/pipelinedef"
 )
 
 type tenantKey struct{}
@@ -29,9 +30,9 @@ func TestScheduleAnnotator(t *testing.T) {
 		seen = ev.Annotations
 		mu.Unlock()
 	}}
-	def := engine.NewDefinition(engine.DefinitionConfig{
+	def := pipelinedef.New(pipelinedef.Config{
 		ID: "annotated",
-		Steps: []engine.StepConfig{{
+		Steps: []pipelinedef.Step{{
 			ID: "noop/v1",
 			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				return nil, nil
@@ -52,7 +53,7 @@ func TestScheduleAnnotator(t *testing.T) {
 		}),
 		engine.WithScheduleAnnotator(nil), // ignored
 	)
-	pipe, err := def.Bind(e)
+	pipe, err := e.Bind(def)
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
 	}
@@ -104,9 +105,9 @@ func TestScheduleAnnotator(t *testing.T) {
 // TestScheduleAnnotatorInvalidUTF8 pins that annotator output passes
 // through the same validation as call-site annotations.
 func TestScheduleAnnotatorInvalidUTF8(t *testing.T) {
-	def := engine.NewDefinition(engine.DefinitionConfig{
+	def := pipelinedef.New(pipelinedef.Config{
 		ID: "annotated-bad",
-		Steps: []engine.StepConfig{{
+		Steps: []pipelinedef.Step{{
 			ID: "noop/v1",
 			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				return nil, nil
@@ -118,7 +119,7 @@ func TestScheduleAnnotatorInvalidUTF8(t *testing.T) {
 		engine.WithScheduleAnnotator(func(context.Context) map[string]string {
 			return map[string]string{"bad": "\xff\xfe"}
 		}))
-	pipe, err := def.Bind(e)
+	pipe, err := e.Bind(def)
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
 	}

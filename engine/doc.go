@@ -15,11 +15,12 @@
 // clock, logger, observer, middleware, schedule annotator, drain
 // timeout), Start, Stop, and Stats.
 //
-// Binding pipelines. Generated code exposes a typed Definition whose Bind
-// registers it with an engine before Start and returns a typed Pipeline;
-// the untyped Definition, DefinitionConfig, StepConfig, and NewDefinition
-// beneath it are what generated code builds and what hand-rolled
-// definitions use.
+// Binding pipelines. Bind validates a pipelinedef.Definition — the
+// type-erased description generated code builds — registers it before
+// Start, and returns the Pipeline handle. Generated code wraps both in
+// typed Definition and Pipeline types; hand-rolled definitions call Bind
+// directly. Bind is the single validator: a malformed definition is an
+// error here, never a panic at construction.
 //
 // Scheduling and watching runs. Pipeline.Schedule with ScheduleOptions
 // (WithAnnotations, StartAt, StartAfter) or an engine-wide

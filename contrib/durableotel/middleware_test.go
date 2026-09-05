@@ -17,6 +17,7 @@ import (
 	"github.com/dangra/durable/contrib/durableotel"
 	"github.com/dangra/durable/durabletest"
 	"github.com/dangra/durable/engine"
+	"github.com/dangra/durable/pipelinedef"
 )
 
 var fastRetry = engine.WithRetryPolicy(engine.RetryPolicy{
@@ -31,10 +32,10 @@ func quietLogger() engine.Option {
 // retrying step with an unwind, then a permanent failure that triggers
 // the unwind. Its attempts: prepare forward 1 (retry), prepare forward
 // 2, explode forward 1 (permanent), prepare unwind 1.
-func sagaDef() *engine.Definition {
-	return engine.NewDefinition(engine.DefinitionConfig{
+func sagaDef() *pipelinedef.Definition {
+	return pipelinedef.New(pipelinedef.Config{
 		ID: "saga",
-		Steps: []engine.StepConfig{
+		Steps: []pipelinedef.Step{
 			{
 				ID:     "prepare/v1",
 				Unwind: true,
@@ -65,7 +66,7 @@ func runSaga(t *testing.T, schedule []engine.ScheduleOption, opts ...engine.Opti
 	t.Helper()
 	eng := engine.New(durabletest.NewMemStore(),
 		append([]engine.Option{fastRetry, quietLogger()}, opts...)...)
-	pipe, err := sagaDef().Bind(eng)
+	pipe, err := eng.Bind(sagaDef())
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
 	}
@@ -220,9 +221,9 @@ func TestMiddlewareAwaitIsNotAnError(t *testing.T) {
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
 	defer tp.Shutdown(t.Context())
 
-	def := engine.NewDefinition(engine.DefinitionConfig{
+	def := pipelinedef.New(pipelinedef.Config{
 		ID: "awaiter",
-		Steps: []engine.StepConfig{{
+		Steps: []pipelinedef.Step{{
 			ID: "wait/v1",
 			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				if _, woken := inv.AwaitedRunID(); !woken {
@@ -234,7 +235,7 @@ func TestMiddlewareAwaitIsNotAnError(t *testing.T) {
 	})
 	eng := engine.New(durabletest.NewMemStore(), fastRetry, quietLogger(),
 		engine.WithMiddleware(durableotel.Middleware(durableotel.WithTracerProvider(tp))))
-	pipe, err := def.Bind(eng)
+	pipe, err := eng.Bind(def)
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
 	}
@@ -282,9 +283,9 @@ func TestMiddlewarePanicRecordedAndRethrown(t *testing.T) {
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
 	defer tp.Shutdown(t.Context())
 
-	def := engine.NewDefinition(engine.DefinitionConfig{
+	def := pipelinedef.New(pipelinedef.Config{
 		ID: "panicky",
-		Steps: []engine.StepConfig{{
+		Steps: []pipelinedef.Step{{
 			ID: "boom/v1",
 			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				if inv.Attempt() == 1 {
@@ -296,7 +297,7 @@ func TestMiddlewarePanicRecordedAndRethrown(t *testing.T) {
 	})
 	eng := engine.New(durabletest.NewMemStore(), fastRetry, quietLogger(),
 		engine.WithMiddleware(durableotel.Middleware(durableotel.WithTracerProvider(tp))))
-	pipe, err := def.Bind(eng)
+	pipe, err := eng.Bind(def)
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
 	}
@@ -397,16 +398,16 @@ func TestWithTraceContextRoundTrip(t *testing.T) {
 				return next(ctx, inv)
 			}
 		}))
-	def := engine.NewDefinition(engine.DefinitionConfig{
+	def := pipelinedef.New(pipelinedef.Config{
 		ID: "probe",
-		Steps: []engine.StepConfig{{
+		Steps: []pipelinedef.Step{{
 			ID: "noop/v1",
 			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				return nil, nil
 			},
 		}},
 	})
-	pipe, err := def.Bind(eng)
+	pipe, err := eng.Bind(def)
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
 	}

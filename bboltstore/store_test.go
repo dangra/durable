@@ -14,6 +14,7 @@ import (
 
 	"github.com/dangra/durable"
 	"github.com/dangra/durable/engine"
+	"github.com/dangra/durable/pipelinedef"
 )
 
 func open(t *testing.T, path string) *Store {
@@ -102,10 +103,10 @@ func TestEngineSurvivesRestart(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "durable.db")
 	fastRetry := engine.WithRetryPolicy(engine.RetryPolicy{Initial: time.Millisecond, Max: 5 * time.Millisecond, Multiplier: 2})
 
-	makeDef := func(succeed *bool) *engine.Definition {
-		return engine.NewDefinition(engine.DefinitionConfig{
+	makeDef := func(succeed *bool) *pipelinedef.Definition {
+		return pipelinedef.New(pipelinedef.Config{
 			ID: "restartable",
-			Steps: []engine.StepConfig{{
+			Steps: []pipelinedef.Step{{
 				ID: "only/v1",
 				Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 					if !*succeed {
@@ -121,7 +122,7 @@ func TestEngineSurvivesRestart(t *testing.T) {
 	s1 := open(t, path)
 	e1 := engine.New(s1, fastRetry)
 	no := false
-	p1, err := makeDef(&no).Bind(e1)
+	p1, err := e1.Bind(makeDef(&no))
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
 	}
@@ -157,7 +158,7 @@ func TestEngineSurvivesRestart(t *testing.T) {
 	s2 := open(t, path)
 	e2 := engine.New(s2, fastRetry, engine.WithRecoveryBackoff(0))
 	yes := true
-	p2, err := makeDef(&yes).Bind(e2)
+	p2, err := e2.Bind(makeDef(&yes))
 	if err != nil {
 		t.Fatalf("Bind2: %v", err)
 	}

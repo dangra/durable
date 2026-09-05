@@ -9,18 +9,19 @@ import (
 	context "context"
 	durable "github.com/dangra/durable"
 	engine "github.com/dangra/durable/engine"
+	pipelinedef "github.com/dangra/durable/pipelinedef"
 	proto "google.golang.org/protobuf/proto"
 	sync "sync"
 )
 
 // ProvisionEnvStep is the typed reference to the state-producing step "provision-env/v1".
-var ProvisionEnvStep = durable.NewStateStepRef("provision-env/v1", func() *ProvisionEnv { return &ProvisionEnv{} })
+var ProvisionEnvStep = pipelinedef.StateStepRef("provision-env/v1", func() *ProvisionEnv { return &ProvisionEnv{} })
 
 // RunMigrationsStep is the typed reference to the state-producing step "run-migrations/v1".
-var RunMigrationsStep = durable.NewStateStepRef("run-migrations/v1", func() *RunMigrations { return &RunMigrations{} })
+var RunMigrationsStep = pipelinedef.StateStepRef("run-migrations/v1", func() *RunMigrations { return &RunMigrations{} })
 
 // ShiftTrafficStep is the typed reference to the state-producing step "shift-traffic/v1".
-var ShiftTrafficStep = durable.NewStateStepRef("shift-traffic/v1", func() *ShiftTraffic { return &ShiftTraffic{} })
+var ShiftTrafficStep = pipelinedef.StateStepRef("shift-traffic/v1", func() *ShiftTraffic { return &ShiftTraffic{} })
 
 // ProvisionEnvInvocation is passed to ProvisionEnvHandler methods.
 type ProvisionEnvInvocation struct {
@@ -235,7 +236,7 @@ func (x *DeployService) State[T proto.Message](step durable.StateStepRef[T]) (T,
 
 // DeployServiceDefinition is the unbound pipeline definition.
 type DeployServiceDefinition struct {
-	def *engine.Definition
+	def *pipelinedef.Definition
 }
 
 // NewDeployService assembles the "deploy-service" pipeline definition
@@ -246,7 +247,7 @@ func NewDeployService(
 	shiftTraffic ShiftTrafficHandler,
 	reduce DeployServiceReducer,
 ) *DeployServiceDefinition {
-	return &DeployServiceDefinition{def: engine.NewDefinition(engine.DefinitionConfig{
+	return &DeployServiceDefinition{def: pipelinedef.New(pipelinedef.Config{
 		ID:       "deploy-service",
 		NewInput: func() proto.Message { return &DeployServiceInput{} },
 		Reduce: func(view durable.ReduceView) proto.Message {
@@ -255,7 +256,7 @@ func NewDeployService(
 			defer deployServiceViews.Delete(x)
 			return reduce(x)
 		},
-		Steps: []engine.StepConfig{
+		Steps: []pipelinedef.Step{
 			{
 				ID:       "provision-env/v1",
 				Unwind:   true,
@@ -304,7 +305,7 @@ func NewDeployService(
 // Bind registers the definition with an engine. It is allowed only before
 // Engine.Start.
 func (d *DeployServiceDefinition) Bind(e *engine.Engine) (*DeployServicePipeline, error) {
-	p, err := d.def.Bind(e)
+	p, err := e.Bind(d.def)
 	if err != nil {
 		return nil, err
 	}

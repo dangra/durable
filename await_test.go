@@ -1,3 +1,7 @@
+// Parks, the basics: the park resolution and its classification, a park
+// on a running, missing, or cycle-closing target, the memory that stops
+// a child respawn, cancellation cutting through, and Wait inside a
+// handler. The edge cases live in await_edge_test.go.
 package durable_test
 
 import (
@@ -5,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -115,5 +121,287 @@ func TestAwaitRequest(t *testing.T) {
 		if got, ok := durable.AwaitRequest(err); ok || len(got.Targets) != 0 {
 			t.Fatalf("AwaitRequest(%v) = %+v, %v; want miss", err, got, ok)
 		}
+	}
+}
+
+// The wait-for-existing shape (flyd monitor.go: drain WAIT_FOR_INIT).
+func TestAwaitRunParksUntilTargetCompletes(t *testing.T) {
+	release := make(chan struct{})
+	var waiterAttempts atomic.Uint64
+
+	target := durable.NewDefinition(durable.DefinitionConfig{
+		ID: "await-target",
+		Steps: []durable.StepConfig{
+			stateless("t/v1", func(ctx context.Context, inv *durable.Invocation) error {
+				select {
+				case <-release:
+					return nil
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}),
+		},
+	})
+	var waiterDef *durable.Definition
+	var targetPipe *durable.Pipeline
+	waiterDef = durable.NewDefinition(durable.DefinitionConfig{
+		ID: "await-waiter",
+		Steps: []durable.StepConfig{
+			stateless("w/v1", func(ctx context.Context, inv *durable.Invocation) error {
+				waiterAttempts.Store(inv.Attempt())
+				run, ok, err := targetPipe.ActiveRun(ctx, "res")
+				if err != nil {
+					return err
+				}
+				if ok {
+					return durable.AwaitRun(run.ID())
+				}
+				return nil
+			}),
+		},
+	})
+	_, pipes := startEngine(t, durabletest.NewMemStore(), target, waiterDef)
+	targetPipe = pipes[0]
+
+	tRun, _, err := targetPipe.Schedule(context.Background(), "res", nil)
+	if err != nil {
+		t.Fatalf("Schedule target: %v", err)
+	}
+	wRun, _, err := pipes[1].Schedule(context.Background(), "res", nil)
+	if err != nil {
+		t.Fatalf("Schedule waiter: %v", err)
+	}
+
+	// The waiter parks: RunStateAwaiting, pointing at the target.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		st, err := wRun.Status(context.Background())
+		if err != nil {
+			t.Fatalf("Status: %v", err)
+		}
+		if st.State == durable.RunStateAwaiting {
+			if len(st.AwaitingRunIDs) != 1 || st.AwaitingRunIDs[0] != tRun.ID() {
+				t.Fatalf("AwaitingRunIDs = %v, want [%s]", st.AwaitingRunIDs, tRun.ID())
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("waiter never parked; state %v", st.State)
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	close(release)
+	if res, err := wRun.Wait(context.Background()); err != nil || !res.Succeeded() {
+		t.Fatalf("waiter Wait = %+v, %v", res, err)
+	}
+	// Exactly two attempts: the parking one and the wake.
+	if got := waiterAttempts.Load(); got != 2 {
+		t.Fatalf("waiter attempts = %d, want 2 (park + wake, no polling)", got)
+	}
+}
+
+// The create-then-wait shape (flyd runServiceReconciler): AwaitedRunID
+// prevents respawning the child on re-execution.
+func TestAwaitedRunIDPreventsChildRespawn(t *testing.T) {
+	var sawAwaited atomic.Bool
+	child := durable.NewDefinition(durable.DefinitionConfig{
+		ID: "spawn-child",
+		Steps: []durable.StepConfig{
+			stateless("c/v1", func(ctx context.Context, inv *durable.Invocation) error { return nil }),
+		},
+	})
+	var childPipe *durable.Pipeline
+	parent := durable.NewDefinition(durable.DefinitionConfig{
+		ID: "spawn-parent",
+		Steps: []durable.StepConfig{
+			stateless("p/v1", func(ctx context.Context, inv *durable.Invocation) error {
+				if _, ok := inv.AwaitedRunID(); ok {
+					sawAwaited.Store(true)
+					return nil // child completed; do not respawn
+				}
+				run, _, err := childPipe.Schedule(ctx, "child-res", nil)
+				if conflict, ok := errors.AsType[*durable.ScheduleConflictError](err); ok {
+					return durable.AwaitRun(conflict.RunID)
+				}
+				if err != nil {
+					return err
+				}
+				return durable.AwaitRun(run.ID())
+			}),
+		},
+	})
+	_, pipes := startEngine(t, durabletest.NewMemStore(), child, parent)
+	childPipe = pipes[0]
+
+	pRun, _, err := pipes[1].Schedule(context.Background(), "parent-res", nil)
+	if err != nil {
+		t.Fatalf("Schedule parent: %v", err)
+	}
+	if res, err := pRun.Wait(context.Background()); err != nil || !res.Succeeded() {
+		t.Fatalf("parent Wait = %+v, %v", res, err)
+	}
+	if !sawAwaited.Load() {
+		t.Fatal("wake attempt did not observe AwaitedRunID")
+	}
+	// Exactly one child was ever created.
+	children, err := childPipe.Runs(context.Background(), "child-res")
+	if err != nil {
+		t.Fatalf("Runs: %v", err)
+	}
+	if len(children) != 1 {
+		t.Fatalf("children = %d, want exactly 1 (no respawn loop)", len(children))
+	}
+}
+
+func TestAwaitRunResolvesImmediatelyForMissingTarget(t *testing.T) {
+	def := durable.NewDefinition(durable.DefinitionConfig{
+		ID: "await-missing",
+		Steps: []durable.StepConfig{
+			stateless("s/v1", func(ctx context.Context, inv *durable.Invocation) error {
+				if id, ok := inv.AwaitedRunID(); ok {
+					if id != "no-such-run" {
+						return durable.Fail(errors.New("wrong awaited id"))
+					}
+					return nil
+				}
+				return durable.AwaitRun("no-such-run")
+			}),
+		},
+	})
+	_, pipes := startEngine(t, durabletest.NewMemStore(), def)
+	run, _, _ := pipes[0].Schedule(context.Background(), "r", nil)
+	if res, err := run.Wait(context.Background()); err != nil || !res.Succeeded() {
+		t.Fatalf("Wait = %+v, %v; want immediate resolution", res, err)
+	}
+}
+
+func TestAwaitCycleIsInvalid(t *testing.T) {
+	store := durabletest.NewMemStore()
+	var pipeA, pipeB *durable.Pipeline
+	mk := func(id durable.PipelineID, other **durable.Pipeline, otherRes durable.ResourceID) *durable.Definition {
+		return durable.NewDefinition(durable.DefinitionConfig{
+			ID: id,
+			Steps: []durable.StepConfig{
+				stateless(durable.StepID(string(id)+"/v1"), func(ctx context.Context, inv *durable.Invocation) error {
+					if _, ok := inv.AwaitedRunID(); ok {
+						return nil
+					}
+					run, ok, err := (*other).ActiveRun(ctx, otherRes)
+					if err != nil {
+						return err
+					}
+					if !ok {
+						return errors.New("peer not scheduled yet") // retry
+					}
+					return durable.AwaitRun(run.ID())
+				}),
+			},
+		})
+	}
+	defA := mk("cycle-a", &pipeB, "res-b")
+	defB := mk("cycle-b", &pipeA, "res-a")
+	_, pipes := startEngine(t, store, defA, defB)
+	pipeA, pipeB = pipes[0], pipes[1]
+
+	runA, _, err := pipeA.Schedule(context.Background(), "res-a", nil)
+	if err != nil {
+		t.Fatalf("Schedule A: %v", err)
+	}
+	runB, _, err := pipeB.Schedule(context.Background(), "res-b", nil)
+	if err != nil {
+		t.Fatalf("Schedule B: %v", err)
+	}
+
+	// One of the two must be rejected as an await cycle.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var invalid int
+		for _, r := range []durable.Run{runA, runB} {
+			st, err := r.Status(context.Background())
+			if err != nil {
+				t.Fatalf("Status: %v", err)
+			}
+			if st.State == durable.RunStateInvalid {
+				if !strings.Contains(st.InvalidReason, "await cycle") {
+					t.Fatalf("InvalidReason = %q", st.InvalidReason)
+				}
+				invalid++
+			}
+		}
+		if invalid > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("no run was marked invalid for the await cycle")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestCancelCutsThroughAwait(t *testing.T) {
+	release := make(chan struct{})
+	defer close(release)
+	target := durable.NewDefinition(durable.DefinitionConfig{
+		ID: "cancel-await-target",
+		Steps: []durable.StepConfig{
+			stateless("t/v1", func(ctx context.Context, inv *durable.Invocation) error {
+				select {
+				case <-release:
+					return nil
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}),
+		},
+	})
+	var targetPipe *durable.Pipeline
+	waiter := durable.NewDefinition(durable.DefinitionConfig{
+		ID: "cancel-await-waiter",
+		Steps: []durable.StepConfig{
+			stateless("w/v1", func(ctx context.Context, inv *durable.Invocation) error {
+				if inv.CancelRequested() {
+					return nil
+				}
+				run, ok, err := targetPipe.ActiveRun(ctx, "res")
+				if err != nil {
+					return err
+				}
+				if ok {
+					return durable.AwaitRun(run.ID())
+				}
+				return nil
+			}),
+		},
+	})
+	_, pipes := startEngine(t, durabletest.NewMemStore(), target, waiter)
+	targetPipe = pipes[0]
+
+	if _, _, err := targetPipe.Schedule(context.Background(), "res", nil); err != nil {
+		t.Fatalf("Schedule target: %v", err)
+	}
+	wRun, _, err := pipes[1].Schedule(context.Background(), "res", nil)
+	if err != nil {
+		t.Fatalf("Schedule waiter: %v", err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		st, _ := wRun.Status(context.Background())
+		if st.State == durable.RunStateAwaiting {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("waiter never parked")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	// Cancel the parked run: it must resolve without the target finishing.
+	if err := wRun.Cancel(context.Background(), "no longer needed"); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	res, err := wRun.Wait(context.Background())
+	if err != nil || !res.Canceled() {
+		t.Fatalf("Wait = %+v, %v; want canceled while target still running", res, err)
 	}
 }

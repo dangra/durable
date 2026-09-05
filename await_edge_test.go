@@ -52,33 +52,6 @@ func (l *awaitedLog) all() []awaitedEntry {
 	return append([]awaitedEntry(nil), l.entries...)
 }
 
-func waitForState(t *testing.T, run durable.Run, want durable.RunState) durable.Status {
-	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		st, err := run.Status(context.Background())
-		if err != nil {
-			t.Fatalf("Status: %v", err)
-		}
-		if st.State == want {
-			return st
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("run %s never reached %v; last state %v", run.ID(), want, st.State)
-		}
-		time.Sleep(time.Millisecond)
-	}
-}
-
-func trivialChild(id durable.PipelineID) *durable.Definition {
-	return durable.NewDefinition(durable.DefinitionConfig{
-		ID: id,
-		Steps: []durable.StepConfig{
-			stateless("c/v1", func(ctx context.Context, inv *durable.Invocation) error { return nil }),
-		},
-	})
-}
-
 // The canonical schedule-then-await handler, with a hook that decides what
 // the woken attempt returns. It follows the documented contract to the
 // letter: "not woken" means "first execution", so it schedules the child.
@@ -502,82 +475,6 @@ func testAwaitRestartDuringWokenAttempt(t *testing.T, store storedriver.Store) {
 }
 
 // ---- Multi-target parks: AwaitAll and AwaitAny ----
-
-// gates holds one release channel per child resource so a test can finish
-// children in a chosen order.
-type gates struct {
-	mu sync.Mutex
-	m  map[durable.ResourceID]chan struct{}
-}
-
-func (g *gates) get(r durable.ResourceID) chan struct{} {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if g.m == nil {
-		g.m = make(map[durable.ResourceID]chan struct{})
-	}
-	ch, ok := g.m[r]
-	if !ok {
-		ch = make(chan struct{})
-		g.m[r] = ch
-	}
-	return ch
-}
-
-func (g *gates) open(r durable.ResourceID) { close(g.get(r)) }
-
-// gatedChild completes when its resource's gate opens, and resolves
-// promptly on cancellation.
-func gatedChild(id durable.PipelineID, g *gates) *durable.Definition {
-	return durable.NewDefinition(durable.DefinitionConfig{
-		ID: id,
-		Steps: []durable.StepConfig{
-			stateless("c/v1", func(ctx context.Context, inv *durable.Invocation) error {
-				if inv.CancelRequested() {
-					return nil
-				}
-				select {
-				case <-g.get(inv.ResourceID()):
-					return nil
-				case <-ctx.Done():
-					return ctx.Err()
-				}
-			}),
-		},
-	})
-}
-
-// scheduleChildren schedules n children on deterministic resources, so a
-// retry of the scheduling attempt gets the same runs back.
-func scheduleChildren(ctx context.Context, pipe *durable.Pipeline, n int) ([]durable.RunID, error) {
-	ids := make([]durable.RunID, 0, n)
-	for i := 0; i < n; i++ {
-		run, _, err := pipe.Schedule(ctx, durable.ResourceID(fmt.Sprintf("child-%d", i)), nil)
-		if err != nil {
-			return nil, err
-		}
-		ids = append(ids, run.ID())
-	}
-	return ids, nil
-}
-
-func waitForAwaiting(t *testing.T, run durable.Run, want []durable.RunID) durable.Status {
-	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		st, err := run.Status(context.Background())
-		if err != nil {
-			t.Fatalf("Status: %v", err)
-		}
-		if st.State == durable.RunStateAwaiting && slices.Equal(st.AwaitingRunIDs, want) {
-			return st
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("run %s never parked on %v; last %v awaiting %v", run.ID(), want, st.State, st.AwaitingRunIDs)
-		}
-		time.Sleep(time.Millisecond)
-	}
-}
 
 // AwaitAll wakes once, when the last child is done; the woken attempt's
 // ordinary error does not lose the memory, and no child is respawned.

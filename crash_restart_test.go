@@ -4,11 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/dangra/durable/storedriver"
 	"hash/fnv"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/dangra/durable/storedriver"
 
 	"google.golang.org/protobuf/proto"
 

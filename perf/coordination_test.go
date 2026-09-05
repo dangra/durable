@@ -106,7 +106,7 @@ func BenchmarkSupersedeCycle(b *testing.B) {
 				mu.Unlock()
 
 				_, _, err = v.pipe.Schedule(context.Background(), res, v2)
-				var conflict *engine.ScheduleConflictError
+				var conflict *durable.ScheduleConflictError
 				if !errors.As(err, &conflict) {
 					b.Errorf("expected conflict, got %v", err)
 					return

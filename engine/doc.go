@@ -22,16 +22,18 @@
 // directly. Bind is the single validator: a malformed definition is an
 // error here, never a panic at construction.
 //
-// Scheduling and watching runs. Pipeline.Schedule with ScheduleOptions
-// (WithAnnotations, StartAt, StartAfter) or an engine-wide
-// ScheduleAnnotator; the Run handle (Wait, Cancel, Status, Annotations,
-// InputBytes, OutputBytes); Result, Status, and RunState.
+// Scheduling and watching runs. Pipeline.Schedule, taking the durable
+// package's ScheduleOptions (handlers schedule children, so the options
+// are handler vocabulary) or seeded by an engine-wide ScheduleAnnotator;
+// the Run handle (Wait, Cancel, Status, Annotations, InputBytes,
+// OutputBytes); Result, Status, and RunState.
 //
-// Errors. ErrNotStarted, ErrStarted, ErrRunInProgress, ErrRunNotFound,
-// ErrRunTerminal, ScheduleConflictError, PipelineMismatchError, and
-// InvalidRunError. The causes an attempt context carries — the durable
-// package's ErrEngineStopping and PreemptedError — are handler
-// vocabulary and live there.
+// Errors. ErrNotStarted, ErrStarted, ErrRunInProgress,
+// PipelineMismatchError, and InvalidRunError. What a handler may meet
+// when scheduling or looking up a child — ScheduleConflictError,
+// ErrRunNotFound, ErrRunTerminal — and the causes an attempt context
+// carries — ErrEngineStopping and PreemptedError — are the durable
+// package's.
 //
 // Exported signatures use the durable package's aliases for the kernel
 // vocabulary (durable.RunID, durable.Phase, ...), so wiring code and

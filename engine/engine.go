@@ -563,7 +563,7 @@ func (e *Engine) processRun(id durable.RunID) (time.Duration, bool) {
 		}
 		rec, err := e.store.GetRun(e.baseCtx, id)
 		if err != nil {
-			if errors.Is(err, ErrRunNotFound) {
+			if errors.Is(err, durable.ErrRunNotFound) {
 				e.logger.Error("durable: dispatched run not found", "run", id)
 				return 0, false
 			}
@@ -984,7 +984,7 @@ func (e *Engine) wake(rec *storedriver.RunRecord, done []durable.RunID, expired 
 // it is terminal, or it never existed / was reaped by retention.
 func (e *Engine) targetDone(target durable.RunID) (bool, error) {
 	trec, err := e.store.GetRun(e.baseCtx, target)
-	if errors.Is(err, ErrRunNotFound) {
+	if errors.Is(err, durable.ErrRunNotFound) {
 		return true, nil
 	}
 	if err != nil {
@@ -1068,7 +1068,7 @@ func (e *Engine) awaitCycle(self durable.RunID, targets []durable.RunID) (bool, 
 		}
 		visited[cur] = struct{}{}
 		rec, err := e.store.GetRun(e.baseCtx, cur)
-		if errors.Is(err, ErrRunNotFound) {
+		if errors.Is(err, durable.ErrRunNotFound) {
 			continue
 		}
 		if err != nil {

@@ -181,9 +181,9 @@ func runCrashScenario(t *testing.T, seed uint64, store storedriver.Store) {
 	var crashIDs, waiterIDs []durable.RunID
 	for i := 0; i < crashRuns; i++ {
 		res := durable.ResourceID(fmt.Sprintf("res-%d", i))
-		var opts []engine.ScheduleOption
+		var opts []durable.ScheduleOption
 		if i%5 == 0 {
-			opts = append(opts, engine.StartAfter(5*time.Millisecond))
+			opts = append(opts, durable.StartAfter(5*time.Millisecond))
 		}
 		run, created, err := crashPipe.Schedule(ctx, res, nil, opts...)
 		if err != nil || !created {
@@ -214,7 +214,7 @@ func runCrashScenario(t *testing.T, seed uint64, store storedriver.Store) {
 		}
 		if err := run.Cancel(ctx, "crash-round cancel"); err == nil {
 			canceled[victim] = true
-		} else if !errors.Is(err, engine.ErrRunTerminal) {
+		} else if !errors.Is(err, durable.ErrRunTerminal) {
 			t.Fatalf("Cancel(%s): %v", victim, err)
 		}
 		stop(e)

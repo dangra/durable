@@ -223,7 +223,7 @@ func TestAwaitedRunIDPreventsChildRespawn(t *testing.T) {
 					return nil // child completed; do not respawn
 				}
 				run, _, err := childPipe.Schedule(ctx, "child-res", nil)
-				if conflict, ok := errors.AsType[*engine.ScheduleConflictError](err); ok {
+				if conflict, ok := errors.AsType[*durable.ScheduleConflictError](err); ok {
 					return durable.AwaitRun(conflict.RunID)
 				}
 				if err != nil {

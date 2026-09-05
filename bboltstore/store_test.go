@@ -94,7 +94,7 @@ func TestSlotSemantics(t *testing.T) {
 		t.Fatalf("ListRuns = %d, %v; want 2", len(runs), err)
 	}
 
-	if _, err := s.GetRun(ctx, "missing"); !errors.Is(err, engine.ErrRunNotFound) {
+	if _, err := s.GetRun(ctx, "missing"); !errors.Is(err, durable.ErrRunNotFound) {
 		t.Fatalf("GetRun(missing) = %v, want ErrRunNotFound", err)
 	}
 }
@@ -186,7 +186,7 @@ func TestRequestCancel(t *testing.T) {
 		t.Fatalf("CreateRun = created=%v err=%v", created, err)
 	}
 
-	if _, err := s.RequestCancel(ctx, "missing", storedriver.CancelRequest{}); !errors.Is(err, engine.ErrRunNotFound) {
+	if _, err := s.RequestCancel(ctx, "missing", storedriver.CancelRequest{}); !errors.Is(err, durable.ErrRunNotFound) {
 		t.Fatalf("RequestCancel(missing) = %v, want ErrRunNotFound", err)
 	}
 
@@ -224,7 +224,7 @@ func TestRequestCancel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("terminal ApplyTransition: %v", err)
 	}
-	if _, err := s.RequestCancel(ctx, "run-c", storedriver.CancelRequest{}); !errors.Is(err, engine.ErrRunTerminal) {
+	if _, err := s.RequestCancel(ctx, "run-c", storedriver.CancelRequest{}); !errors.Is(err, durable.ErrRunTerminal) {
 		t.Fatalf("RequestCancel(terminal) = %v, want ErrRunTerminal", err)
 	}
 }
@@ -312,7 +312,7 @@ func TestReapTerminal(t *testing.T) {
 
 	// Old terminal runs are fully gone; every component is deleted.
 	for _, id := range []durable.RunID{"old-1", "old-2"} {
-		if _, err := s.GetRun(ctx, id); !errors.Is(err, engine.ErrRunNotFound) {
+		if _, err := s.GetRun(ctx, id); !errors.Is(err, durable.ErrRunNotFound) {
 			t.Fatalf("GetRun(%s) = %v, want ErrRunNotFound", id, err)
 		}
 	}

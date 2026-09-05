@@ -62,7 +62,7 @@ func sagaDef() *pipelinedef.Definition {
 
 // runSaga executes sagaDef on a fresh engine wired with the given extra
 // options and returns the schedule-side origin span context.
-func runSaga(t *testing.T, schedule []engine.ScheduleOption, opts ...engine.Option) {
+func runSaga(t *testing.T, schedule []durable.ScheduleOption, opts ...engine.Option) {
 	t.Helper()
 	eng := engine.New(durabletest.NewMemStore(),
 		append([]engine.Option{fastRetry, quietLogger()}, opts...)...)
@@ -115,7 +115,7 @@ func TestMiddlewareSpansLinkToOrigin(t *testing.T) {
 	reqCtx, requestSpan := tracer.Start(t.Context(), "POST /saga")
 	origin := requestSpan.SpanContext()
 	runSaga(t,
-		[]engine.ScheduleOption{durableotel.WithTraceContext(reqCtx)},
+		[]durable.ScheduleOption{durableotel.WithTraceContext(reqCtx)},
 		engine.WithMiddleware(durableotel.Middleware(durableotel.WithTracerProvider(tp))))
 	requestSpan.End()
 
@@ -351,7 +351,7 @@ func TestWithSpanAnnotations(t *testing.T) {
 	defer tp.Shutdown(t.Context())
 
 	runSaga(t,
-		[]engine.ScheduleOption{engine.WithAnnotations(map[string]string{
+		[]durable.ScheduleOption{durable.WithAnnotations(map[string]string{
 			"machine.id": "m-42",
 			"tenant":     "acme",
 		})},

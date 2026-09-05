@@ -318,7 +318,7 @@ type DeployServicePipeline struct {
 }
 
 // Schedule creates a run for the resource slot or returns the active one.
-func (p *DeployServicePipeline) Schedule(ctx context.Context, resource durable.ResourceID, input *DeployServiceInput, opts ...engine.ScheduleOption) (DeployServiceRun, bool, error) {
+func (p *DeployServicePipeline) Schedule(ctx context.Context, resource durable.ResourceID, input *DeployServiceInput, opts ...durable.ScheduleOption) (DeployServiceRun, bool, error) {
 	run, created, err := p.pipeline.Schedule(ctx, resource, input, opts...)
 	if err != nil {
 		return DeployServiceRun{}, created, err

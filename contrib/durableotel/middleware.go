@@ -27,9 +27,9 @@ import (
 //
 // For injection on every Schedule without per-call-site options, prefer
 // Annotator.
-func WithTraceContext(ctx context.Context, opts ...Option) engine.ScheduleOption {
+func WithTraceContext(ctx context.Context, opts ...Option) durable.ScheduleOption {
 	cfg := newConfig(opts)
-	return engine.WithAnnotations(inject(ctx, cfg))
+	return durable.WithAnnotations(inject(ctx, cfg))
 }
 
 // Annotator returns a engine.ScheduleAnnotator that injects the

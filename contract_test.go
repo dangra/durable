@@ -74,3 +74,27 @@ func TestFailureClassifiers(t *testing.T) {
 		t.Fatal("nil has no reason")
 	}
 }
+
+func TestScheduleOptions(t *testing.T) {
+	apply := func(opts ...durable.ScheduleOption) durable.ScheduleOptions {
+		var so durable.ScheduleOptions
+		for _, o := range opts {
+			o(&so)
+		}
+		return so
+	}
+	at := time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC)
+
+	if so := apply(durable.StartAfter(time.Hour), durable.StartAt(at)); !so.StartAt.Equal(at) || so.StartAfter != 0 {
+		t.Fatalf("last start option must win: %+v", so)
+	}
+	if so := apply(durable.StartAt(at), durable.StartAfter(time.Hour)); !so.StartAt.IsZero() || so.StartAfter != time.Hour {
+		t.Fatalf("last start option must win: %+v", so)
+	}
+	src := map[string]string{"a": "1", "b": "2"}
+	so := apply(durable.WithAnnotations(src), durable.WithAnnotations(map[string]string{"b": "3"}))
+	src["a"] = "mutated"
+	if so.Annotations["a"] != "1" || so.Annotations["b"] != "3" {
+		t.Fatalf("annotations must be copied and merged with later keys winning: %v", so.Annotations)
+	}
+}

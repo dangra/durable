@@ -195,7 +195,7 @@ func TestExclusionGroup(t *testing.T) {
 
 	// The group slot is held: decommission is rejected, naming the blocker.
 	_, created, err := decommission.Schedule(context.Background(), "machine-9")
-	var conflict *engine.ScheduleConflictError
+	var conflict *durable.ScheduleConflictError
 	if !errors.As(err, &conflict) || created {
 		t.Fatalf("decommission Schedule = created=%v err=%v, want ScheduleConflictError", created, err)
 	}

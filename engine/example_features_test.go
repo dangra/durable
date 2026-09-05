@@ -340,7 +340,7 @@ func ExampleStartAfter() {
 	defer eng.Stop(ctx)
 
 	run, _, err := pipeline.Schedule(ctx, "example.com", nil,
-		engine.StartAfter(time.Second))
+		durable.StartAfter(time.Second))
 	if err != nil {
 		panic(err)
 	}

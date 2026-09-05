@@ -314,7 +314,7 @@ type FulfillOrderPipeline struct {
 }
 
 // Schedule creates a run for the resource slot or returns the active one.
-func (p *FulfillOrderPipeline) Schedule(ctx context.Context, resource durable.ResourceID, input *FulfillOrderInput, opts ...engine.ScheduleOption) (FulfillOrderRun, bool, error) {
+func (p *FulfillOrderPipeline) Schedule(ctx context.Context, resource durable.ResourceID, input *FulfillOrderInput, opts ...durable.ScheduleOption) (FulfillOrderRun, bool, error) {
 	run, created, err := p.pipeline.Schedule(ctx, resource, input, opts...)
 	if err != nil {
 		return FulfillOrderRun{}, created, err

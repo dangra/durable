@@ -86,9 +86,9 @@ func TestTracePropagationPattern(t *testing.T) {
 	// come back from the store, not from process memory.
 	e, pipe := boot()
 	run, _, err := pipe.Schedule(context.Background(), "res-1", nil,
-		engine.WithAnnotations(map[string]string{"traceparent": traceparent}),
-		engine.WithAnnotations(map[string]string{"tenant": "acme"}), // options merge
-		engine.StartAfter(30*time.Millisecond))
+		durable.WithAnnotations(map[string]string{"traceparent": traceparent}),
+		durable.WithAnnotations(map[string]string{"tenant": "acme"}), // options merge
+		durable.StartAfter(30*time.Millisecond))
 	if err != nil {
 		t.Fatalf("Schedule: %v", err)
 	}
@@ -166,14 +166,14 @@ func TestAnnotationsDedupAndValidation(t *testing.T) {
 	pipe := pipes[0]
 
 	first, created, err := pipe.Schedule(context.Background(), "res-1", nil,
-		engine.WithAnnotations(map[string]string{"origin": "first"}))
+		durable.WithAnnotations(map[string]string{"origin": "first"}))
 	if err != nil || !created {
 		t.Fatalf("Schedule: created=%v err=%v", created, err)
 	}
 	// Same input, different annotations: dedup returns the active Run,
 	// whose annotations win.
 	dup, created, err := pipe.Schedule(context.Background(), "res-1", nil,
-		engine.WithAnnotations(map[string]string{"origin": "second"}))
+		durable.WithAnnotations(map[string]string{"origin": "second"}))
 	if err != nil || created || dup.ID() != first.ID() {
 		t.Fatalf("dedup Schedule = %v created=%v err=%v", dup.ID(), created, err)
 	}
@@ -200,7 +200,7 @@ func TestAnnotationsDedupAndValidation(t *testing.T) {
 		"key":   {"k\xff": "v"},
 		"value": {"k": "v\xff"},
 	} {
-		if _, _, err := pipe.Schedule(context.Background(), "res-3", nil, engine.WithAnnotations(m)); err == nil {
+		if _, _, err := pipe.Schedule(context.Background(), "res-3", nil, durable.WithAnnotations(m)); err == nil {
 			t.Fatalf("Schedule accepted invalid UTF-8 annotation %s", name)
 		}
 	}

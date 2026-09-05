@@ -154,7 +154,7 @@ func TestLoggingCancel(t *testing.T) {
 	})
 	buf, pipe := startLoggingEngine(t, def)
 
-	run, _, err := pipe.Schedule(context.Background(), "res-1", nil, engine.StartAfter(time.Hour))
+	run, _, err := pipe.Schedule(context.Background(), "res-1", nil, durable.StartAfter(time.Hour))
 	if err != nil {
 		t.Fatalf("Schedule: %v", err)
 	}

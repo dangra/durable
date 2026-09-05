@@ -62,7 +62,7 @@ func TestDelayedStart(t *testing.T) {
 	p := pipes[0]
 
 	scheduledAt := time.Now()
-	run, created, err := p.Schedule(context.Background(), "r", nil, engine.StartAfter(delay))
+	run, created, err := p.Schedule(context.Background(), "r", nil, durable.StartAfter(delay))
 	if err != nil || !created {
 		t.Fatalf("Schedule = created=%v err=%v", created, err)
 	}
@@ -80,7 +80,7 @@ func TestDelayedStart(t *testing.T) {
 
 	// The start time is not part of duplicate-scheduling identity:
 	// an equivalent Schedule with a different start returns the same run.
-	run2, created, err := p.Schedule(context.Background(), "r", nil, engine.StartAt(time.Now().Add(time.Hour)))
+	run2, created, err := p.Schedule(context.Background(), "r", nil, durable.StartAt(time.Now().Add(time.Hour)))
 	if err != nil || created || run2.ID() != run.ID() {
 		t.Fatalf("dedup Schedule = %s created=%v err=%v, want existing %s", run2.ID(), created, err, run.ID())
 	}
@@ -196,7 +196,7 @@ func TestRetentionReapsOnlyOldTerminalRuns(t *testing.T) {
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		fake.Advance(2 * time.Hour)
-		if _, err := store.GetRun(context.Background(), done.ID()); errors.Is(err, engine.ErrRunNotFound) {
+		if _, err := store.GetRun(context.Background(), done.ID()); errors.Is(err, durable.ErrRunNotFound) {
 			break
 		}
 		if time.Now().After(deadline) {

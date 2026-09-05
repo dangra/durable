@@ -205,7 +205,7 @@ func TestObserverCancel(t *testing.T) {
 	e, pipes := startObservedEngine(t, log, []*pipelinedef.Definition{def})
 	pipe := pipes[0]
 
-	run, _, err := pipe.Schedule(context.Background(), "res-1", nil, engine.StartAfter(time.Hour))
+	run, _, err := pipe.Schedule(context.Background(), "res-1", nil, durable.StartAfter(time.Hour))
 	if err != nil {
 		t.Fatalf("Schedule: %v", err)
 	}

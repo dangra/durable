@@ -126,7 +126,10 @@ bboltstore, durabletest, contrib/durableotel, generated code
 - `durable` is the handler contract and nothing else: `Invocation`,
   `Failure`, `Fail`, the `Await*` resolutions, `Handler` and
   `Middleware` with their classifiers, the step references, and
-  aliases of the `kernel` vocabulary. Handler code imports only this.
+  aliases of the `kernel` vocabulary. Because handlers schedule child
+  Runs, the contract also holds what that call needs: the
+  `ScheduleOption`s, `ScheduleConflictError`, `ErrRunNotFound`, and
+  `ErrRunTerminal`. Handler code imports only this.
 - `engine` is the wiring side. Its exported signatures use the
   `durable` aliases, so a `Status.RunID` reads as `durable.RunID`.
 - `pipelinedef` is what generated code builds and `Engine.Bind`

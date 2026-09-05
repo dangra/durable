@@ -65,15 +65,19 @@ Potential:
 
 The one-Step-one-Pipeline restriction may be revisited.
 
-## Full observability
+## Observability beyond the event surface
 
-Potential:
+Logging, lifecycle events, snapshots, and the OpenTelemetry bridge are
+specified (see 04-engine, Observability). Remaining:
 
-- OpenTelemetry,
-- scheduler metrics,
-- retry metrics,
-- invalid-run metrics,
-- Step duration,
-- Run duration,
-- unwind failure metrics,
-- retirement drain metrics.
+- retirement drain metrics,
+- trace grouping across a Run's attempts (today attempts are linked to
+  the scheduling trace, not parented under a Run span),
+- an indexed read model for introspection (list Runs by state, class,
+  or await target without scanning).
+
+## Parks at scale
+
+A park's target list rides the Cursor, so a very wide fan-out makes
+per-attempt writes scale with it; moving the park into its own storage
+component, and a documented fan-out cap, remain open.

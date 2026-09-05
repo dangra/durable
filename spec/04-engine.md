@@ -164,6 +164,7 @@ const (
     RunStateWaitingRetry
     RunStateScheduled
     RunStateAwaiting
+    RunStateThrottled
     RunStateInvalid
     RunStateDone
 )
@@ -172,8 +173,10 @@ const (
 `RunStateScheduled` means the Run was accepted with a delayed start and no
 operation attempt has been reserved yet; `RunStateWaitingRetry` means an
 attempted operation is waiting for its next attempt; `RunStateAwaiting`
-means the in-flight operation is parked via `AwaitRun` until another Run
-terminates.
+means the in-flight operation is parked on other Runs (see
+[Awaiting other Runs](01-model.md#awaiting-other-runs)); `RunStateThrottled`
+means the next operation is parked on a full concurrency class (see
+[Concurrency classes](#concurrency-classes)).
 
 `RunStateInvalid` means the current application deployment cannot safely continue the nonterminal Run.
 
@@ -299,15 +302,21 @@ type Status struct {
     CancelRequested bool
     CancelCause     string
 
+    // RunStateAwaiting: the park.
     AwaitingRunIDs []RunID
-    AwaitMode      AwaitMode
-    AwaitDeadline  time.Time
+    AwaitMode      AwaitMode // AwaitModeAll or AwaitModeAny
+    AwaitDeadline  time.Time // zero without WithAwaitTimeout
+
+    // RunStateThrottled: the class waited for.
+    ThrottledClass string
+
+    // RunStateInvalid: why.
+    InvalidReason string
 }
 ```
 
-Invalid status SHOULD expose enough diagnostic information to identify why execution is blocked.
-
-The exact public shape may use methods or a structured invalid-reason type.
+Invalid status MUST expose enough diagnostic information to identify why
+execution is blocked.
 
 ---
 
@@ -405,9 +414,8 @@ caller context cancellation
 Run cancellation
 ```
 
-The Engine owns execution lifetime.
-
-Explicit Run cancellation is outside v1.
+The Engine owns execution lifetime. Ending a Run early is a separate,
+durable, semantic act: [cancellation](01-model.md#cancellation).
 
 ---
 
@@ -480,12 +488,18 @@ It releases capacity when:
 
 Shutdown:
 
-- stops scheduling new operations,
-- cancels active handler contexts,
+- stops starting new operation attempts — for newly scheduled Runs, for
+  the next Step of a Run whose attempt just finished, and for retries;
+- lets in-flight attempts finish on their own terms for up to the drain
+  timeout (`WithDrainTimeout`), their results committing normally;
+- at the deadline — immediately, by default — kills the remaining
+  attempt contexts, with `context.Cause` `ErrEngineStopping`;
 - leaves unresolved Runs nonterminal,
 - does not create RootFailure.
 
-A future Engine resumes them.
+A future Engine resumes them. A handler that only returns on
+`ctx.Done()` drains at the deadline, so the drain timeout is kept
+modest.
 
 Shutdown is operational; Run cancellation (see 01-model) is semantic and
 terminal. They are unrelated mechanisms.
@@ -592,10 +606,19 @@ cursor                        rewritten on every attempt — small
 
 The Cursor is the per-Run scheduling state: phase, retry/start
 eligibility, last-error fields, the **single in-flight operation**
-(step, attempt count), and its park target when awaiting another Run —
-leaning on the one-operation-per-Run invariant.
+(step, attempt count), its park while awaiting other Runs (targets,
+mode, deadline), and the memory of its last resolved park (targets,
+done, expired) — leaning on the one-operation-per-Run invariant.
 Because only the Cursor is rewritten per attempt, per-attempt write
-volume is bounded by the Cursor, independent of Input and State sizes.
+volume is bounded by the Cursor, independent of Input and State sizes
+(a park's target list is the one Cursor field that scales with
+application choice).
+
+The contract is the `storedriver` package: `Store`, `RunRecord`,
+`Cursor`, `Transition`, and the identity and outcome vocabulary the
+`durable` package aliases. Store implementations persist every Cursor
+field; the in-memory `durabletest.MemStore` is the executable reference,
+and the bbolt store is checked against it.
 
 The engine mutates durable state exclusively through atomic transitions:
 
@@ -684,32 +707,48 @@ internal Reducer adapters
 
 ---
 
-## Minimal observability
+## Observability
 
-Full observability is future work, but invalid Runs MUST NOT be silent.
+Three surfaces, all optional, none affecting execution.
 
-At minimum the Engine SHOULD emit structured diagnostics containing:
+**Logging.** The Engine logs through a `log/slog` logger
+(`WithLogger`): per-attempt progress (scheduled, retrying, succeeded,
+awaiting, throttled) at Debug; once-per-Run milestones (terminal
+outcome, unwind start, cancellation accepted) at Info; permanent unwind
+failures at Warn; anomalies (handler panics, store errors, invalid Runs)
+at Error. Lifecycle lines carry the canonical keys `pipeline`,
+`resource`, and `run`; operation-scoped lines add `step`, `phase`, and
+`attempt`; causes appear under `error`. `Invocation.Logger()` pre-attaches
+the same keys for handler code. Invalid Runs MUST NOT be silent: their
+diagnostic carries the Run identity, phase, the Step if applicable, and
+the reason.
 
-```text
-RunID
-PipelineID
-ResourceID
-Phase
-StepID if applicable
-reason
-```
-
-Future metrics SHOULD expose values such as:
-
-```text
-durable_invalid_runs
-durable_invalid_runs_total
-durable_invalid_runs{pipeline, reason}
-```
-
-Retry observability SHOULD expose:
+**Lifecycle events.** `observe.Observer` is a struct of optional
+callbacks, installed with `WithObserver` (repeatable; every event fires on
+every observer, in installation order):
 
 ```text
-Attempt
-NextAttemptAt
+RunScheduled   acceptance, with any delayed start and the annotations
+AttemptDone    every attempt resolution: succeeded, retrying (with the
+               delay), failed, or awaiting; duration; whether it panicked
+RunUnwinding   the RootFailure that started an unwind
+RunTerminal    the outcome
+RunInvalid     the reason
+WaiterWoken    a park resolved: targets, done, expired, time parked
+ClassWait      a throttled Run proceeding: class, time waited
+RunsReaped     a retention sweep's count
+StoreOp        every Store call: op, write-ness, duration, error
 ```
+
+Callbacks run synchronously on the Engine's path and MUST be fast; a
+panicking callback is recovered and logged, never allowed to affect the
+Run. Middleware classifies a handler's return for its own telemetry with
+`AwaitRequest` (a park) and `FailureInfo` (a permanent failure).
+
+**Snapshots.** `Engine.Stats()` reports the occupancy of the moment —
+Runs with a live worker, awaiting, throttled, delayed, invalid — and per
+concurrency class its capacity, use, and queue.
+
+The OpenTelemetry bridge (`contrib/durableotel`) is built entirely on
+these seams: spans per attempt linked to the scheduling trace through
+annotations, metrics from the events, gauges from the snapshot.

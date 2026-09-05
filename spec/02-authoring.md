@@ -320,6 +320,27 @@ remain the authoritative contract.
 
 ---
 
+## Invocation accessors
+
+Every handler receives a typed Invocation wrapping the untyped core.
+Beyond typed `Input()` and `State(...)`, it exposes:
+
+```text
+PipelineID, ResourceID, RunID, StepID   identity
+Phase                                   forward or unwind
+Attempt                                 the durable reservation number
+CancelRequested                         a cancel was pending at reservation
+Awaited, AwaitedRunID                   the resolved park, if this attempt
+                                        follows one (see 01-model)
+Annotations                             the Run's acceptance-time metadata
+Logger                                  a slog.Logger with the canonical keys
+```
+
+All return caller-owned copies; none can be used to reach durable state
+of other Runs except through the public `Run` handle.
+
+---
+
 ## Successful State boundary
 
 For a state-producing handler:
@@ -569,6 +590,14 @@ run, created, err := provision.Schedule(
 )
 ```
 
+`Schedule` accepts options: `StartAfter` / `StartAt` for a
+[delayed start](01-model.md#delayed-starts), and `WithAnnotations` for
+caller-supplied propagation metadata (trace contexts, tenant tags) —
+immutable for the life of the Run, readable through `Run.Annotations` and
+`Invocation.Annotations`, and never part of duplicate-scheduling identity.
+`WithScheduleAnnotator` on the Engine derives annotations from the
+scheduling context for every call, so propagation intent is declared once.
+
 ---
 
 ## Typed Run
@@ -660,6 +689,10 @@ Methods:
 func (r Run) ID() RunID
 func (r Run) Wait(context.Context) (Result, error)
 func (r Run) Status(context.Context) (Status, error)
+func (r Run) Cancel(context.Context, cause string) error
+func (r Run) Annotations(context.Context) (map[string]string, error)
+func (r Run) InputBytes(context.Context) ([]byte, error)   // for generated code
+func (r Run) OutputBytes(context.Context) ([]byte, error)  // for generated code
 ```
 
 The handle itself is not durable state.
@@ -676,8 +709,11 @@ result, err := run.Wait(ctx)
 
 - caller context cancellation,
 - Run lookup failure,
-- Engine failure,
-- [Run invalidity](04-engine.md#waiting-on-invalid-runs).
+- Engine shutdown or failure,
+- [Run invalidity](04-engine.md#waiting-on-invalid-runs),
+- `ErrRunInProgress`: `Wait` was called from inside a handler, with the
+  attempt context, on a nonterminal Run. Inside a handler `Wait` never
+  blocks — see [Awaiting other Runs](01-model.md#awaiting-other-runs).
 
 Pipeline semantic failure is represented by:
 

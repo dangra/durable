@@ -182,10 +182,24 @@ Part of the [`durable` specification](README.md). This list is append-only; inva
 
 90. A parked operation remains unresolved, pins its Run, holds no worker, and survives restart.
 
-91. Waking from a park is at-least-once re-execution; the wake attempt observes the awaited RunID.
+91. Waking from a park is at-least-once re-execution; the wake attempt observes the park's memory (`Awaited`; `AwaitedRunID` for a single target).
 
 92. Awaiting a terminal or nonexistent Run resolves immediately; a park closing an await cycle invalidates the parking Run.
 
 93. Concurrency-class acquisition never blocks a worker; a Run finding its class full parks and is woken FIFO.
 
 94. Class tokens are execution-scoped and in-memory: held only while a handler runs, never across retries, parks, or restarts.
+
+95. A park's memory belongs to the operation: recorded when the park resolves, it is observed by every later attempt of the operation across retries and restarts, and cleared only when the operation resolves or parks again.
+
+96. A park resolves per its mode — every target done under `AwaitModeAll`, the first under `AwaitModeAny` — or at its deadline; expiry is a wake, never a failure.
+
+97. A park that closes an await cycle is refused in every mode.
+
+98. `Wait` called with an attempt context never blocks a worker: it returns a terminal Result or `ErrRunInProgress`.
+
+99. A cancellation bypassing a park still yields the park's memory to the attempt that resolves it.
+
+100. A `Fail` wrapping a `*PreemptedError` is attributed as cancellation only on Engine-side evidence of the preemption.
+
+101. Shutdown starts no new attempt; in-flight attempts drain for the configured timeout and are preempted only at its deadline.

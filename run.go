@@ -70,8 +70,10 @@ func (r Run) Wait(ctx context.Context) (Result, error) {
 // RootFailure with FailureKindCanceled is established, successfully
 // executed Steps unwind normally, and the Run terminates with
 // OutcomeFailure. A started operation is never abandoned: its in-flight
-// attempt context is preempted once, and it continues (observing
-// Invocation.CancelRequested) until it resolves.
+// attempt context is preempted once — carrying a *PreemptedError with
+// this cause as its context.Cause — and it continues (observing
+// Invocation.CancelRequested) until it resolves. FailFastOnCancel opts
+// preemption-safe handlers out of that cooperative loop.
 //
 // A terminal Run returns ErrRunTerminal; a missing Run ErrRunNotFound. The
 // request survives restart, and on an invalid Run it takes effect when a
@@ -88,7 +90,7 @@ func (r Run) Cancel(ctx context.Context, cause string) error {
 	if accepted && e.debugLog() {
 		e.logger.Debug("durable: cancel requested", "run", string(r.id), "cause", cause)
 	}
-	e.preemptAttempt(r.id)
+	e.preemptAttempt(r.id, sanitizeText(cause))
 	e.disp.Wake(r.id)
 	e.disp.Dispatch(r.id, 0)
 	return nil

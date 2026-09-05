@@ -4,8 +4,6 @@ import (
 	"errors"
 	"strings"
 	"time"
-
-	"github.com/dangra/durable/storedriver"
 )
 
 // AwaitOption configures a park; see WithAwaitTimeout.
@@ -71,7 +69,7 @@ func AwaitAny(ids []RunID, opts ...AwaitOption) error {
 }
 
 func newAwait(mode AwaitMode, ids []RunID, opts []AwaitOption) error {
-	ar := &awaitResolution{park: storedriver.Await{Mode: mode, Targets: dedupeRunIDs(ids)}}
+	ar := &awaitResolution{park: Await{Mode: mode, Targets: dedupeRunIDs(ids)}}
 	for _, o := range opts {
 		o(ar)
 	}
@@ -92,7 +90,7 @@ func dedupeRunIDs(ids []RunID) []RunID {
 }
 
 type awaitResolution struct {
-	park    storedriver.Await
+	park    Await
 	timeout time.Duration
 }
 

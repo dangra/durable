@@ -10,13 +10,12 @@ package storagepb
 
 import (
 	"fmt"
+	"github.com/dangra/durable/kernel"
 	"github.com/dangra/durable/storedriver"
 	"time"
 
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
-
-	"github.com/dangra/durable"
 )
 
 func marshal(what string, m proto.Message) ([]byte, error) {
@@ -53,9 +52,9 @@ func UnmarshalRunMetaInto(b []byte, rec *storedriver.RunRecord) error {
 	if err := unmarshal("run meta", b, pb); err != nil {
 		return err
 	}
-	rec.RunID = durable.RunID(pb.GetRunId())
-	rec.PipelineID = durable.PipelineID(pb.GetPipelineId())
-	rec.ResourceID = durable.ResourceID(pb.GetResourceId())
+	rec.RunID = kernel.RunID(pb.GetRunId())
+	rec.PipelineID = kernel.PipelineID(pb.GetPipelineId())
+	rec.ResourceID = kernel.ResourceID(pb.GetResourceId())
 	rec.Group = pb.GetSlotGroup()
 	rec.Input = pb.GetInput()
 	rec.CreatedAt = fromTS(pb.GetCreatedAt())
@@ -87,7 +86,7 @@ func UnmarshalCursor(b []byte) (storedriver.Cursor, error) {
 	}
 	return storedriver.Cursor{
 		Phase:         phaseFromProto(pb.GetPhase()),
-		StepID:        durable.StepID(pb.GetStepId()),
+		StepID:        kernel.StepID(pb.GetStepId()),
 		Attempts:      pb.GetAttempts(),
 		NextAttemptAt: fromTS(pb.GetNextAttemptAt()),
 		LastError:     pb.GetLastError(),
@@ -99,7 +98,7 @@ func UnmarshalCursor(b []byte) (storedriver.Cursor, error) {
 	}, nil
 }
 
-func awaitToProto(a *storedriver.Await) *Await {
+func awaitToProto(a *kernel.Await) *Await {
 	if a == nil {
 		return nil
 	}
@@ -113,21 +112,21 @@ func awaitToProto(a *storedriver.Await) *Await {
 // awaitFromProto decodes the cursor's park, reading the pre-v0.4
 // single-target field as an ALL park of one target when the message is
 // absent.
-func awaitFromProto(pb *Cursor) *storedriver.Await {
+func awaitFromProto(pb *Cursor) *kernel.Await {
 	if a := pb.GetAwaiting(); a != nil {
-		return &storedriver.Await{
+		return &kernel.Await{
 			Mode:     awaitModeFromProto(a.GetMode()),
 			Targets:  runIDsFromProto(a.GetRunIds()),
 			Deadline: fromTS(a.GetDeadline()),
 		}
 	}
 	if legacy := pb.GetAwaitingRunId(); legacy != "" {
-		return &storedriver.Await{Mode: storedriver.AwaitModeAll, Targets: []durable.RunID{durable.RunID(legacy)}}
+		return &kernel.Await{Mode: kernel.AwaitModeAll, Targets: []kernel.RunID{kernel.RunID(legacy)}}
 	}
 	return nil
 }
 
-func wakeToProto(w *storedriver.Wake) *Wake {
+func wakeToProto(w *kernel.Wake) *Wake {
 	if w == nil {
 		return nil
 	}
@@ -138,18 +137,18 @@ func wakeToProto(w *storedriver.Wake) *Wake {
 	}
 }
 
-func wakeFromProto(pb *Wake) *storedriver.Wake {
+func wakeFromProto(pb *Wake) *kernel.Wake {
 	if pb == nil {
 		return nil
 	}
-	return &storedriver.Wake{
+	return &kernel.Wake{
 		Targets: runIDsFromProto(pb.GetTargets()),
 		Done:    runIDsFromProto(pb.GetDone()),
 		Expired: pb.GetExpired(),
 	}
 }
 
-func runIDsToProto(ids []durable.RunID) []string {
+func runIDsToProto(ids []kernel.RunID) []string {
 	if len(ids) == 0 {
 		return nil
 	}
@@ -160,34 +159,34 @@ func runIDsToProto(ids []durable.RunID) []string {
 	return out
 }
 
-func runIDsFromProto(ids []string) []durable.RunID {
+func runIDsFromProto(ids []string) []kernel.RunID {
 	if len(ids) == 0 {
 		return nil
 	}
-	out := make([]durable.RunID, len(ids))
+	out := make([]kernel.RunID, len(ids))
 	for i, id := range ids {
-		out[i] = durable.RunID(id)
+		out[i] = kernel.RunID(id)
 	}
 	return out
 }
 
-func awaitModeToProto(m storedriver.AwaitMode) AwaitMode {
+func awaitModeToProto(m kernel.AwaitMode) AwaitMode {
 	switch m {
-	case storedriver.AwaitModeAll:
+	case kernel.AwaitModeAll:
 		return AwaitMode_AWAIT_MODE_ALL
-	case storedriver.AwaitModeAny:
+	case kernel.AwaitModeAny:
 		return AwaitMode_AWAIT_MODE_ANY
 	default:
 		return AwaitMode_AWAIT_MODE_UNSPECIFIED
 	}
 }
 
-func awaitModeFromProto(m AwaitMode) storedriver.AwaitMode {
+func awaitModeFromProto(m AwaitMode) kernel.AwaitMode {
 	switch m {
 	case AwaitMode_AWAIT_MODE_ANY:
-		return storedriver.AwaitModeAny
+		return kernel.AwaitModeAny
 	default:
-		return storedriver.AwaitModeAll
+		return kernel.AwaitModeAll
 	}
 }
 
@@ -215,7 +214,7 @@ func UnmarshalStepRecord(b []byte) (*storedriver.StepRecord, error) {
 	}, nil
 }
 
-func MarshalFailures(root *durable.RootFailure, unwind []durable.UnwindFailure) ([]byte, error) {
+func MarshalFailures(root *kernel.RootFailure, unwind []kernel.UnwindFailure) ([]byte, error) {
 	pb := &Failures{}
 	if root != nil {
 		f := root.FailureRecord
@@ -228,27 +227,27 @@ func MarshalFailures(root *durable.RootFailure, unwind []durable.UnwindFailure) 
 	return marshal("failures", pb)
 }
 
-func UnmarshalFailures(b []byte) (*durable.RootFailure, []durable.UnwindFailure, error) {
+func UnmarshalFailures(b []byte) (*kernel.RootFailure, []kernel.UnwindFailure, error) {
 	pb := &Failures{}
 	if err := unmarshal("failures", b, pb); err != nil {
 		return nil, nil, err
 	}
-	var root *durable.RootFailure
+	var root *kernel.RootFailure
 	if pb.GetRoot() != nil {
-		root = &durable.RootFailure{FailureRecord: failureRecordFromProto(pb.GetRoot())}
+		root = &kernel.RootFailure{FailureRecord: failureRecordFromProto(pb.GetRoot())}
 	}
-	var unwind []durable.UnwindFailure
+	var unwind []kernel.UnwindFailure
 	for _, f := range pb.GetUnwind() {
-		unwind = append(unwind, durable.UnwindFailure{FailureRecord: failureRecordFromProto(f)})
+		unwind = append(unwind, kernel.UnwindFailure{FailureRecord: failureRecordFromProto(f)})
 	}
 	return root, unwind, nil
 }
 
-func MarshalTerminal(outcome durable.Outcome, output []byte) ([]byte, error) {
+func MarshalTerminal(outcome kernel.Outcome, output []byte) ([]byte, error) {
 	return marshal("terminal", &Terminal{Outcome: outcomeToProto(outcome), Output: output})
 }
 
-func UnmarshalTerminal(b []byte) (durable.Outcome, []byte, error) {
+func UnmarshalTerminal(b []byte) (kernel.Outcome, []byte, error) {
 	pb := &Terminal{}
 	if err := unmarshal("terminal", b, pb); err != nil {
 		return 0, nil, err
@@ -268,7 +267,7 @@ func UnmarshalCancel(b []byte) (*storedriver.CancelRequest, error) {
 	return &storedriver.CancelRequest{Cause: pb.GetCause(), At: fromTS(pb.GetAt())}, nil
 }
 
-func failureRecordToProto(f *durable.FailureRecord) *FailureRecord {
+func failureRecordToProto(f *kernel.FailureRecord) *FailureRecord {
 	return &FailureRecord{
 		StepId:  string(f.StepID),
 		Phase:   phaseToProto(f.Phase),
@@ -280,9 +279,9 @@ func failureRecordToProto(f *durable.FailureRecord) *FailureRecord {
 	}
 }
 
-func failureRecordFromProto(f *FailureRecord) durable.FailureRecord {
-	return durable.FailureRecord{
-		StepID:  durable.StepID(f.GetStepId()),
+func failureRecordFromProto(f *FailureRecord) kernel.FailureRecord {
+	return kernel.FailureRecord{
+		StepID:  kernel.StepID(f.GetStepId()),
 		Phase:   phaseFromProto(f.GetPhase()),
 		Attempt: f.GetAttempt(),
 		Message: f.GetMessage(),
@@ -306,49 +305,49 @@ func fromTS(t *timestamppb.Timestamp) time.Time {
 	return t.AsTime()
 }
 
-func phaseToProto(p durable.Phase) Phase {
+func phaseToProto(p kernel.Phase) Phase {
 	switch p {
-	case durable.PhaseForward:
+	case kernel.PhaseForward:
 		return Phase_PHASE_FORWARD
-	case durable.PhaseUnwind:
+	case kernel.PhaseUnwind:
 		return Phase_PHASE_UNWIND
-	case durable.PhaseDone:
+	case kernel.PhaseDone:
 		return Phase_PHASE_DONE
 	default:
 		return Phase_PHASE_UNSPECIFIED
 	}
 }
 
-func phaseFromProto(p Phase) durable.Phase {
+func phaseFromProto(p Phase) kernel.Phase {
 	switch p {
 	case Phase_PHASE_FORWARD:
-		return durable.PhaseForward
+		return kernel.PhaseForward
 	case Phase_PHASE_UNWIND:
-		return durable.PhaseUnwind
+		return kernel.PhaseUnwind
 	case Phase_PHASE_DONE:
-		return durable.PhaseDone
+		return kernel.PhaseDone
 	default:
 		return 0
 	}
 }
 
-func outcomeToProto(o durable.Outcome) Outcome {
+func outcomeToProto(o kernel.Outcome) Outcome {
 	switch o {
-	case durable.OutcomeSuccess:
+	case kernel.OutcomeSuccess:
 		return Outcome_OUTCOME_SUCCESS
-	case durable.OutcomeFailure:
+	case kernel.OutcomeFailure:
 		return Outcome_OUTCOME_FAILURE
 	default:
 		return Outcome_OUTCOME_UNSPECIFIED
 	}
 }
 
-func outcomeFromProto(o Outcome) durable.Outcome {
+func outcomeFromProto(o Outcome) kernel.Outcome {
 	switch o {
 	case Outcome_OUTCOME_SUCCESS:
-		return durable.OutcomeSuccess
+		return kernel.OutcomeSuccess
 	case Outcome_OUTCOME_FAILURE:
-		return durable.OutcomeFailure
+		return kernel.OutcomeFailure
 	default:
 		return 0
 	}
@@ -380,24 +379,24 @@ func opStatusFromProto(s OpStatus) storedriver.OpStatus {
 	}
 }
 
-func kindToProto(k durable.FailureKind) FailureKind {
+func kindToProto(k kernel.FailureKind) FailureKind {
 	switch k {
-	case durable.FailureKindUser:
+	case kernel.FailureKindUser:
 		return FailureKind_FAILURE_KIND_USER
-	case durable.FailureKindCanceled:
+	case kernel.FailureKindCanceled:
 		return FailureKind_FAILURE_KIND_CANCELED
 	default:
 		return FailureKind_FAILURE_KIND_SYSTEM
 	}
 }
 
-func kindFromProto(k FailureKind) durable.FailureKind {
+func kindFromProto(k FailureKind) kernel.FailureKind {
 	switch k {
 	case FailureKind_FAILURE_KIND_USER:
-		return durable.FailureKindUser
+		return kernel.FailureKindUser
 	case FailureKind_FAILURE_KIND_CANCELED:
-		return durable.FailureKindCanceled
+		return kernel.FailureKindCanceled
 	default:
-		return durable.FailureKindSystem
+		return kernel.FailureKindSystem
 	}
 }

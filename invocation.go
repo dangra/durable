@@ -5,8 +5,6 @@ import (
 	"sync"
 
 	"google.golang.org/protobuf/proto"
-
-	"github.com/dangra/durable/storedriver"
 )
 
 // Invocation is the untyped core behind generated Invocation types. It is
@@ -26,7 +24,7 @@ type Invocation struct {
 	annotations map[string]string
 
 	cancelRequested bool
-	awaited         *storedriver.Wake
+	awaited         *Wake
 
 	baseLogger *slog.Logger
 

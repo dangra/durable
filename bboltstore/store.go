@@ -25,8 +25,8 @@ import (
 
 	bolt "go.etcd.io/bbolt"
 
-	"github.com/dangra/durable"
 	"github.com/dangra/durable/internal/storagepb"
+	"github.com/dangra/durable/kernel"
 )
 
 var (
@@ -86,7 +86,7 @@ func slotKey(rec *storedriver.RunRecord) []byte {
 	return []byte(rec.SlotGroup() + "\x00" + string(rec.ResourceID))
 }
 
-func stepKey(id durable.RunID, step durable.StepID) []byte {
+func stepKey(id kernel.RunID, step kernel.StepID) []byte {
 	return []byte(string(id) + "\x00" + string(step))
 }
 
@@ -112,7 +112,7 @@ func (s *Store) CreateRun(_ context.Context, rec *storedriver.RunRecord) (*store
 		key := slotKey(rec)
 		if activeID := tx.Bucket(slotsBucket).Get(key); activeID != nil {
 			var err error
-			existing, err = getRun(tx, durable.RunID(activeID))
+			existing, err = getRun(tx, kernel.RunID(activeID))
 			return err
 		}
 		if err := putRun(tx, rec); err != nil {
@@ -186,13 +186,13 @@ func putRun(tx *bolt.Tx, rec *storedriver.RunRecord) error {
 	return nil
 }
 
-func (s *Store) ApplyTransition(_ context.Context, id durable.RunID, t storedriver.Transition) error {
+func (s *Store) ApplyTransition(_ context.Context, id kernel.RunID, t storedriver.Transition) error {
 	commit, done := s.groupCommit()
 	defer done()
 	return commit(func(tx *bolt.Tx) error {
 		metaBytes := tx.Bucket(metaBucket).Get([]byte(id))
 		if metaBytes == nil {
-			return durable.ErrRunNotFound
+			return kernel.ErrRunNotFound
 		}
 		cursor, err := storagepb.MarshalCursor(t.Cursor)
 		if err != nil {
@@ -253,7 +253,7 @@ func (s *Store) ApplyTransition(_ context.Context, id durable.RunID, t storedriv
 	})
 }
 
-func readFailures(tx *bolt.Tx, id durable.RunID) (*durable.RootFailure, []durable.UnwindFailure, error) {
+func readFailures(tx *bolt.Tx, id kernel.RunID) (*kernel.RootFailure, []kernel.UnwindFailure, error) {
 	b := tx.Bucket(failuresBucket).Get([]byte(id))
 	if b == nil {
 		return nil, nil, nil
@@ -264,10 +264,10 @@ func readFailures(tx *bolt.Tx, id durable.RunID) (*durable.RootFailure, []durabl
 // getRun assembles the read model from the run's components: meta, step
 // rows, failures, terminal — with the cursor's in-flight operation
 // overlaid as an unresolved step entry.
-func getRun(tx *bolt.Tx, id durable.RunID) (*storedriver.RunRecord, error) {
+func getRun(tx *bolt.Tx, id kernel.RunID) (*storedriver.RunRecord, error) {
 	metaBytes := tx.Bucket(metaBucket).Get([]byte(id))
 	if metaBytes == nil {
-		return nil, durable.ErrRunNotFound
+		return nil, kernel.ErrRunNotFound
 	}
 	rec := &storedriver.RunRecord{}
 	if err := storagepb.UnmarshalRunMetaInto(metaBytes, rec); err != nil {
@@ -281,7 +281,7 @@ func getRun(tx *bolt.Tx, id durable.RunID) (*storedriver.RunRecord, error) {
 		if err != nil {
 			return nil, err
 		}
-		*rec.Step(durable.StepID(k[len(prefix):])) = *sr
+		*rec.Step(kernel.StepID(k[len(prefix):])) = *sr
 	}
 
 	cb := tx.Bucket(cursorBucket).Get([]byte(id))
@@ -300,7 +300,7 @@ func getRun(tx *bolt.Tx, id durable.RunID) (*storedriver.RunRecord, error) {
 	rec.UpdatedAt = cur.UpdatedAt
 	if cur.StepID != "" {
 		sr := rec.Step(cur.StepID)
-		if cur.Phase == durable.PhaseUnwind && sr.ForwardStatus == storedriver.OpSucceeded {
+		if cur.Phase == kernel.PhaseUnwind && sr.ForwardStatus == storedriver.OpSucceeded {
 			sr.UnwindStatus = storedriver.OpUnresolved
 			sr.UnwindAttempts = cur.Attempts
 		} else {
@@ -334,7 +334,7 @@ func getRun(tx *bolt.Tx, id durable.RunID) (*storedriver.RunRecord, error) {
 	return rec, nil
 }
 
-func (s *Store) GetRun(_ context.Context, id durable.RunID) (*storedriver.RunRecord, error) {
+func (s *Store) GetRun(_ context.Context, id kernel.RunID) (*storedriver.RunRecord, error) {
 	var rec *storedriver.RunRecord
 	err := s.db.View(func(tx *bolt.Tx) error {
 		var err error
@@ -366,7 +366,7 @@ func (s *Store) ReapTerminal(_ context.Context, before time.Time, limit int) (in
 			}
 		}
 		for _, id := range victims {
-			prefix := stepKey(durable.RunID(id), "")
+			prefix := stepKey(kernel.RunID(id), "")
 			sc := tx.Bucket(stepsBucket).Cursor()
 			var stepKeys [][]byte
 			for k, _ := sc.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, _ = sc.Next() {
@@ -392,14 +392,14 @@ func (s *Store) ReapTerminal(_ context.Context, before time.Time, limit int) (in
 	return deleted, nil
 }
 
-func (s *Store) RequestCancel(_ context.Context, id durable.RunID, req storedriver.CancelRequest) (bool, error) {
+func (s *Store) RequestCancel(_ context.Context, id kernel.RunID, req storedriver.CancelRequest) (bool, error) {
 	accepted := false
 	err := s.db.Update(func(tx *bolt.Tx) error {
 		switch {
 		case tx.Bucket(metaBucket).Get([]byte(id)) == nil:
-			return durable.ErrRunNotFound
+			return kernel.ErrRunNotFound
 		case tx.Bucket(terminalBucket).Get([]byte(id)) != nil:
-			return durable.ErrRunTerminal
+			return kernel.ErrRunTerminal
 		case tx.Bucket(cancelBucket).Get([]byte(id)) != nil:
 			return nil // first cancel wins
 		}
@@ -423,7 +423,7 @@ func (s *Store) ListNonterminal(_ context.Context) ([]*storedriver.RunRecord, er
 			if tx.Bucket(terminalBucket).Get(k) != nil {
 				return nil
 			}
-			rec, err := getRun(tx, durable.RunID(k))
+			rec, err := getRun(tx, kernel.RunID(k))
 			if err != nil {
 				return err
 			}
@@ -434,7 +434,7 @@ func (s *Store) ListNonterminal(_ context.Context) ([]*storedriver.RunRecord, er
 	return out, err
 }
 
-func (s *Store) ListRuns(_ context.Context, pipeline durable.PipelineID, resource durable.ResourceID) ([]*storedriver.RunRecord, error) {
+func (s *Store) ListRuns(_ context.Context, pipeline kernel.PipelineID, resource kernel.ResourceID) ([]*storedriver.RunRecord, error) {
 	var out []*storedriver.RunRecord
 	err := s.db.View(func(tx *bolt.Tx) error {
 		return tx.Bucket(metaBucket).ForEach(func(k, v []byte) error {
@@ -445,7 +445,7 @@ func (s *Store) ListRuns(_ context.Context, pipeline durable.PipelineID, resourc
 			if probe.PipelineID != pipeline || probe.ResourceID != resource {
 				return nil
 			}
-			rec, err := getRun(tx, durable.RunID(k))
+			rec, err := getRun(tx, kernel.RunID(k))
 			if err != nil {
 				return err
 			}

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/dangra/durable/kernel"
 	"github.com/dangra/durable/storedriver"
 	"path/filepath"
 	"reflect"
@@ -32,7 +33,7 @@ type canonRecord struct {
 	Outcome                              *durable.Outcome
 	NextAttemptAt, LastErrorAt           int64
 	Awaiting                             *canonAwait
-	Awaited                              *storedriver.Wake
+	Awaited                              *kernel.Wake
 	LastError, LastReason                string
 	Cancel                               *canonCancel
 	CreatedAt, UpdatedAt                 int64
@@ -49,7 +50,7 @@ type canonCancel struct {
 }
 
 type canonAwait struct {
-	Mode     storedriver.AwaitMode
+	Mode     kernel.AwaitMode
 	Targets  []durable.RunID
 	Deadline int64
 }

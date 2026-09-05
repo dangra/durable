@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/dangra/durable/storedriver"
+	"github.com/dangra/durable/kernel"
 )
 
 // ErrEngineNotStarted is returned by Schedule and other execution APIs
@@ -49,11 +49,11 @@ func (e *PreemptedError) Error() string {
 var ErrRunInProgress = errors.New("durable: run still in progress; a handler must park with AwaitRun instead of blocking on Wait")
 
 // ErrRunNotFound is returned when no Run exists for a RunID.
-var ErrRunNotFound = storedriver.ErrRunNotFound
+var ErrRunNotFound = kernel.ErrRunNotFound
 
 // ErrRunTerminal is returned by Cancel when the Run already has a committed
 // terminal outcome.
-var ErrRunTerminal = storedriver.ErrRunTerminal
+var ErrRunTerminal = kernel.ErrRunTerminal
 
 // ScheduleConflictError is returned by Schedule when a nonterminal Run
 // already occupies the resource slot: a Run of the same pipeline with

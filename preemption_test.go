@@ -307,7 +307,13 @@ func TestFailFastExcept(t *testing.T) {
 	})
 	e := durable.NewEngine(durabletest.NewMemStore(), fastRetry,
 		durable.WithLogger(discardTestLogger()),
-		durable.WithMiddleware(durable.FailFastOnCancel(durable.FailFastExcept("careful/v1"))))
+		durable.WithMiddleware(durable.FailFastOnCancel(durable.FailFastExcept(
+			// A generated reference and a bare StepID both satisfy
+			// StepIdentifier; the ref form is what generated-code users
+			// write (orderspb.ChargePaymentStep).
+			durable.NewStepRef("careful/v1"),
+			durable.StepID("also-careful/v1"),
+		))))
 	pipe, err := def.Bind(e)
 	if err != nil {
 		t.Fatalf("Bind: %v", err)

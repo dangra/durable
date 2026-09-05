@@ -44,15 +44,16 @@ type failFastConfig struct {
 // Invocation.CancelRequested as if the middleware were not installed.
 // Use it for the steps that are not preemption-safe in an otherwise
 // safe pipeline — a payment charge that must reconcile whether the
-// charge landed before the run may unwind, say. Repeatable; lists
-// accumulate.
-func FailFastExcept(steps ...StepID) FailFastOption {
+// charge landed before the run may unwind, say. Steps are named by the
+// references generated code exports (orderspb.ChargePaymentStep) or by
+// a bare StepID. Repeatable; lists accumulate.
+func FailFastExcept(steps ...StepIdentifier) FailFastOption {
 	return func(c *failFastConfig) {
 		if c.except == nil {
 			c.except = make(map[StepID]bool, len(steps))
 		}
 		for _, s := range steps {
-			c.except[s] = true
+			c.except[s.ID()] = true
 		}
 	}
 }

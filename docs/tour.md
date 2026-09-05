@@ -309,8 +309,11 @@ steps that can't make the preemption-safety claim on the cooperative
 path:
 
 ```go
-durable.FailFastOnCancel(durable.FailFastExcept("charge-payment/v1"))
+durable.FailFastOnCancel(durable.FailFastExcept(deploypb.RunMigrationsStep))
 ```
+
+Steps are named by the references generated code exports (or a bare
+`durable.StepID`), so the exception list is typo-proof at compile time.
 
 ## Composing runs: AwaitRun
 

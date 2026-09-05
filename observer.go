@@ -200,7 +200,7 @@ func (e *Engine) Stats() observe.EngineStats {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	st := observe.EngineStats{
-		AwaitingRuns: len(e.awaitParked),
+		AwaitingRuns: e.joins.Len(),
 		InvalidRuns:  len(e.invalid),
 	}
 	if e.disp != nil {

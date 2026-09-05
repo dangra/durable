@@ -10,6 +10,7 @@ import (
 	"math"
 	mrand "math/rand/v2"
 	"runtime/debug"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/dangra/durable/internal/dispatcher"
+	"github.com/dangra/durable/internal/joinset"
 	"github.com/dangra/durable/internal/ledger"
 	"github.com/dangra/durable/internal/tokenpool"
 	"github.com/dangra/durable/internal/watchset"
@@ -198,11 +200,7 @@ type Engine struct {
 	// internally locked, independent of mu.
 	pool *tokenpool.Pool[string, RunID]
 
-	mu          sync.Mutex
-	awaitParked map[RunID]*parkState
-	// awaitedBy indexes parked Runs by target, so a target's terminal
-	// commit reaches its parkers without a store read; see parkState.
-	awaitedBy     map[RunID]map[RunID]struct{}
+	mu            sync.Mutex
 	started       bool
 	invalid       map[RunID]*InvalidRunError
 	attemptCancel map[RunID]context.CancelCauseFunc
@@ -219,9 +217,16 @@ type Engine struct {
 	stepOwner map[StepID]PipelineID
 
 	// waiters broadcasts a Run's terminal/invalid notification to
-	// Run.Wait callers and await watchers; it is internally locked,
-	// independent of mu.
+	// Run.Wait callers; it is internally locked, independent of mu.
 	waiters watchset.Set[RunID]
+
+	// joins holds the parks: each parked Run registered on its targets
+	// with the threshold its mode requires, and which targets this
+	// engine has seen done. Internally locked, independent of mu.
+	joins joinset.Set[RunID, RunID]
+	// awaitTimers holds, per parked Run with a deadline, the channel that
+	// stops its timer goroutine when the park resolves early. Under mu.
+	awaitTimers map[RunID]chan struct{}
 
 	// disp runs at most one worker per Run with bounded concurrency; it
 	// exists once the engine has started.
@@ -254,8 +259,7 @@ func NewEngine(store storedriver.Store, opts ...Option) *Engine {
 		attemptCancel: make(map[RunID]context.CancelCauseFunc),
 		preempted:     make(map[RunID]string),
 		classCapacity: make(map[string]int),
-		awaitParked:   make(map[RunID]*parkState),
-		awaitedBy:     make(map[RunID]map[RunID]struct{}),
+		awaitTimers:   make(map[RunID]chan struct{}),
 	}
 	for _, o := range opts {
 		o(e)
@@ -815,28 +819,18 @@ func clearLastError(rec *storedriver.RunRecord) {
 	rec.LastErrorAt = time.Time{}
 }
 
-// parkState is the engine's in-memory view of one parked Run: the park
-// itself, when it began, and which targets this engine has seen terminal
-// or missing — both monotonic, so the cache never needs re-validating. A
-// target's terminal commit marks it done here through awaitedBy (see
-// awaitTargetDone) and pokes the parker only once the park resolves per
-// its mode, so a fan-in costs one read per target, once, and no wake at
-// all until the real one.
-type parkState struct {
-	park  *storedriver.Await
-	since time.Time
-	done  map[RunID]struct{}
-	// stop ends the deadline timer goroutine when the park resolves
-	// before its deadline; nil until the timer is armed.
-	stop chan struct{}
-}
-
 // awaitGate parks the Run when its in-flight operation awaits other Runs
 // that have not resolved per the park's mode, returning true (no
 // redispatch — a target's completion or the deadline pokes the Run). A
 // pending cancellation bypasses the park so the operation can resolve.
 // Whenever the gate lets the Run through, the park is settled into the
 // operation's memory in place, for the attempt reservation to persist.
+//
+// The park lives in e.joins: the gate registers the Run on its targets
+// first and reads each target once; from then on a target's terminal
+// commit reaches the Run through the join (awaitTargetDone) and a re-run
+// of the gate reads nothing. Terminality and absence are monotonic, so
+// what the join has seen done never needs re-validating.
 func (e *Engine) awaitGate(rec *storedriver.RunRecord) bool {
 	park := rec.Awaiting
 	if park == nil {
@@ -853,15 +847,15 @@ func (e *Engine) awaitGate(rec *storedriver.RunRecord) bool {
 	if rec.Cancel != nil {
 		// A cancellation is bypassing the park: the Run proceeds now, so
 		// it is no longer awaiting. The memory records what the targets
-		// look like at this moment, best effort.
-		ps := e.unpark(id)
+		// look like at this moment, best effort: what the join knows,
+		// plus a read of the rest.
+		known, _ := e.joins.Done(id)
+		e.unpark(id)
 		var done []RunID
 		for _, t := range park.Targets {
-			if ps != nil {
-				if _, ok := ps.done[t]; ok {
-					done = append(done, t)
-					continue
-				}
+			if slices.Contains(known, t) {
+				done = append(done, t)
+				continue
 			}
 			if ok, err := e.targetDone(t); err == nil && ok {
 				done = append(done, t)
@@ -871,25 +865,10 @@ func (e *Engine) awaitGate(rec *storedriver.RunRecord) bool {
 		return false
 	}
 	// Register before reading: a target committing terminal from here on
-	// marks itself done through awaitedBy; one that did so earlier is
-	// caught by the first-run reads below. A re-run keeps its
-	// registration and cache and reads nothing.
-	e.mu.Lock()
-	ps, rerun := e.awaitParked[id]
-	if !rerun {
-		ps = &parkState{park: park, since: e.clock.Now(), done: make(map[RunID]struct{}, len(park.Targets))}
-		e.awaitParked[id] = ps
-		for _, t := range park.Targets {
-			parkers := e.awaitedBy[t]
-			if parkers == nil {
-				parkers = make(map[RunID]struct{})
-				e.awaitedBy[t] = parkers
-			}
-			parkers[id] = struct{}{}
-		}
-	}
-	e.mu.Unlock()
-	if !rerun {
+	// marks itself done through the join; one that did so earlier is
+	// caught by the first-run reads below.
+	need := awaitNeed(park)
+	if e.joins.Register(id, park.Targets, need, e.clock.Now()) {
 		if cycle, err := e.awaitCycle(id, park.Targets); err == nil && cycle {
 			e.unpark(id)
 			e.markInvalid(rec, "", fmt.Sprintf("await cycle: awaiting runs %v would deadlock back to this run", park.Targets))
@@ -901,19 +880,18 @@ func (e *Engine) awaitGate(rec *storedriver.RunRecord) bool {
 				if e.baseCtx.Err() == nil {
 					e.logger.Error("durable: await target read failed", "run", id, "target", t, "error", err)
 				}
+				done, _ := e.joins.Done(id)
 				e.unpark(id)
-				settleAwait(rec, e.doneTargets(ps), false)
+				settleAwait(rec, done, false)
 				return false
 			}
 			if ok {
-				e.mu.Lock()
-				ps.done[t] = struct{}{}
-				e.mu.Unlock()
+				e.joins.Mark(id, t)
 			}
 		}
 	}
-	done := e.doneTargets(ps)
-	if awaitResolved(park.Mode, len(done), len(park.Targets)) {
+	done, _ := e.joins.Done(id)
+	if len(done) >= need {
 		e.wake(rec, done, false)
 		return false
 	}
@@ -927,13 +905,14 @@ func (e *Engine) awaitGate(rec *storedriver.RunRecord) bool {
 			return false
 		}
 		e.mu.Lock()
-		arm := ps.stop == nil
-		if arm {
-			ps.stop = make(chan struct{})
+		_, armed := e.awaitTimers[id]
+		var stop chan struct{}
+		if !armed {
+			stop = make(chan struct{})
+			e.awaitTimers[id] = stop
 		}
-		stop := ps.stop
 		e.mu.Unlock()
-		if arm {
+		if !armed {
 			timer := e.clock.After(remaining)
 			e.wg.Go(func() {
 				select {
@@ -948,83 +927,49 @@ func (e *Engine) awaitGate(rec *storedriver.RunRecord) bool {
 	return true
 }
 
-// awaitResolved is the park's mode applied to what is done.
-func awaitResolved(mode storedriver.AwaitMode, done, targets int) bool {
-	if mode == storedriver.AwaitModeAny {
-		return done > 0
+// awaitNeed is the park's mode as a threshold: how many targets must be
+// done before it resolves.
+func awaitNeed(park *storedriver.Await) int {
+	if park.Mode == storedriver.AwaitModeAny {
+		return 1
 	}
-	return done == targets
+	return len(park.Targets)
 }
 
-// awaitTargetDone records a Run's terminal commit for every Run parked on
-// it and pokes the ones whose park thereby resolves. It is the push half
-// of the gate: the gate registers and reads once, this keeps the cache
-// current, so a spurious wake never happens and a real one reads nothing.
+// awaitTargetDone records a Run's terminal commit for every Run parked
+// on it and pokes the ones whose park thereby resolves. It is the push
+// half of the gate: the gate registers and reads once, this keeps the
+// join current, so a spurious wake never happens and a real one reads
+// nothing.
 func (e *Engine) awaitTargetDone(target RunID) {
-	e.mu.Lock()
-	var woken []RunID
-	for parker := range e.awaitedBy[target] {
-		ps := e.awaitParked[parker]
-		if ps == nil {
-			continue
-		}
-		ps.done[target] = struct{}{}
-		if awaitResolved(ps.park.Mode, len(ps.done), len(ps.park.Targets)) {
-			woken = append(woken, parker)
-		}
-	}
-	e.mu.Unlock()
-	for _, parker := range woken {
+	for _, parker := range e.joins.Complete(target) {
 		e.disp.Dispatch(parker, 0)
 	}
 }
 
-// doneTargets lists the park's done targets in park order.
-func (e *Engine) doneTargets(ps *parkState) []RunID {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	var done []RunID
-	for _, t := range ps.park.Targets {
-		if _, ok := ps.done[t]; ok {
-			done = append(done, t)
-		}
-	}
-	return done
-}
-
 // unpark drops a Run's park registration, if any, and stops its deadline
-// timer.
-func (e *Engine) unpark(id RunID) *parkState {
+// timer, returning when the park began.
+func (e *Engine) unpark(id RunID) (since time.Time, ok bool) {
+	since, ok = e.joins.Remove(id)
 	e.mu.Lock()
-	defer e.mu.Unlock()
-	ps := e.awaitParked[id]
-	if ps == nil {
-		return nil
+	if stop, armed := e.awaitTimers[id]; armed {
+		close(stop)
+		delete(e.awaitTimers, id)
 	}
-	delete(e.awaitParked, id)
-	for _, t := range ps.park.Targets {
-		parkers := e.awaitedBy[t]
-		delete(parkers, id)
-		if len(parkers) == 0 {
-			delete(e.awaitedBy, t)
-		}
-	}
-	if ps.stop != nil {
-		close(ps.stop)
-	}
-	return ps
+	e.mu.Unlock()
+	return since, ok
 }
 
 // wake resolves a Run's park: the registration is dropped, WaiterWoken
 // reports the full first-park-to-resolution duration, and the park is
 // settled into the operation's memory.
 func (e *Engine) wake(rec *storedriver.RunRecord, done []RunID, expired bool) {
-	if ps := e.unpark(rec.RunID); ps != nil {
+	if since, ok := e.unpark(rec.RunID); ok {
 		e.emitWaiterWoken(observe.WakeEvent{
 			PipelineID: rec.PipelineID, ResourceID: rec.ResourceID, RunID: rec.RunID,
 			Targets: append([]RunID(nil), rec.Awaiting.Targets...), Done: append([]RunID(nil), done...),
 			Expired:  expired,
-			Duration: e.clock.Now().Sub(ps.since)})
+			Duration: e.clock.Now().Sub(since)})
 	}
 	settleAwait(rec, done, expired)
 }

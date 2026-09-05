@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/dangra/durable/observe"
 	"github.com/dangra/durable/storedriver"
 	"log/slog"
 	"math"
@@ -188,7 +189,7 @@ type Engine struct {
 	retention       RetentionPolicy
 	drainTimeout    time.Duration
 	middleware      []Middleware
-	observers       []Observer
+	observers       []observe.Observer
 	annotators      []ScheduleAnnotator
 
 	classCapacity map[string]int
@@ -614,7 +615,7 @@ func (e *Engine) processRun(id RunID) (time.Duration, bool) {
 				return 0, false
 			}
 			if waited > 0 {
-				e.emitClassWait(ClassWaitEvent{
+				e.emitClassWait(observe.ClassWaitEvent{
 					PipelineID: rec.PipelineID, ResourceID: rec.ResourceID,
 					RunID: rec.RunID, Class: class, Duration: waited})
 			}
@@ -659,7 +660,7 @@ func (e *Engine) processRun(id RunID) (time.Duration, bool) {
 				return 0, false
 			}
 			if waited > 0 {
-				e.emitClassWait(ClassWaitEvent{
+				e.emitClassWait(observe.ClassWaitEvent{
 					PipelineID: rec.PipelineID, ResourceID: rec.ResourceID,
 					RunID: rec.RunID, Class: class, Duration: waited})
 			}
@@ -715,7 +716,7 @@ func (e *Engine) applyCancel(rec *storedriver.RunRecord) bool {
 	e.logger.Info("durable: cancellation accepted; unwinding",
 		"pipeline", string(rec.PipelineID), "resource", string(rec.ResourceID),
 		"run", string(rec.RunID), "cause", cause)
-	e.emitRunUnwinding(RunFailureEvent{
+	e.emitRunUnwinding(observe.RunFailureEvent{
 		PipelineID: rec.PipelineID, ResourceID: rec.ResourceID, RunID: rec.RunID,
 		Kind: FailureKindCanceled, Message: cause})
 	return true
@@ -740,25 +741,25 @@ func (e *Engine) completeRun(rec *storedriver.RunRecord) {
 // or permanently failed operation attempt reaches both observability
 // planes: the log line and the AttemptDone event are produced from the
 // same facts, so a future resolution path cannot serve one and drift on
-// the other. For AttemptFailed, attribution comes off the record — the
+// the other. For observe.AttemptFailed, attribution comes off the record — the
 // RootFailure forward, the newest UnwindFailure during unwind.
-func (e *Engine) attemptResolved(rec *storedriver.RunRecord, stepID StepID, phase Phase, attempt uint64, elapsed time.Duration, result AttemptResult, err error, retryIn time.Duration, panicked bool) {
+func (e *Engine) attemptResolved(rec *storedriver.RunRecord, stepID StepID, phase Phase, attempt uint64, elapsed time.Duration, result observe.AttemptResult, err error, retryIn time.Duration, panicked bool) {
 	switch result {
-	case AttemptSucceeded:
+	case observe.AttemptSucceeded:
 		if e.debugLog() {
 			e.logger.Debug("durable: operation succeeded",
 				"pipeline", string(rec.PipelineID), "resource", string(rec.ResourceID),
 				"run", string(rec.RunID), "step", string(stepID), "phase", phase.String(),
 				"attempt", attempt, "elapsed", elapsed)
 		}
-	case AttemptRetrying:
+	case observe.AttemptRetrying:
 		if e.debugLog() {
 			e.logger.Debug("durable: operation failed; will retry",
 				"pipeline", string(rec.PipelineID), "resource", string(rec.ResourceID),
 				"run", string(rec.RunID), "step", string(stepID), "phase", phase.String(),
 				"attempt", attempt, "error", err, "next_attempt_at", rec.NextAttemptAt)
 		}
-	case AttemptFailed:
+	case observe.AttemptFailed:
 		if phase == PhaseForward {
 			e.logger.Info("durable: run failed; unwinding",
 				"pipeline", string(rec.PipelineID), "resource", string(rec.ResourceID),
@@ -775,7 +776,7 @@ func (e *Engine) attemptResolved(rec *storedriver.RunRecord, stepID StepID, phas
 				"error", err, "kind", uf.Kind.String(), "reason", uf.Reason)
 		}
 	}
-	e.emitAttemptDone(AttemptEvent{
+	e.emitAttemptDone(observe.AttemptEvent{
 		PipelineID: rec.PipelineID, ResourceID: rec.ResourceID, RunID: rec.RunID,
 		StepID: stepID, Phase: phase, Attempt: attempt,
 		Duration: elapsed, Result: result, Err: err, RetryIn: retryIn, Panicked: panicked})
@@ -875,7 +876,7 @@ func (e *Engine) resolveAwaitPark(rec *storedriver.RunRecord, target RunID, reso
 	delete(e.awaitParked, rec.RunID)
 	e.mu.Unlock()
 	if present && resolved {
-		e.emitWaiterWoken(WakeEvent{
+		e.emitWaiterWoken(observe.WakeEvent{
 			PipelineID: rec.PipelineID, ResourceID: rec.ResourceID,
 			RunID: rec.RunID, Target: target, Duration: e.clock.Now().Sub(since)})
 	}
@@ -910,10 +911,10 @@ func (e *Engine) parkAwait(rec *storedriver.RunRecord, stepID StepID, attempts u
 			"pipeline", string(rec.PipelineID), "resource", string(rec.ResourceID),
 			"run", string(rec.RunID), "step", string(stepID), "target", string(target))
 	}
-	e.emitAttemptDone(AttemptEvent{
+	e.emitAttemptDone(observe.AttemptEvent{
 		PipelineID: rec.PipelineID, ResourceID: rec.ResourceID, RunID: rec.RunID,
 		StepID: stepID, Phase: rec.Phase, Attempt: attempts,
-		Duration: elapsed, Result: AttemptAwaiting})
+		Duration: elapsed, Result: observe.AttemptAwaiting})
 	return true, 0, false
 }
 
@@ -1005,7 +1006,7 @@ func (e *Engine) runForward(rec *storedriver.RunRecord, def *Definition, stepID 
 		if !e.apply(rec, storedriver.Transition{Cursor: idleCursor(rec), Steps: []storedriver.StepWrite{{StepID: stepID, Record: *sr}}}) {
 			return false, time.Second, true
 		}
-		e.attemptResolved(rec, stepID, PhaseForward, sr.ForwardAttempts, now.Sub(opStart), AttemptSucceeded, nil, 0, false)
+		e.attemptResolved(rec, stepID, PhaseForward, sr.ForwardAttempts, now.Sub(opStart), observe.AttemptSucceeded, nil, 0, false)
 		return true, 0, false
 
 	case permanent:
@@ -1042,8 +1043,8 @@ func (e *Engine) runForward(rec *storedriver.RunRecord, def *Definition, stepID 
 		if !e.apply(rec, storedriver.Transition{Cursor: idleCursor(rec), Steps: []storedriver.StepWrite{{StepID: stepID, Record: *sr}}, RootFailure: rec.RootFailure}) {
 			return false, time.Second, true
 		}
-		e.attemptResolved(rec, stepID, PhaseForward, sr.ForwardAttempts, now.Sub(opStart), AttemptFailed, pe.err, 0, false)
-		e.emitRunUnwinding(RunFailureEvent{
+		e.attemptResolved(rec, stepID, PhaseForward, sr.ForwardAttempts, now.Sub(opStart), observe.AttemptFailed, pe.err, 0, false)
+		e.emitRunUnwinding(observe.RunFailureEvent{
 			PipelineID: rec.PipelineID, ResourceID: rec.ResourceID, RunID: rec.RunID,
 			StepID: stepID, Kind: rec.RootFailure.Kind, Reason: rec.RootFailure.Reason,
 			Message: rec.RootFailure.Message})
@@ -1056,7 +1057,7 @@ func (e *Engine) runForward(rec *storedriver.RunRecord, def *Definition, stepID 
 		if !e.apply(rec, storedriver.Transition{Cursor: activeCursor(rec, stepID, sr.ForwardAttempts)}) {
 			return false, time.Second, true
 		}
-		e.attemptResolved(rec, stepID, PhaseForward, sr.ForwardAttempts, now.Sub(opStart), AttemptRetrying, err, d, panicked)
+		e.attemptResolved(rec, stepID, PhaseForward, sr.ForwardAttempts, now.Sub(opStart), observe.AttemptRetrying, err, d, panicked)
 		return false, d, true
 	}
 }
@@ -1104,7 +1105,7 @@ func (e *Engine) runUnwind(rec *storedriver.RunRecord, def *Definition, stepID S
 		if !e.apply(rec, storedriver.Transition{Cursor: idleCursor(rec), Steps: []storedriver.StepWrite{{StepID: stepID, Record: *sr}}}) {
 			return false, time.Second, true
 		}
-		e.attemptResolved(rec, stepID, PhaseUnwind, sr.UnwindAttempts, now.Sub(opStart), AttemptSucceeded, nil, 0, false)
+		e.attemptResolved(rec, stepID, PhaseUnwind, sr.UnwindAttempts, now.Sub(opStart), observe.AttemptSucceeded, nil, 0, false)
 		return true, 0, false
 
 	case permanent:
@@ -1122,7 +1123,7 @@ func (e *Engine) runUnwind(rec *storedriver.RunRecord, def *Definition, stepID S
 		if !e.apply(rec, storedriver.Transition{Cursor: idleCursor(rec), Steps: []storedriver.StepWrite{{StepID: stepID, Record: *sr}}, UnwindFailure: &uf}) {
 			return false, time.Second, true
 		}
-		e.attemptResolved(rec, stepID, PhaseUnwind, sr.UnwindAttempts, now.Sub(opStart), AttemptFailed, pe.err, 0, false)
+		e.attemptResolved(rec, stepID, PhaseUnwind, sr.UnwindAttempts, now.Sub(opStart), observe.AttemptFailed, pe.err, 0, false)
 		return true, 0, false
 
 	default:
@@ -1132,7 +1133,7 @@ func (e *Engine) runUnwind(rec *storedriver.RunRecord, def *Definition, stepID S
 		if !e.apply(rec, storedriver.Transition{Cursor: activeCursor(rec, stepID, sr.UnwindAttempts)}) {
 			return false, time.Second, true
 		}
-		e.attemptResolved(rec, stepID, PhaseUnwind, sr.UnwindAttempts, now.Sub(opStart), AttemptRetrying, err, d, panicked)
+		e.attemptResolved(rec, stepID, PhaseUnwind, sr.UnwindAttempts, now.Sub(opStart), observe.AttemptRetrying, err, d, panicked)
 		return false, d, true
 	}
 }
@@ -1344,7 +1345,7 @@ func (e *Engine) markInvalid(rec *storedriver.RunRecord, stepID StepID, reason s
 		"phase", rec.Phase.String(),
 		"step", stepID,
 		"reason", reason)
-	e.emitRunInvalid(RunFailureEvent{
+	e.emitRunInvalid(observe.RunFailureEvent{
 		PipelineID: rec.PipelineID, ResourceID: rec.ResourceID, RunID: rec.RunID,
 		StepID: stepID, Reason: reason})
 	e.waiters.Notify(rec.RunID)

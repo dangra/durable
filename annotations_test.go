@@ -11,6 +11,7 @@ import (
 
 	"github.com/dangra/durable"
 	"github.com/dangra/durable/durabletest"
+	"github.com/dangra/durable/observe"
 )
 
 // TestTracePropagationPattern is the documented tracing shape end to
@@ -58,11 +59,11 @@ func TestTracePropagationPattern(t *testing.T) {
 	})
 
 	store := durabletest.NewMemStore()
-	var scheduled durable.RunEvent
-	var terminal durable.RunTerminalEvent
-	obs := durable.Observer{
-		RunScheduled: func(ev durable.RunEvent) { mu.Lock(); scheduled = ev; mu.Unlock() },
-		RunTerminal:  func(ev durable.RunTerminalEvent) { mu.Lock(); terminal = ev; mu.Unlock() },
+	var scheduled observe.RunEvent
+	var terminal observe.RunTerminalEvent
+	obs := observe.Observer{
+		RunScheduled: func(ev observe.RunEvent) { mu.Lock(); scheduled = ev; mu.Unlock() },
+		RunTerminal:  func(ev observe.RunTerminalEvent) { mu.Lock(); terminal = ev; mu.Unlock() },
 	}
 	boot := func() (*durable.Engine, *durable.Pipeline) {
 		e := durable.NewEngine(store, fastRetry, durable.WithRecoveryBackoff(0),

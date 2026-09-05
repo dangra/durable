@@ -3,6 +3,7 @@ package durable
 import (
 	"context"
 	"fmt"
+	"github.com/dangra/durable/observe"
 	"github.com/dangra/durable/storedriver"
 	"time"
 	"unicode/utf8"
@@ -151,7 +152,7 @@ func (p *Pipeline) Schedule(ctx context.Context, resource ResourceID, input prot
 			}
 			e.logger.Debug("durable: run scheduled", args...)
 		}
-		e.emitRunScheduled(RunEvent{
+		e.emitRunScheduled(observe.RunEvent{
 			PipelineID: rec.PipelineID, ResourceID: resource,
 			RunID: rec.RunID, StartAt: rec.NextAttemptAt,
 			Annotations: copyAnnotations(rec.Annotations)})

@@ -26,7 +26,7 @@
 //
 // # Metrics
 //
-// WithObserver installs typed lifecycle callbacks (attempts, terminal
+// WithObserver installs observe.Observer typed lifecycle callbacks (attempts, terminal
 // outcomes, unwind starts, wake and throttle waits, store operations)
 // for counter- and histogram-style metrics; Engine.Stats returns a
 // point-in-time occupancy snapshot for poll-style gauges. Adapters for
@@ -54,6 +54,9 @@
 // code plus NewDefinition for hand-rolled ones), running an engine, and
 // writing handlers. The rest of the module serves narrower audiences:
 //
+//   - observe holds the lifecycle event surface — Observer and its
+//     typed events — for telemetry-adapter authors; contrib/durableotel
+//     is the packaged adapter most applications install instead.
 //   - storedriver holds the store SPI — the Store interface and the
 //     durable record types — for implementers of persistence backends,
 //     in the spirit of database/sql/driver. Users pick an existing

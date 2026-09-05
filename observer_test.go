@@ -13,6 +13,7 @@ import (
 
 	"github.com/dangra/durable"
 	"github.com/dangra/durable/durabletest"
+	"github.com/dangra/durable/observe"
 )
 
 func discardTestLogger() *slog.Logger { return slog.New(slog.DiscardHandler) }
@@ -21,26 +22,26 @@ func discardTestLogger() *slog.Logger { return slog.New(slog.DiscardHandler) }
 // engine goroutines.
 type eventLog struct {
 	mu        sync.Mutex
-	scheduled []durable.RunEvent
-	attempts  []durable.AttemptEvent
-	unwinding []durable.RunFailureEvent
-	terminal  []durable.RunTerminalEvent
-	invalid   []durable.RunFailureEvent
-	wakes     []durable.WakeEvent
-	classWait []durable.ClassWaitEvent
-	storeOps  []durable.StoreOpEvent
+	scheduled []observe.RunEvent
+	attempts  []observe.AttemptEvent
+	unwinding []observe.RunFailureEvent
+	terminal  []observe.RunTerminalEvent
+	invalid   []observe.RunFailureEvent
+	wakes     []observe.WakeEvent
+	classWait []observe.ClassWaitEvent
+	storeOps  []observe.StoreOpEvent
 }
 
-func (l *eventLog) observer() durable.Observer {
-	return durable.Observer{
-		RunScheduled: func(ev durable.RunEvent) { l.mu.Lock(); l.scheduled = append(l.scheduled, ev); l.mu.Unlock() },
-		AttemptDone:  func(ev durable.AttemptEvent) { l.mu.Lock(); l.attempts = append(l.attempts, ev); l.mu.Unlock() },
-		RunUnwinding: func(ev durable.RunFailureEvent) { l.mu.Lock(); l.unwinding = append(l.unwinding, ev); l.mu.Unlock() },
-		RunTerminal:  func(ev durable.RunTerminalEvent) { l.mu.Lock(); l.terminal = append(l.terminal, ev); l.mu.Unlock() },
-		RunInvalid:   func(ev durable.RunFailureEvent) { l.mu.Lock(); l.invalid = append(l.invalid, ev); l.mu.Unlock() },
-		WaiterWoken:  func(ev durable.WakeEvent) { l.mu.Lock(); l.wakes = append(l.wakes, ev); l.mu.Unlock() },
-		ClassWait:    func(ev durable.ClassWaitEvent) { l.mu.Lock(); l.classWait = append(l.classWait, ev); l.mu.Unlock() },
-		StoreOp:      func(ev durable.StoreOpEvent) { l.mu.Lock(); l.storeOps = append(l.storeOps, ev); l.mu.Unlock() },
+func (l *eventLog) observer() observe.Observer {
+	return observe.Observer{
+		RunScheduled: func(ev observe.RunEvent) { l.mu.Lock(); l.scheduled = append(l.scheduled, ev); l.mu.Unlock() },
+		AttemptDone:  func(ev observe.AttemptEvent) { l.mu.Lock(); l.attempts = append(l.attempts, ev); l.mu.Unlock() },
+		RunUnwinding: func(ev observe.RunFailureEvent) { l.mu.Lock(); l.unwinding = append(l.unwinding, ev); l.mu.Unlock() },
+		RunTerminal:  func(ev observe.RunTerminalEvent) { l.mu.Lock(); l.terminal = append(l.terminal, ev); l.mu.Unlock() },
+		RunInvalid:   func(ev observe.RunFailureEvent) { l.mu.Lock(); l.invalid = append(l.invalid, ev); l.mu.Unlock() },
+		WaiterWoken:  func(ev observe.WakeEvent) { l.mu.Lock(); l.wakes = append(l.wakes, ev); l.mu.Unlock() },
+		ClassWait:    func(ev observe.ClassWaitEvent) { l.mu.Lock(); l.classWait = append(l.classWait, ev); l.mu.Unlock() },
+		StoreOp:      func(ev observe.StoreOpEvent) { l.mu.Lock(); l.storeOps = append(l.storeOps, ev); l.mu.Unlock() },
 	}
 }
 
@@ -123,7 +124,7 @@ func TestObserverLifecycle(t *testing.T) {
 			step    durable.StepID
 			phase   durable.Phase
 			attempt uint64
-			result  durable.AttemptResult
+			result  observe.AttemptResult
 		}
 		var got []short
 		for _, a := range log.attempts {
@@ -133,10 +134,10 @@ func TestObserverLifecycle(t *testing.T) {
 			}
 		}
 		want := []short{
-			{"flaky/v1", durable.PhaseForward, 1, durable.AttemptRetrying},
-			{"flaky/v1", durable.PhaseForward, 2, durable.AttemptSucceeded},
-			{"explode/v1", durable.PhaseForward, 1, durable.AttemptFailed},
-			{"flaky/v1", durable.PhaseUnwind, 1, durable.AttemptSucceeded},
+			{"flaky/v1", durable.PhaseForward, 1, observe.AttemptRetrying},
+			{"flaky/v1", durable.PhaseForward, 2, observe.AttemptSucceeded},
+			{"explode/v1", durable.PhaseForward, 1, observe.AttemptFailed},
+			{"flaky/v1", durable.PhaseUnwind, 1, observe.AttemptSucceeded},
 		}
 		if len(got) != len(want) {
 			t.Fatalf("attempts = %+v, want %+v", got, want)
@@ -289,7 +290,7 @@ func TestObserverAwaitWake(t *testing.T) {
 	log.locked(func() {
 		var awaiting bool
 		for _, a := range log.attempts {
-			if a.RunID == wrun.ID() && a.Result == durable.AttemptAwaiting {
+			if a.RunID == wrun.ID() && a.Result == observe.AttemptAwaiting {
 				awaiting = true
 			}
 		}
@@ -751,7 +752,7 @@ func TestObserverReapedPerBatch(t *testing.T) {
 	reaper := durable.NewEngine(store,
 		durable.WithRecoveryBackoff(0), durable.WithLogger(discardTestLogger()),
 		durable.WithRetention(durable.RetentionPolicy{TerminalAfter: time.Nanosecond, Interval: time.Hour}),
-		durable.WithObserver(durable.Observer{RunsReaped: func(n int) {
+		durable.WithObserver(observe.Observer{RunsReaped: func(n int) {
 			log.mu.Lock()
 			reaps = append(reaps, n)
 			log.mu.Unlock()
@@ -799,8 +800,8 @@ func TestObserverPanicIsolated(t *testing.T) {
 		},
 	})
 	log := &eventLog{}
-	panicky := durable.Observer{
-		RunTerminal: func(durable.RunTerminalEvent) { panic("observer bug") },
+	panicky := observe.Observer{
+		RunTerminal: func(observe.RunTerminalEvent) { panic("observer bug") },
 	}
 	e := durable.NewEngine(durabletest.NewMemStore(),
 		fastRetry, durable.WithRecoveryBackoff(0), durable.WithLogger(discardTestLogger()),

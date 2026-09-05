@@ -12,6 +12,7 @@ import (
 	"github.com/dangra/durable"
 	"github.com/dangra/durable/contrib/durableotel"
 	"github.com/dangra/durable/durabletest"
+	"github.com/dangra/durable/observe"
 )
 
 func collect(t *testing.T, reader *sdkmetric.ManualReader) map[string]metricdata.Metrics {
@@ -73,25 +74,25 @@ func TestNewObserverSyntheticEvents(t *testing.T) {
 		t.Fatalf("NewObserver: %v", err)
 	}
 
-	obs.RunScheduled(durable.RunEvent{PipelineID: "p"})
-	obs.AttemptDone(durable.AttemptEvent{
+	obs.RunScheduled(observe.RunEvent{PipelineID: "p"})
+	obs.AttemptDone(observe.AttemptEvent{
 		PipelineID: "p", StepID: "s/v1", Phase: durable.PhaseForward,
-		Attempt: 1, Duration: 250 * time.Millisecond, Result: durable.AttemptRetrying,
+		Attempt: 1, Duration: 250 * time.Millisecond, Result: observe.AttemptRetrying,
 		Err: errors.New("transient"), RetryIn: time.Second,
 	})
-	obs.RunUnwinding(durable.RunFailureEvent{
+	obs.RunUnwinding(observe.RunFailureEvent{
 		PipelineID: "p", Kind: durable.FailureKindUser, Reason: "invalid-input"})
-	obs.RunTerminal(durable.RunTerminalEvent{
+	obs.RunTerminal(observe.RunTerminalEvent{
 		PipelineID: "p", Outcome: durable.OutcomeFailure,
 		Kind: durable.FailureKindUser, Reason: "invalid-input", Duration: 3 * time.Second})
-	obs.RunTerminal(durable.RunTerminalEvent{
+	obs.RunTerminal(observe.RunTerminalEvent{
 		PipelineID: "p", Outcome: durable.OutcomeSuccess, Duration: time.Second})
-	obs.RunInvalid(durable.RunFailureEvent{PipelineID: "p", Reason: "step-retired"})
-	obs.WaiterWoken(durable.WakeEvent{PipelineID: "p", Duration: time.Minute})
-	obs.ClassWait(durable.ClassWaitEvent{PipelineID: "p", Class: "db", Duration: time.Second})
+	obs.RunInvalid(observe.RunFailureEvent{PipelineID: "p", Reason: "step-retired"})
+	obs.WaiterWoken(observe.WakeEvent{PipelineID: "p", Duration: time.Minute})
+	obs.ClassWait(observe.ClassWaitEvent{PipelineID: "p", Class: "db", Duration: time.Second})
 	obs.RunsReaped(7)
-	obs.StoreOp(durable.StoreOpEvent{Op: "ApplyTransition", Write: true, Duration: time.Millisecond})
-	obs.StoreOp(durable.StoreOpEvent{Op: "GetRun", Duration: time.Millisecond, Err: errors.New("io")})
+	obs.StoreOp(observe.StoreOpEvent{Op: "ApplyTransition", Write: true, Duration: time.Millisecond})
+	obs.StoreOp(observe.StoreOpEvent{Op: "GetRun", Duration: time.Millisecond, Err: errors.New("io")})
 
 	got := collect(t, reader)
 	pipeline := durableotel.AttrPipeline.String("p")
@@ -168,9 +169,9 @@ func TestObserverPanickedLabel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewObserver: %v", err)
 	}
-	obs.AttemptDone(durable.AttemptEvent{
+	obs.AttemptDone(observe.AttemptEvent{
 		PipelineID: "p", StepID: "s/v1", Phase: durable.PhaseForward,
-		Attempt: 1, Result: durable.AttemptRetrying,
+		Attempt: 1, Result: observe.AttemptRetrying,
 		Err: errors.New("handler panic: boom"), Panicked: true,
 	})
 	got := collect(t, reader)
@@ -195,11 +196,11 @@ func TestHistogramBoundaries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewObserver: %v", err)
 	}
-	obs.AttemptDone(durable.AttemptEvent{PipelineID: "p", Duration: 20 * time.Minute, Result: durable.AttemptSucceeded})
-	obs.RunTerminal(durable.RunTerminalEvent{PipelineID: "p", Outcome: durable.OutcomeSuccess, Duration: 20 * time.Hour})
-	obs.WaiterWoken(durable.WakeEvent{PipelineID: "p", Duration: 20 * time.Hour})
-	obs.ClassWait(durable.ClassWaitEvent{PipelineID: "p", Class: "db", Duration: 15 * time.Minute})
-	obs.StoreOp(durable.StoreOpEvent{Op: "GetRun", Duration: time.Millisecond})
+	obs.AttemptDone(observe.AttemptEvent{PipelineID: "p", Duration: 20 * time.Minute, Result: observe.AttemptSucceeded})
+	obs.RunTerminal(observe.RunTerminalEvent{PipelineID: "p", Outcome: durable.OutcomeSuccess, Duration: 20 * time.Hour})
+	obs.WaiterWoken(observe.WakeEvent{PipelineID: "p", Duration: 20 * time.Hour})
+	obs.ClassWait(observe.ClassWaitEvent{PipelineID: "p", Class: "db", Duration: 15 * time.Minute})
+	obs.StoreOp(observe.StoreOpEvent{Op: "GetRun", Duration: time.Millisecond})
 
 	got := collect(t, reader)
 	wantMax := map[string]float64{

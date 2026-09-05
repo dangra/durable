@@ -37,11 +37,16 @@ func (inv ReserveStockInvocation) Phase() durable.Phase           { return inv.c
 // this attempt was reserved.
 func (inv ReserveStockInvocation) CancelRequested() bool { return inv.core.CancelRequested() }
 
-// AwaitedRunID reports the run the previous attempt parked on via
-// durable.AwaitRun, once it reached terminality.
+// AwaitedRunID reports the run an earlier attempt of this operation parked
+// on via durable.AwaitRun, once that park resolved. Multi-target parks
+// are read through Awaited.
 func (inv ReserveStockInvocation) AwaitedRunID() (durable.RunID, bool) {
 	return inv.core.AwaitedRunID()
 }
+
+// Awaited reports the park an earlier attempt of this operation made, once
+// it resolved; ok is false on a first execution.
+func (inv ReserveStockInvocation) Awaited() (durable.Wake, bool) { return inv.core.Awaited() }
 
 // Annotations returns a caller-owned copy of the run's immutable
 // acceptance-time annotations (trace contexts, tenant tags).
@@ -96,11 +101,16 @@ func (inv ChargePaymentInvocation) Phase() durable.Phase           { return inv.
 // this attempt was reserved.
 func (inv ChargePaymentInvocation) CancelRequested() bool { return inv.core.CancelRequested() }
 
-// AwaitedRunID reports the run the previous attempt parked on via
-// durable.AwaitRun, once it reached terminality.
+// AwaitedRunID reports the run an earlier attempt of this operation parked
+// on via durable.AwaitRun, once that park resolved. Multi-target parks
+// are read through Awaited.
 func (inv ChargePaymentInvocation) AwaitedRunID() (durable.RunID, bool) {
 	return inv.core.AwaitedRunID()
 }
+
+// Awaited reports the park an earlier attempt of this operation made, once
+// it resolved; ok is false on a first execution.
+func (inv ChargePaymentInvocation) Awaited() (durable.Wake, bool) { return inv.core.Awaited() }
 
 // Annotations returns a caller-owned copy of the run's immutable
 // acceptance-time annotations (trace contexts, tenant tags).
@@ -155,9 +165,14 @@ func (inv ShipInvocation) Phase() durable.Phase           { return inv.core.Phas
 // this attempt was reserved.
 func (inv ShipInvocation) CancelRequested() bool { return inv.core.CancelRequested() }
 
-// AwaitedRunID reports the run the previous attempt parked on via
-// durable.AwaitRun, once it reached terminality.
+// AwaitedRunID reports the run an earlier attempt of this operation parked
+// on via durable.AwaitRun, once that park resolved. Multi-target parks
+// are read through Awaited.
 func (inv ShipInvocation) AwaitedRunID() (durable.RunID, bool) { return inv.core.AwaitedRunID() }
+
+// Awaited reports the park an earlier attempt of this operation made, once
+// it resolved; ok is false on a first execution.
+func (inv ShipInvocation) Awaited() (durable.Wake, bool) { return inv.core.Awaited() }
 
 // Annotations returns a caller-owned copy of the run's immutable
 // acceptance-time annotations (trace contexts, tenant tags).

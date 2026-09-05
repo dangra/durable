@@ -39,6 +39,27 @@ const (
 	OutcomeFailure = storedriver.OutcomeFailure
 )
 
+// AwaitMode is how a multi-target park resolves: AwaitModeAll once every
+// target is terminal (or missing), AwaitModeAny once the first one is.
+type AwaitMode = storedriver.AwaitMode
+
+const (
+	AwaitModeAll = storedriver.AwaitModeAll
+	AwaitModeAny = storedriver.AwaitModeAny
+)
+
+// Await describes a park: its mode, targets, and deadline (zero when
+// none). AwaitRequest returns one for a handler's park resolution.
+type Await = storedriver.Await
+
+// Wake is the resolved memory of a park, handed to the attempt that runs
+// after it: Targets is what the operation parked on, Done the Targets that
+// were terminal or missing at wake time, and Expired reports that the
+// park's deadline passed first. A cancellation request bypassing the park
+// also produces a Wake, with Done reflecting the targets' state at that
+// moment and Invocation.CancelRequested set.
+type Wake = storedriver.Wake
+
 // FailureKind attributes a permanent failure. It is purely informational:
 // the engine's scheduling, retry, and unwind behavior never depend on it.
 type FailureKind = storedriver.FailureKind

@@ -54,10 +54,14 @@ const (
 	AttrReason      attribute.Key = "durable.reason"
 	AttrClass       attribute.Key = "durable.class"
 	AttrAwaitTarget attribute.Key = "durable.await_target"
-	AttrPanicked    attribute.Key = "durable.panicked"
-	AttrStoreOp     attribute.Key = "durable.store.op"
-	AttrStoreWrite  attribute.Key = "durable.store.write"
-	AttrError       attribute.Key = "durable.error"
+	// AttrAwaitTargets and AttrAwaitMode describe the whole park;
+	// AttrAwaitTarget is its first target.
+	AttrAwaitTargets attribute.Key = "durable.await_targets"
+	AttrAwaitMode    attribute.Key = "durable.await_mode"
+	AttrPanicked     attribute.Key = "durable.panicked"
+	AttrStoreOp      attribute.Key = "durable.store.op"
+	AttrStoreWrite   attribute.Key = "durable.store.write"
+	AttrError        attribute.Key = "durable.error"
 )
 
 // Option configures this package's constructors.

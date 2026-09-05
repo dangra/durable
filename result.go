@@ -104,8 +104,13 @@ type Status struct {
 	CancelCause     string
 
 	// AwaitingRunID is set when State is RunStateAwaiting: the Run whose
-	// termination this Run is parked on.
+	// termination this Run is parked on — the first of AwaitingRunIDs.
 	AwaitingRunID RunID
+
+	// AwaitingRunIDs and AwaitMode describe the whole park when State is
+	// RunStateAwaiting.
+	AwaitingRunIDs []RunID
+	AwaitMode      AwaitMode
 
 	// ThrottledClass is set when State is RunStateThrottled: the
 	// concurrency class the Run is waiting for capacity in.

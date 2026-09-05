@@ -147,13 +147,16 @@ type RunTerminalEvent struct {
 	Annotations map[string]string
 }
 
-// WakeEvent reports an AwaitRun park resolving: Duration is how long
-// storedriver.RunID was parked on Target.
+// WakeEvent reports a park resolving: Duration is how long
+// storedriver.RunID was parked on Targets, Done lists the Targets terminal
+// or missing at wake time, and Target is the first of Targets.
 type WakeEvent struct {
 	PipelineID storedriver.PipelineID
 	ResourceID storedriver.ResourceID
 	RunID      storedriver.RunID
 	Target     storedriver.RunID
+	Targets    []storedriver.RunID
+	Done       []storedriver.RunID
 	Duration   time.Duration
 }
 

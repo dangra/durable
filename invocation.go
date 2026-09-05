@@ -81,6 +81,17 @@ func (inv *Invocation) AwaitedRunID() (RunID, bool) {
 	return inv.awaited.Targets[0], true
 }
 
+// Awaited reports the park an earlier attempt of this operation made, once
+// it resolved: what was parked on, which of those were done at wake time,
+// and whether the deadline fired first. ok is false on a first execution.
+// The same durable memory backs AwaitedRunID; see there for its lifetime.
+func (inv *Invocation) Awaited() (w Wake, ok bool) {
+	if inv.awaited == nil {
+		return Wake{}, false
+	}
+	return *inv.awaited.Clone(), true
+}
+
 // Annotations returns a caller-owned copy of the Run's immutable
 // acceptance-time annotations (trace contexts, tenant tags), nil when
 // none were supplied. A tracing middleware extracts its propagation

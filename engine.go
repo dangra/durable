@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"math"
 	mrand "math/rand/v2"
+	"reflect"
 	"runtime/debug"
 	"sync"
 	"sync/atomic"
@@ -809,10 +810,12 @@ func clearLastError(rec *storedriver.RunRecord) {
 	rec.LastErrorAt = time.Time{}
 }
 
-// awaitGate parks the Run when its in-flight operation awaits another
-// Run that is still nonterminal: it registers a completion watcher and
-// returns true (no redispatch — the watcher wakes the Run). A pending
-// cancellation bypasses the park so the operation can resolve.
+// awaitGate parks the Run when its in-flight operation awaits other Runs
+// that have not resolved per the park's mode: it registers completion
+// watchers and returns true (no redispatch — a watcher wakes the Run). A
+// pending cancellation bypasses the park so the operation can resolve.
+// Whenever the gate lets the Run through, the park is settled into the
+// operation's memory in place, for the attempt reservation to persist.
 func (e *Engine) awaitGate(rec *storedriver.RunRecord) bool {
 	park := rec.Awaiting
 	if park == nil {
@@ -835,49 +838,72 @@ func (e *Engine) awaitGate(rec *storedriver.RunRecord) bool {
 		settleAwait(rec, done, false)
 		return false
 	}
-	target := park.Targets[0]
-	if cycle, err := e.awaitCycle(rec.RunID, target); err == nil && cycle {
-		e.markInvalid(rec, "", fmt.Sprintf("await cycle: awaiting run %s would deadlock back to this run", target))
+	if cycle, err := e.awaitCycle(rec.RunID, park.Targets); err == nil && cycle {
+		e.markInvalid(rec, "", fmt.Sprintf("await cycle: awaiting runs %v would deadlock back to this run", park.Targets))
 		return true
 	}
 	// Register before checking terminality so a completion between the
 	// check and the registration cannot be missed.
-	ch, cancelWatch := e.waiters.Watch(target)
-	done, err := e.targetDone(target)
-	switch {
-	case err != nil:
-		cancelWatch()
-		if e.baseCtx.Err() == nil {
-			e.logger.Error("durable: await target read failed", "run", rec.RunID, "target", target, "error", err)
+	chans := make([]<-chan struct{}, len(park.Targets))
+	cancels := make([]func(), len(park.Targets))
+	for i, t := range park.Targets {
+		chans[i], cancels[i] = e.waiters.Watch(t)
+	}
+	cancelAll := func() {
+		for _, c := range cancels {
+			c()
 		}
-		e.resolveAwaitPark(rec, target, false)
-		settleAwait(rec, nil, false)
-		return false
-	case done:
-		cancelWatch()
-		e.resolveAwaitPark(rec, target, true)
-		settleAwait(rec, []RunID{target}, false)
+	}
+	var done []RunID
+	for _, t := range park.Targets {
+		ok, err := e.targetDone(t)
+		if err != nil {
+			cancelAll()
+			if e.baseCtx.Err() == nil {
+				e.logger.Error("durable: await target read failed", "run", rec.RunID, "target", t, "error", err)
+			}
+			e.resolveAwaitPark(rec, done, false)
+			settleAwait(rec, done, false)
+			return false
+		}
+		if ok {
+			done = append(done, t)
+		}
+	}
+	resolved := len(done) == len(park.Targets)
+	if park.Mode == storedriver.AwaitModeAny {
+		resolved = len(done) > 0
+	}
+	if resolved {
+		cancelAll()
+		e.resolveAwaitPark(rec, done, true)
+		settleAwait(rec, done, false)
 		return false
 	}
 	parked := rec.RunID
 	e.mu.Lock()
-	// Preserve an existing park time: a spurious wake (the target marked
-	// invalid, notify firing without terminality) re-parks here, and the
-	// Run has been logically awaiting since its first park.
+	// Preserve an existing park time: a spurious wake (a target marked
+	// invalid, notify firing without terminality, one of several targets
+	// completing under AwaitModeAll) re-parks here, and the Run has been
+	// logically awaiting since its first park.
 	if _, already := e.awaitParked[parked]; !already {
 		e.awaitParked[parked] = e.clock.Now()
 	}
 	e.mu.Unlock()
-	// The watcher only pokes: whether the wake is real — the target
-	// actually terminal or gone — is decided by the re-run of this gate,
-	// which also emits WaiterWoken. notify also fires for invalid runs,
-	// and that wake must neither emit nor reset the park.
+	// The watcher only pokes: whether the wake is real — the park actually
+	// resolved per its mode — is decided by the re-run of this gate, which
+	// also emits WaiterWoken. notify also fires for invalid runs, and that
+	// wake must neither emit nor reset the park.
+	cases := make([]reflect.SelectCase, 0, len(chans)+1)
+	for _, ch := range chans {
+		cases = append(cases, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(ch)})
+	}
+	cases = append(cases, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(e.dispCtx.Done())})
 	e.wg.Go(func() {
-		select {
-		case <-ch:
+		chosen, _, _ := reflect.Select(cases)
+		cancelAll()
+		if chosen < len(chans) {
 			e.disp.Dispatch(parked, 0)
-		case <-e.dispCtx.Done():
-			cancelWatch()
 		}
 	})
 	return true
@@ -906,52 +932,61 @@ func settleAwait(rec *storedriver.RunRecord, done []RunID, expired bool) {
 	rec.Awaiting = nil
 }
 
-// resolveAwaitPark closes out a Run's AwaitRun park, if one is recorded:
-// the park entry is dropped, and a genuine resolution (the target
-// terminal or missing, not a store read error) emits WaiterWoken with
-// the full first-park-to-resolution duration.
-func (e *Engine) resolveAwaitPark(rec *storedriver.RunRecord, target RunID, resolved bool) {
+// resolveAwaitPark closes out a Run's park, if one is recorded: the park
+// entry is dropped, and a genuine resolution (the park resolved per its
+// mode, not a store read error) emits WaiterWoken with the full
+// first-park-to-resolution duration.
+func (e *Engine) resolveAwaitPark(rec *storedriver.RunRecord, done []RunID, resolved bool) {
 	e.mu.Lock()
 	since, present := e.awaitParked[rec.RunID]
 	delete(e.awaitParked, rec.RunID)
 	e.mu.Unlock()
 	if present && resolved {
+		targets := rec.Awaiting.Targets
 		e.emitWaiterWoken(observe.WakeEvent{
 			PipelineID: rec.PipelineID, ResourceID: rec.ResourceID,
-			RunID: rec.RunID, Target: target, Duration: e.clock.Now().Sub(since)})
+			RunID: rec.RunID, Target: targets[0],
+			Targets: append([]RunID(nil), targets...), Done: append([]RunID(nil), done...),
+			Duration: e.clock.Now().Sub(since)})
 	}
 }
 
-// parkAwait records an AwaitRun resolution: the operation stays
-// unresolved, the awaited Run is durably noted on the cursor, and the next
-// reconciliation parks through awaitGate (or proceeds immediately if the
-// target is already terminal or missing).
-func (e *Engine) parkAwait(rec *storedriver.RunRecord, stepID StepID, attempts uint64, target RunID, elapsed time.Duration) (bool, time.Duration, bool) {
-	if target == "" {
-		e.markInvalid(rec, stepID, "AwaitRun with empty RunID")
+// parkAwait records a park resolution: the operation stays unresolved,
+// the park is durably noted on the cursor, and the next reconciliation
+// parks through awaitGate (or proceeds immediately if the park already
+// resolves per its mode).
+func (e *Engine) parkAwait(rec *storedriver.RunRecord, stepID StepID, attempts uint64, ar *awaitResolution, elapsed time.Duration) (bool, time.Duration, bool) {
+	park := ar.park.Clone()
+	if len(park.Targets) == 0 {
+		e.markInvalid(rec, stepID, "await with no targets")
 		return false, 0, false
 	}
+	for _, t := range park.Targets {
+		if t == "" {
+			e.markInvalid(rec, stepID, "await with empty RunID")
+			return false, 0, false
+		}
+	}
 	// A new park supersedes the memory of the previous one.
-	rec.Awaiting = &storedriver.Await{Mode: storedriver.AwaitModeAll, Targets: []RunID{target}}
-	rec.Awaited = nil
+	rec.Awaiting, rec.Awaited = park, nil
 	if !e.apply(rec, storedriver.Transition{Cursor: activeCursor(rec, stepID, attempts)}) {
 		return false, time.Second, true
 	}
 	// Detect cycles after persisting the park: with every parker checking
 	// after its own durable write, the later writer always sees the full
-	// chain, so a concurrently-formed cycle cannot escape detection.
-	cycle, err := e.awaitCycle(rec.RunID, target)
+	// graph, so a concurrently-formed cycle cannot escape detection.
+	cycle, err := e.awaitCycle(rec.RunID, park.Targets)
 	if err != nil {
 		return false, time.Second, true
 	}
 	if cycle {
-		e.markInvalid(rec, stepID, fmt.Sprintf("await cycle: awaiting run %s would deadlock back to this run", target))
+		e.markInvalid(rec, stepID, fmt.Sprintf("await cycle: awaiting runs %v would deadlock back to this run", park.Targets))
 		return false, 0, false
 	}
 	if e.debugLog() {
 		e.logger.Debug("durable: run awaiting",
 			"pipeline", string(rec.PipelineID), "resource", string(rec.ResourceID),
-			"run", string(rec.RunID), "step", string(stepID), "target", string(target))
+			"run", string(rec.RunID), "step", string(stepID), "mode", park.Mode.String(), "targets", park.Targets)
 	}
 	e.emitAttemptDone(observe.AttemptEvent{
 		PipelineID: rec.PipelineID, ResourceID: rec.ResourceID, RunID: rec.RunID,
@@ -960,24 +995,35 @@ func (e *Engine) parkAwait(rec *storedriver.RunRecord, stepID StepID, attempts u
 	return true, 0, false
 }
 
-// awaitCycle walks the await chain from target looking for self.
-func (e *Engine) awaitCycle(self, target RunID) (bool, error) {
-	cur := target
-	for hops := 0; cur != "" && hops < 64; hops++ {
+// awaitCycle walks the await graph from targets looking for self. Every
+// edge counts regardless of mode: an AwaitModeAny park whose other
+// targets might terminate could escape a cycle, but a park that can
+// deadlock is refused rather than gambled on. The walk is bounded.
+func (e *Engine) awaitCycle(self RunID, targets []RunID) (bool, error) {
+	const maxVisited = 1024
+	visited := make(map[RunID]struct{})
+	stack := append([]RunID(nil), targets...)
+	for len(stack) > 0 && len(visited) < maxVisited {
+		cur := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
 		if cur == self {
 			return true, nil
 		}
+		if _, seen := visited[cur]; seen {
+			continue
+		}
+		visited[cur] = struct{}{}
 		rec, err := e.store.GetRun(e.baseCtx, cur)
 		if errors.Is(err, ErrRunNotFound) {
-			return false, nil
+			continue
 		}
 		if err != nil {
 			return false, err
 		}
 		if rec.Terminal() || rec.Awaiting == nil {
-			return false, nil
+			continue
 		}
-		cur = rec.Awaiting.Targets[0]
+		stack = append(stack, rec.Awaiting.Targets...)
 	}
 	return false, nil
 }
@@ -1020,7 +1066,7 @@ func (e *Engine) runForward(rec *storedriver.RunRecord, def *Definition, stepID 
 	}
 
 	if aw, ok := asAwait(err); ok {
-		return e.parkAwait(rec, stepID, sr.ForwardAttempts, aw.target, e.clock.Now().Sub(opStart))
+		return e.parkAwait(rec, stepID, sr.ForwardAttempts, aw, e.clock.Now().Sub(opStart))
 	}
 
 	now := e.clock.Now()
@@ -1134,7 +1180,7 @@ func (e *Engine) runUnwind(rec *storedriver.RunRecord, def *Definition, stepID S
 	}
 
 	if aw, ok := asAwait(err); ok {
-		return e.parkAwait(rec, stepID, sr.UnwindAttempts, aw.target, e.clock.Now().Sub(opStart))
+		return e.parkAwait(rec, stepID, sr.UnwindAttempts, aw, e.clock.Now().Sub(opStart))
 	}
 
 	now := e.clock.Now()

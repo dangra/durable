@@ -39,8 +39,9 @@
 // Writing handlers. Invocation carries input, prior state, and attempt
 // metadata. The ways out: success, an ordinary error (retried — a
 // returned ctx.Err() included), Fail with FailOptions and
-// kind/reason attribution, or AwaitRun to park on another Run.
-// Middleware wraps every attempt (AwaitTarget and FailureInfo classify
+// kind/reason attribution, or AwaitRun, AwaitAll, and AwaitAny to park on
+// other Runs (the woken attempt reads the park back through Awaited).
+// Middleware wraps every attempt (AwaitRequest and FailureInfo classify
 // results; PreemptedError and ErrEngineStopping name why an attempt ctx
 // died); FailFastOnCancel with FailFastExcept opts preemption-safe
 // pipelines out of cooperative cancellation.

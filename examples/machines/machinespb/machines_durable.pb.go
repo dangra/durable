@@ -42,9 +42,14 @@ func (inv ValidateInvocation) Phase() durable.Phase           { return inv.core.
 // this attempt was reserved.
 func (inv ValidateInvocation) CancelRequested() bool { return inv.core.CancelRequested() }
 
-// AwaitedRunID reports the run the previous attempt parked on via
-// durable.AwaitRun, once it reached terminality.
+// AwaitedRunID reports the run an earlier attempt of this operation parked
+// on via durable.AwaitRun, once that park resolved. Multi-target parks
+// are read through Awaited.
 func (inv ValidateInvocation) AwaitedRunID() (durable.RunID, bool) { return inv.core.AwaitedRunID() }
+
+// Awaited reports the park an earlier attempt of this operation made, once
+// it resolved; ok is false on a first execution.
+func (inv ValidateInvocation) Awaited() (durable.Wake, bool) { return inv.core.Awaited() }
 
 // Annotations returns a caller-owned copy of the run's immutable
 // acceptance-time annotations (trace contexts, tenant tags).
@@ -89,9 +94,14 @@ func (inv SelectHostInvocation) Phase() durable.Phase           { return inv.cor
 // this attempt was reserved.
 func (inv SelectHostInvocation) CancelRequested() bool { return inv.core.CancelRequested() }
 
-// AwaitedRunID reports the run the previous attempt parked on via
-// durable.AwaitRun, once it reached terminality.
+// AwaitedRunID reports the run an earlier attempt of this operation parked
+// on via durable.AwaitRun, once that park resolved. Multi-target parks
+// are read through Awaited.
 func (inv SelectHostInvocation) AwaitedRunID() (durable.RunID, bool) { return inv.core.AwaitedRunID() }
+
+// Awaited reports the park an earlier attempt of this operation made, once
+// it resolved; ok is false on a first execution.
+func (inv SelectHostInvocation) Awaited() (durable.Wake, bool) { return inv.core.Awaited() }
 
 // Annotations returns a caller-owned copy of the run's immutable
 // acceptance-time annotations (trace contexts, tenant tags).
@@ -138,11 +148,16 @@ func (inv ReserveCapacityInvocation) Phase() durable.Phase           { return in
 // this attempt was reserved.
 func (inv ReserveCapacityInvocation) CancelRequested() bool { return inv.core.CancelRequested() }
 
-// AwaitedRunID reports the run the previous attempt parked on via
-// durable.AwaitRun, once it reached terminality.
+// AwaitedRunID reports the run an earlier attempt of this operation parked
+// on via durable.AwaitRun, once that park resolved. Multi-target parks
+// are read through Awaited.
 func (inv ReserveCapacityInvocation) AwaitedRunID() (durable.RunID, bool) {
 	return inv.core.AwaitedRunID()
 }
+
+// Awaited reports the park an earlier attempt of this operation made, once
+// it resolved; ok is false on a first execution.
+func (inv ReserveCapacityInvocation) Awaited() (durable.Wake, bool) { return inv.core.Awaited() }
 
 // Annotations returns a caller-owned copy of the run's immutable
 // acceptance-time annotations (trace contexts, tenant tags).
@@ -197,11 +212,16 @@ func (inv CreateMachineInvocation) Phase() durable.Phase           { return inv.
 // this attempt was reserved.
 func (inv CreateMachineInvocation) CancelRequested() bool { return inv.core.CancelRequested() }
 
-// AwaitedRunID reports the run the previous attempt parked on via
-// durable.AwaitRun, once it reached terminality.
+// AwaitedRunID reports the run an earlier attempt of this operation parked
+// on via durable.AwaitRun, once that park resolved. Multi-target parks
+// are read through Awaited.
 func (inv CreateMachineInvocation) AwaitedRunID() (durable.RunID, bool) {
 	return inv.core.AwaitedRunID()
 }
+
+// Awaited reports the park an earlier attempt of this operation made, once
+// it resolved; ok is false on a first execution.
+func (inv CreateMachineInvocation) Awaited() (durable.Wake, bool) { return inv.core.Awaited() }
 
 // Annotations returns a caller-owned copy of the run's immutable
 // acceptance-time annotations (trace contexts, tenant tags).
@@ -486,11 +506,16 @@ func (inv ReleaseMachineInvocation) Phase() durable.Phase           { return inv
 // this attempt was reserved.
 func (inv ReleaseMachineInvocation) CancelRequested() bool { return inv.core.CancelRequested() }
 
-// AwaitedRunID reports the run the previous attempt parked on via
-// durable.AwaitRun, once it reached terminality.
+// AwaitedRunID reports the run an earlier attempt of this operation parked
+// on via durable.AwaitRun, once that park resolved. Multi-target parks
+// are read through Awaited.
 func (inv ReleaseMachineInvocation) AwaitedRunID() (durable.RunID, bool) {
 	return inv.core.AwaitedRunID()
 }
+
+// Awaited reports the park an earlier attempt of this operation made, once
+// it resolved; ok is false on a first execution.
+func (inv ReleaseMachineInvocation) Awaited() (durable.Wake, bool) { return inv.core.Awaited() }
 
 // Annotations returns a caller-owned copy of the run's immutable
 // acceptance-time annotations (trace contexts, tenant tags).

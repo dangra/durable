@@ -147,6 +147,8 @@ func (r Run) Status(ctx context.Context) (Status, error) {
 		} else if rec.Awaiting != nil && rec.Cancel == nil {
 			st.State = RunStateAwaiting
 			st.AwaitingRunID = rec.Awaiting.Targets[0]
+			st.AwaitingRunIDs = append([]RunID(nil), rec.Awaiting.Targets...)
+			st.AwaitMode = rec.Awaiting.Mode
 		} else if class, ok := e.pool.ParkedOn(r.id); ok {
 			st.State = RunStateThrottled
 			st.ThrottledClass = class

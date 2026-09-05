@@ -356,6 +356,47 @@ Awaits must not form a cycle; a cycle-closing park makes the run
 invalid. Runnable:
 [`ExampleAwaitRun`](https://pkg.go.dev/github.com/dangra/durable#example-AwaitRun).
 
+**Fan-out.** A step can park on several runs at once. `AwaitAll` wakes
+once, when the last of them is terminal; `AwaitAny` wakes as soon as
+the first is. Either way the woken attempt reads the park back through
+`Awaited()` — a `Wake` with `Targets` (what was parked on), `Done` (the
+targets terminal or missing at wake time), and `Pending()` for the rest
+— so the handler never has to remember its children itself:
+
+```go
+func (h *shipServices) Run(ctx context.Context, inv releasepb.ShipServicesInvocation) (*releasepb.ShipServices, error) {
+    if w, woken := inv.Awaited(); woken {
+        for _, id := range w.Done {              // all of them, under AwaitAll
+            res, err := deploy.Run(ctx, id).Wait(ctx) // terminal → returns immediately
+            if err != nil { return nil, err }
+            if !res.Succeeded() { return nil, durable.Fail(fmt.Errorf("deploy %s failed", id)) }
+        }
+        return &releasepb.ShipServices{}, nil
+    }
+    var ids []durable.RunID
+    for _, svc := range inv.Input().GetServices() {
+        run, _, err := deploy.Schedule(ctx, durable.ResourceID(svc), input)
+        if err != nil { return nil, err }
+        ids = append(ids, run.ID())
+    }
+    return nil, durable.AwaitAll(ids)
+}
+```
+
+`AwaitAny` is the select loop — handle `w.Done`, then
+`return durable.AwaitAny(w.Pending())` to keep waiting — or the race:
+act on the winner and `Cancel` the rest. Two things to know. Scheduling
+N children in one attempt is safe against a crash halfway only because
+`Schedule` is idempotent on (pipeline, resource, input) *while the child
+is nonterminal*; a child that finishes before the retry is terminal, and
+the retry creates a fresh one, so keep child resource IDs deterministic
+and don't let a scheduling attempt do slow work after scheduling. And
+a cancel that bypasses a park still produces a `Wake`, with `Done`
+reflecting the children's state at that moment, so "on freeze, cancel my
+pending children" is the same loop under every mode. Cycle detection is
+conservative: a cycle through any edge invalidates the run, even under
+`AwaitAny` where another target might have let it escape.
+
 ## Contention: dedup, exclusion groups, concurrency classes
 
 Three different problems, three different tools.

@@ -163,8 +163,15 @@ func Middleware(opts ...Option) durable.Middleware {
 
 			out, err := next(ctx, inv)
 			if err != nil {
-				if target, ok := durable.AwaitTarget(err); ok {
-					span.SetAttributes(AttrAwaitTarget.String(string(target)))
+				if park, ok := durable.AwaitRequest(err); ok {
+					targets := make([]string, len(park.Targets))
+					for i, id := range park.Targets {
+						targets[i] = string(id)
+					}
+					span.SetAttributes(
+						AttrAwaitTarget.String(targets[0]),
+						AttrAwaitTargets.StringSlice(targets),
+						AttrAwaitMode.String(park.Mode.String()))
 				} else {
 					span.RecordError(err)
 					span.SetStatus(codes.Error, err.Error())

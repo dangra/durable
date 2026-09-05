@@ -6,7 +6,10 @@ package durable_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
+	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -494,5 +497,509 @@ func testAwaitRestartDuringWokenAttempt(t *testing.T, store storedriver.Store) {
 	}
 	if last := entries[len(entries)-1]; !last.woken {
 		t.Errorf("attempt %d resumed after restart lost AwaitedRunID (attempts %+v)", last.attempt, entries)
+	}
+}
+
+// ---- Multi-target parks: AwaitAll and AwaitAny ----
+
+// gates holds one release channel per child resource so a test can finish
+// children in a chosen order.
+type gates struct {
+	mu sync.Mutex
+	m  map[durable.ResourceID]chan struct{}
+}
+
+func (g *gates) get(r durable.ResourceID) chan struct{} {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.m == nil {
+		g.m = make(map[durable.ResourceID]chan struct{})
+	}
+	ch, ok := g.m[r]
+	if !ok {
+		ch = make(chan struct{})
+		g.m[r] = ch
+	}
+	return ch
+}
+
+func (g *gates) open(r durable.ResourceID) { close(g.get(r)) }
+
+// gatedChild completes when its resource's gate opens, and resolves
+// promptly on cancellation.
+func gatedChild(id durable.PipelineID, g *gates) *durable.Definition {
+	return durable.NewDefinition(durable.DefinitionConfig{
+		ID: id,
+		Steps: []durable.StepConfig{
+			stateless("c/v1", func(ctx context.Context, inv *durable.Invocation) error {
+				if inv.CancelRequested() {
+					return nil
+				}
+				select {
+				case <-g.get(inv.ResourceID()):
+					return nil
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}),
+		},
+	})
+}
+
+// scheduleChildren schedules n children on deterministic resources, so a
+// retry of the scheduling attempt gets the same runs back.
+func scheduleChildren(ctx context.Context, pipe *durable.Pipeline, n int) ([]durable.RunID, error) {
+	ids := make([]durable.RunID, 0, n)
+	for i := 0; i < n; i++ {
+		run, _, err := pipe.Schedule(ctx, durable.ResourceID(fmt.Sprintf("child-%d", i)), nil)
+		if err != nil {
+			return nil, err
+		}
+		ids = append(ids, run.ID())
+	}
+	return ids, nil
+}
+
+func waitForAwaiting(t *testing.T, run durable.Run, want []durable.RunID) durable.Status {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		st, err := run.Status(context.Background())
+		if err != nil {
+			t.Fatalf("Status: %v", err)
+		}
+		if st.State == durable.RunStateAwaiting && slices.Equal(st.AwaitingRunIDs, want) {
+			return st
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("run %s never parked on %v; last %v awaiting %v", run.ID(), want, st.State, st.AwaitingRunIDs)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// AwaitAll wakes once, when the last child is done; the woken attempt's
+// ordinary error does not lose the memory, and no child is respawned.
+func TestAwaitAllWakesOnceEveryTargetIsDone(t *testing.T) {
+	var g gates
+	var childPipe *durable.Pipeline
+	var log awaitedLog
+	var wakes []durable.Wake
+	var mu sync.Mutex
+	var wokenAttempts atomic.Int32
+	parent := durable.NewDefinition(durable.DefinitionConfig{
+		ID: "all-parent",
+		Steps: []durable.StepConfig{
+			stateless("p/v1", func(ctx context.Context, inv *durable.Invocation) error {
+				e := log.record(inv)
+				if w, ok := inv.Awaited(); ok {
+					mu.Lock()
+					wakes = append(wakes, w)
+					mu.Unlock()
+					if id, single := inv.AwaitedRunID(); single {
+						return durable.Fail(fmt.Errorf("AwaitedRunID reported %s for a multi-target park", id))
+					}
+					if wokenAttempts.Add(1) == 1 {
+						return errors.New("transient after wake")
+					}
+					return nil
+				}
+				if e.woken {
+					return durable.Fail(errors.New("log and Awaited disagree"))
+				}
+				ids, err := scheduleChildren(ctx, childPipe, 3)
+				if err != nil {
+					return err
+				}
+				return durable.AwaitAll(ids)
+			}),
+		},
+	})
+	_, pipes := startEngine(t, durabletest.NewMemStore(), gatedChild("all-child", &g), parent)
+	childPipe = pipes[0]
+
+	pRun, _, err := pipes[1].Schedule(context.Background(), "parent-res", nil)
+	if err != nil {
+		t.Fatalf("Schedule parent: %v", err)
+	}
+	st := waitForState(t, pRun, durable.RunStateAwaiting)
+	if st.AwaitMode != durable.AwaitModeAll || len(st.AwaitingRunIDs) != 3 || st.AwaitingRunID != st.AwaitingRunIDs[0] {
+		t.Fatalf("Status = %+v; want an all-of park on 3 children", st)
+	}
+	ids := st.AwaitingRunIDs
+
+	// Two of three done: still parked, on the same set.
+	g.open("child-0")
+	g.open("child-2")
+	for _, id := range []durable.RunID{ids[0], ids[2]} {
+		run, _ := childPipe.Run(context.Background(), id)
+		waitForState(t, run, durable.RunStateDone)
+	}
+	time.Sleep(20 * time.Millisecond)
+	if st, _ := pRun.Status(context.Background()); st.State != durable.RunStateAwaiting {
+		t.Fatalf("parent woke with a child still running: %v", st.State)
+	}
+	if got := log.all(); len(got) != 1 {
+		t.Fatalf("attempts before the last child finished = %+v; want just the park", got)
+	}
+
+	g.open("child-1")
+	if res, err := pRun.Wait(context.Background()); err != nil || !res.Succeeded() {
+		t.Fatalf("parent Wait = %+v, %v", res, err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(wakes) != 2 {
+		t.Fatalf("woken attempts = %d (%+v); want 2: wake, retry after transient", len(wakes), wakes)
+	}
+	for _, w := range wakes {
+		if !slices.Equal(w.Targets, ids) || len(w.Done) != 3 || w.Expired || len(w.Pending()) != 0 {
+			t.Errorf("Wake = %+v; want all 3 targets done", w)
+		}
+	}
+	children, _ := childPipe.Active(context.Background())
+	if len(children) != 0 {
+		t.Errorf("active children after completion = %d", len(children))
+	}
+	for i := 0; i < 3; i++ {
+		runs, _ := childPipe.Runs(context.Background(), durable.ResourceID(fmt.Sprintf("child-%d", i)))
+		if len(runs) != 1 {
+			t.Errorf("child-%d has %d runs; want 1 (no respawn)", i, len(runs))
+		}
+	}
+}
+
+// AwaitAny as a select loop: each wake reports the children done so far,
+// the handler re-parks on Pending until none remain, and Status shows the
+// shrinking park.
+func TestAwaitAnySelectLoopDrainsChildren(t *testing.T) {
+	var g gates
+	var childPipe *durable.Pipeline
+	var mu sync.Mutex
+	var wakes []durable.Wake
+	parent := durable.NewDefinition(durable.DefinitionConfig{
+		ID: "any-parent",
+		Steps: []durable.StepConfig{
+			stateless("p/v1", func(ctx context.Context, inv *durable.Invocation) error {
+				if w, ok := inv.Awaited(); ok {
+					mu.Lock()
+					wakes = append(wakes, w)
+					mu.Unlock()
+					if pending := w.Pending(); len(pending) > 0 {
+						return durable.AwaitAny(pending)
+					}
+					return nil
+				}
+				ids, err := scheduleChildren(ctx, childPipe, 3)
+				if err != nil {
+					return err
+				}
+				return durable.AwaitAny(ids)
+			}),
+		},
+	})
+	_, pipes := startEngine(t, durabletest.NewMemStore(), gatedChild("any-child", &g), parent)
+	childPipe = pipes[0]
+
+	pRun, _, err := pipes[1].Schedule(context.Background(), "parent-res", nil)
+	if err != nil {
+		t.Fatalf("Schedule parent: %v", err)
+	}
+	st := waitForState(t, pRun, durable.RunStateAwaiting)
+	if st.AwaitMode != durable.AwaitModeAny || len(st.AwaitingRunIDs) != 3 {
+		t.Fatalf("Status = %+v; want an any-of park on 3 children", st)
+	}
+	ids := st.AwaitingRunIDs
+
+	// Finish the middle child first, then the last, then the first: each
+	// wake carries exactly the one that finished, and the park shrinks.
+	g.open("child-1")
+	waitForAwaiting(t, pRun, []durable.RunID{ids[0], ids[2]})
+	g.open("child-2")
+	waitForAwaiting(t, pRun, []durable.RunID{ids[0]})
+	g.open("child-0")
+	if res, err := pRun.Wait(context.Background()); err != nil || !res.Succeeded() {
+		t.Fatalf("parent Wait = %+v, %v", res, err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	wantDone := [][]durable.RunID{{ids[1]}, {ids[2]}, {ids[0]}}
+	if len(wakes) != 3 {
+		t.Fatalf("wakes = %+v; want 3", wakes)
+	}
+	for i, w := range wakes {
+		if !slices.Equal(w.Done, wantDone[i]) || w.Expired {
+			t.Errorf("wake %d = %+v; want Done %v", i, w, wantDone[i])
+		}
+	}
+	if !slices.Equal(wakes[0].Targets, ids) || !slices.Equal(wakes[2].Targets, []durable.RunID{ids[0]}) {
+		t.Errorf("wake targets did not track the re-parks: %+v", wakes)
+	}
+}
+
+// AwaitAny as a race: the first child to finish wins and the handler
+// cancels the rest, which resolve as canceled.
+func TestAwaitAnyRaceCancelsLosers(t *testing.T) {
+	var g gates
+	var childPipe *durable.Pipeline
+	var winner atomic.Value
+	parent := durable.NewDefinition(durable.DefinitionConfig{
+		ID: "race-parent",
+		Steps: []durable.StepConfig{
+			stateless("p/v1", func(ctx context.Context, inv *durable.Invocation) error {
+				if w, ok := inv.Awaited(); ok {
+					if len(w.Done) != 1 {
+						return durable.Fail(fmt.Errorf("Done = %v; want exactly the winner", w.Done))
+					}
+					winner.Store(w.Done[0])
+					for _, id := range w.Pending() {
+						run, err := childPipe.Run(ctx, id)
+						if err != nil {
+							return err
+						}
+						if err := run.Cancel(ctx, "lost the race"); err != nil && !errors.Is(err, durable.ErrRunTerminal) {
+							return err
+						}
+					}
+					return nil
+				}
+				ids, err := scheduleChildren(ctx, childPipe, 3)
+				if err != nil {
+					return err
+				}
+				return durable.AwaitAny(ids)
+			}),
+		},
+	})
+	_, pipes := startEngine(t, durabletest.NewMemStore(), gatedChild("race-child", &g), parent)
+	childPipe = pipes[0]
+
+	pRun, _, err := pipes[1].Schedule(context.Background(), "parent-res", nil)
+	if err != nil {
+		t.Fatalf("Schedule parent: %v", err)
+	}
+	st := waitForState(t, pRun, durable.RunStateAwaiting)
+	ids := st.AwaitingRunIDs
+	g.open("child-2")
+	if res, err := pRun.Wait(context.Background()); err != nil || !res.Succeeded() {
+		t.Fatalf("parent Wait = %+v, %v", res, err)
+	}
+	if got := winner.Load(); got != ids[2] {
+		t.Fatalf("winner = %v; want %s", got, ids[2])
+	}
+	for _, id := range ids[:2] {
+		run, _ := childPipe.Run(context.Background(), id)
+		res, err := run.Wait(context.Background())
+		if err != nil || !res.Canceled() {
+			t.Errorf("loser %s = %+v, %v; want canceled", id, res, err)
+		}
+	}
+}
+
+// A cancel bypassing an all-of park reports which targets had finished.
+func TestAwaitAllCancelBypassReportsDone(t *testing.T) {
+	var g gates
+	var childPipe *durable.Pipeline
+	var bypass atomic.Pointer[durable.Wake]
+	parent := durable.NewDefinition(durable.DefinitionConfig{
+		ID: "bypass-parent",
+		Steps: []durable.StepConfig{
+			stateless("p/v1", func(ctx context.Context, inv *durable.Invocation) error {
+				if inv.CancelRequested() {
+					if w, ok := inv.Awaited(); ok {
+						bypass.Store(&w)
+					}
+					return nil
+				}
+				ids, err := scheduleChildren(ctx, childPipe, 2)
+				if err != nil {
+					return err
+				}
+				return durable.AwaitAll(ids)
+			}),
+		},
+	})
+	_, pipes := startEngine(t, durabletest.NewMemStore(), gatedChild("bypass-child", &g), parent)
+	childPipe = pipes[0]
+
+	pRun, _, err := pipes[1].Schedule(context.Background(), "parent-res", nil)
+	if err != nil {
+		t.Fatalf("Schedule parent: %v", err)
+	}
+	ids := waitForState(t, pRun, durable.RunStateAwaiting).AwaitingRunIDs
+	g.open("child-0")
+	first, _ := childPipe.Run(context.Background(), ids[0])
+	waitForState(t, first, durable.RunStateDone)
+	if err := pRun.Cancel(context.Background(), "abandon"); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	if res, err := pRun.Wait(context.Background()); err != nil || !res.Canceled() {
+		t.Fatalf("parent Wait = %+v, %v; want canceled", res, err)
+	}
+	w := bypass.Load()
+	if w == nil {
+		t.Fatal("bypass attempt saw no Wake")
+	}
+	if !slices.Equal(w.Targets, ids) || !slices.Equal(w.Done, ids[:1]) || !slices.Equal(w.Pending(), ids[1:]) {
+		t.Fatalf("bypass Wake = %+v; want Done %v Pending %v", w, ids[:1], ids[1:])
+	}
+	g.open("child-1")
+}
+
+// A cycle through an any-of edge is refused like any other: A awaits any
+// of {B, C} and B awaits A, even though C could have let A escape.
+func TestAwaitAnyCycleIsInvalid(t *testing.T) {
+	var g gates
+	defer g.open("c")
+	store := durabletest.NewMemStore()
+	var pipeA, pipeB, pipeC *durable.Pipeline
+	defA := durable.NewDefinition(durable.DefinitionConfig{
+		ID: "cycle-any-a",
+		Steps: []durable.StepConfig{
+			stateless("a/v1", func(ctx context.Context, inv *durable.Invocation) error {
+				if _, ok := inv.Awaited(); ok {
+					return nil
+				}
+				b, okB, err := pipeB.ActiveRun(ctx, "b")
+				if err != nil {
+					return err
+				}
+				c, okC, err := pipeC.ActiveRun(ctx, "c")
+				if err != nil {
+					return err
+				}
+				if !okB || !okC {
+					return errors.New("peers not scheduled yet")
+				}
+				return durable.AwaitAny([]durable.RunID{b.ID(), c.ID()})
+			}),
+		},
+	})
+	defB := durable.NewDefinition(durable.DefinitionConfig{
+		ID: "cycle-any-b",
+		Steps: []durable.StepConfig{
+			stateless("b/v1", func(ctx context.Context, inv *durable.Invocation) error {
+				if _, ok := inv.Awaited(); ok {
+					return nil
+				}
+				a, ok, err := pipeA.ActiveRun(ctx, "a")
+				if err != nil {
+					return err
+				}
+				if !ok {
+					return errors.New("peer not scheduled yet")
+				}
+				return durable.AwaitRun(a.ID())
+			}),
+		},
+	})
+	_, pipes := startEngine(t, store, defA, defB, gatedChild("cycle-any-c", &g))
+	pipeA, pipeB, pipeC = pipes[0], pipes[1], pipes[2]
+
+	if _, _, err := pipeC.Schedule(context.Background(), "c", nil); err != nil {
+		t.Fatalf("Schedule C: %v", err)
+	}
+	runA, _, err := pipeA.Schedule(context.Background(), "a", nil)
+	if err != nil {
+		t.Fatalf("Schedule A: %v", err)
+	}
+	runB, _, err := pipeB.Schedule(context.Background(), "b", nil)
+	if err != nil {
+		t.Fatalf("Schedule B: %v", err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		for _, r := range []durable.Run{runA, runB} {
+			st, err := r.Status(context.Background())
+			if err != nil {
+				t.Fatalf("Status: %v", err)
+			}
+			if st.State == durable.RunStateInvalid {
+				if !strings.Contains(st.InvalidReason, "await cycle") {
+					t.Fatalf("InvalidReason = %q", st.InvalidReason)
+				}
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("no run was marked invalid for the any-of await cycle")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// Scheduling N children is safe against a crash halfway: the retry gets
+// the same runs back from the idempotent Schedule, so the park is on
+// exactly N children. (Only while they are still running — a child that
+// finishes before the retry is terminal, and Schedule creates a fresh
+// one; the gates stay shut until the park is in place.) Duplicate ids in
+// the park collapse.
+func TestAwaitAllScheduleIsIdempotentAcrossRetry(t *testing.T) {
+	var g gates
+	var childPipe *durable.Pipeline
+	var first atomic.Bool
+	parent := durable.NewDefinition(durable.DefinitionConfig{
+		ID: "idem-parent",
+		Steps: []durable.StepConfig{
+			stateless("p/v1", func(ctx context.Context, inv *durable.Invocation) error {
+				if w, ok := inv.Awaited(); ok {
+					if len(w.Targets) != 3 {
+						return durable.Fail(fmt.Errorf("targets = %v; want 3", w.Targets))
+					}
+					return nil
+				}
+				if first.CompareAndSwap(false, true) {
+					if _, err := scheduleChildren(ctx, childPipe, 1); err != nil {
+						return err
+					}
+					return errors.New("crashed after scheduling one child")
+				}
+				ids, err := scheduleChildren(ctx, childPipe, 3)
+				if err != nil {
+					return err
+				}
+				return durable.AwaitAll(append(ids, ids[0])) // duplicate collapses
+			}),
+		},
+	})
+	_, pipes := startEngine(t, durabletest.NewMemStore(), gatedChild("idem-child", &g), parent)
+	childPipe = pipes[0]
+	pRun, _, err := pipes[1].Schedule(context.Background(), "parent-res", nil)
+	if err != nil {
+		t.Fatalf("Schedule parent: %v", err)
+	}
+	if ids := waitForState(t, pRun, durable.RunStateAwaiting).AwaitingRunIDs; len(ids) != 3 {
+		t.Fatalf("parked on %v; want 3 distinct children", ids)
+	}
+	for i := 0; i < 3; i++ {
+		g.open(durable.ResourceID(fmt.Sprintf("child-%d", i)))
+	}
+	if res, err := pRun.Wait(context.Background()); err != nil || !res.Succeeded() {
+		t.Fatalf("parent Wait = %+v, %v", res, err)
+	}
+	for i := 0; i < 3; i++ {
+		runs, _ := childPipe.Runs(context.Background(), durable.ResourceID(fmt.Sprintf("child-%d", i)))
+		if len(runs) != 1 {
+			t.Errorf("child-%d has %d runs; want 1", i, len(runs))
+		}
+	}
+}
+
+// An empty park is a handler bug, refused as an invalid run rather than
+// parked forever.
+func TestAwaitAllWithNoTargetsIsInvalid(t *testing.T) {
+	def := durable.NewDefinition(durable.DefinitionConfig{
+		ID: "empty-await",
+		Steps: []durable.StepConfig{
+			stateless("s/v1", func(ctx context.Context, inv *durable.Invocation) error {
+				return durable.AwaitAll(nil)
+			}),
+		},
+	})
+	_, pipes := startEngine(t, durabletest.NewMemStore(), def)
+	run, _, _ := pipes[0].Schedule(context.Background(), "r", nil)
+	st := waitForState(t, run, durable.RunStateInvalid)
+	if !strings.Contains(st.InvalidReason, "no targets") {
+		t.Fatalf("InvalidReason = %q", st.InvalidReason)
 	}
 }

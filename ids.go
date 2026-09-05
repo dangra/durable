@@ -32,6 +32,10 @@ type RunID string
 // behavior, and Step State schema.
 type StepID string
 
+// ID returns the StepID itself, satisfying StepIdentifier so a bare
+// StepID is accepted wherever a generated step reference is.
+func (s StepID) ID() StepID { return s }
+
 // runIDEntropy makes concurrent Schedule calls collision-free and orders
 // RunIDs created within the same millisecond.
 var runIDEntropy = &ulid.LockedMonotonicReader{MonotonicReader: ulid.Monotonic(rand.Reader, 0)}

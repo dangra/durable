@@ -31,6 +31,33 @@ type Handler func(ctx context.Context, inv *Invocation) (proto.Message, error)
 // operation, and is never wrapped.
 type Middleware func(next Handler) Handler
 
+// FailFastOption configures FailFastOnCancel.
+type FailFastOption func(*failFastConfig)
+
+type failFastConfig struct {
+	except map[StepID]bool
+}
+
+// FailFastExcept keeps the listed steps on the cooperative cancellation
+// path: their forward operations are never short-circuited or yielded
+// by FailFastOnCancel, and their handlers observe
+// Invocation.CancelRequested as if the middleware were not installed.
+// Use it for the steps that are not preemption-safe in an otherwise
+// safe pipeline — a payment charge that must reconcile whether the
+// charge landed before the run may unwind, say. Steps are named by the
+// references generated code exports (orderspb.ChargePaymentStep) or by
+// a bare StepID. Repeatable; lists accumulate.
+func FailFastExcept(steps ...StepIdentifier) FailFastOption {
+	return func(c *failFastConfig) {
+		if c.except == nil {
+			c.except = make(map[StepID]bool, len(steps))
+		}
+		for _, s := range steps {
+			c.except[s.ID()] = true
+		}
+	}
+}
+
 // FailFastOnCancel returns a Middleware that opts forward handlers out
 // of cooperative cancellation: instead of each handler observing
 // Invocation.CancelRequested and resolving, a canceled Run's forward
@@ -46,13 +73,18 @@ type Middleware func(next Handler) Handler
 // external effects (a charge that landed, a half-created resource) get
 // no compensation hook. The cooperative default lets each handler
 // finish or clean up before the Run unwinds; this middleware trades
-// that safety for immediacy. Engine shutdown is unaffected: a ctx
-// killed by Stop carries ErrEngineStopping, not *PreemptedError, and
-// passes through as an ordinary retryable resolution.
-func FailFastOnCancel() Middleware {
+// that safety for immediacy; FailFastExcept keeps individual steps
+// cooperative. Engine shutdown is unaffected: a ctx killed by Stop
+// carries ErrEngineStopping, not *PreemptedError, and passes through
+// as an ordinary retryable resolution.
+func FailFastOnCancel(opts ...FailFastOption) Middleware {
+	var cfg failFastConfig
+	for _, o := range opts {
+		o(&cfg)
+	}
 	return func(next Handler) Handler {
 		return func(ctx context.Context, inv *Invocation) (proto.Message, error) {
-			if inv.Phase() != PhaseForward {
+			if inv.Phase() != PhaseForward || cfg.except[inv.StepID()] {
 				return next(ctx, inv)
 			}
 			// A retry dispatched with the cancel already visible: yield

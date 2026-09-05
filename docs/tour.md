@@ -253,8 +253,10 @@ contexts are in play, deliberately unrelated:
    Run. It never reaches handlers — the Run outlives the request — and
    no values flow from it; annotations are the only bridge.
 2. **The attempt ctx** a handler receives is derived fresh per attempt
-   from the *engine's* context. It dies for exactly two reasons:
-   engine shutdown, or the one-time preemption after `Cancel`.
+   from the *engine's* context. It dies for exactly two reasons, and
+   `context.Cause(ctx)` names which: engine shutdown
+   (`durable.ErrEngineStopping`) or the one-time preemption after
+   `Cancel` (`*durable.PreemptedError`, carrying the cancel's cause).
 3. **`Cancel`'s own ctx** governs only the store write recording the
    request. The durable record is the real signal; the preemption is a
    courtesy wake-up for a blocked handler.
@@ -274,6 +276,44 @@ recorded — the next `Start` resumes them (that is the
 ephemeral and process-scoped; `Cancel` is durable intent that survives
 restart and drives the Run to a terminal `Canceled()` outcome via
 unwind.
+
+### Opting out of the cooperative loop
+
+When every forward handler is **preemption-safe** — idempotent, no
+partial external effects, or cleanup keyed off the input rather than
+committed state — the per-handler `CancelRequested` check can be
+replaced by one middleware:
+
+```go
+engine := durable.NewEngine(store,
+    durable.WithMiddleware(durable.FailFastOnCancel()))
+```
+
+A canceled Run's forward operations are then resolved by the
+middleware: the preempted attempt converts its ctx death into a yield
+in the same attempt (the `*PreemptedError` cause proves it was the
+cancel, so shutdowns and unrelated wrapped `context.Canceled` errors
+pass through), a cancel landing between retries short-circuits before
+the handler runs, and the engine — after verifying the preemption with
+its own evidence — attributes the outcome `FailureKindCanceled`, so
+`Result.Canceled()` still reports true. Unwind operations are never
+touched: during a cancellation, the unwind *is* the work.
+
+Understand the trade before opting in: an abandoned attempt commits no
+state, and a step that never commits state is invisible to unwind —
+partial external effects (a charge that landed, a half-created
+resource) get no compensation hook. The cooperative default lets each
+handler finish or clean up first; `FailFastOnCancel` trades that
+safety for immediacy. For a mixed pipeline, `FailFastExcept` keeps the
+steps that can't make the preemption-safety claim on the cooperative
+path:
+
+```go
+durable.FailFastOnCancel(durable.FailFastExcept(deploypb.RunMigrationsStep))
+```
+
+Steps are named by the references generated code exports (or a bare
+`durable.StepID`), so the exception list is typo-proof at compile time.
 
 ## Composing runs: AwaitRun
 

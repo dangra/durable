@@ -2,6 +2,14 @@ package durable
 
 import "google.golang.org/protobuf/proto"
 
+// StepIdentifier names a Step. It is satisfied by the generated step
+// references (StepRef and StateStepRef) and by a bare StepID, so APIs
+// selecting steps — FailFastExcept, say — accept the typed constants
+// generated code exports without stringly-typed ids at call sites.
+type StepIdentifier interface {
+	ID() StepID
+}
+
 // StepRef is a generated reference to a stateless Step. It is not accepted
 // by State lookup; passing it to a generated State method fails to compile.
 type StepRef struct {

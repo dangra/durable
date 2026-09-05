@@ -60,6 +60,30 @@ message RunMeta {
   map<string, string> annotations = 7;
 }
 
+enum AwaitMode {
+  // UNSPECIFIED decodes as ALL, the mode of a single-target park.
+  AWAIT_MODE_UNSPECIFIED = 0;
+  AWAIT_MODE_ALL = 1;
+  AWAIT_MODE_ANY = 2;
+}
+
+// Await is a park of the in-flight operation on other runs.
+message Await {
+  AwaitMode mode = 1;
+  repeated string run_ids = 2;
+  // Absent when the park has no deadline.
+  google.protobuf.Timestamp deadline = 3;
+}
+
+// Wake is the resolved memory of a park: its targets, the ones terminal or
+// missing at wake time, and whether the deadline fired first. It survives
+// the operation's retries and restarts.
+message Wake {
+  repeated string targets = 1;
+  repeated string done = 2;
+  bool expired = 3;
+}
+
 // Cursor is the per-run scheduling state rewritten on every attempt.
 message Cursor {
   Phase phase = 1;
@@ -72,8 +96,11 @@ message Cursor {
   string last_reason = 6;
   google.protobuf.Timestamp last_error_at = 7;
   google.protobuf.Timestamp updated_at = 8;
-  // Parks the in-flight operation until this run terminates.
-  string awaiting_run_id = 9;
+  // Single-target park written by durable <= v0.3; read as an ALL park of
+  // one target when awaiting is absent, never written.
+  string awaiting_run_id = 9 [deprecated = true];
+  Await awaiting = 10;
+  Wake awaited = 11;
 }
 
 message StepRecord {

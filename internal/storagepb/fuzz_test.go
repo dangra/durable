@@ -2,6 +2,7 @@ package storagepb
 
 import (
 	"github.com/dangra/durable/storedriver"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -35,9 +36,14 @@ func FuzzRoundTrip(f *testing.F) {
 		// Cursor.
 		cur := storedriver.Cursor{
 			Phase: phase, StepID: durable.StepID(s1), Attempts: n,
-			AwaitingRunID: durable.RunID(s2),
 			NextAttemptAt: when, LastError: s2, LastReason: s1, LastErrorAt: when,
 			UpdatedAt: when,
+		}
+		if s2 != "" {
+			cur.Awaiting = &storedriver.Await{
+				Mode: storedriver.AwaitMode(b%2 + 1), Targets: []durable.RunID{durable.RunID(s2), durable.RunID(s1)}, Deadline: when}
+			cur.Awaited = &storedriver.Wake{
+				Targets: []durable.RunID{durable.RunID(s1)}, Done: []durable.RunID{durable.RunID(s1)}, Expired: a%2 == 1}
 		}
 		cb, err := MarshalCursor(cur)
 		if err != nil {
@@ -48,11 +54,23 @@ func FuzzRoundTrip(f *testing.F) {
 			t.Fatalf("UnmarshalCursor: %v", err)
 		}
 		if got.Phase != cur.Phase || got.StepID != cur.StepID || got.Attempts != cur.Attempts ||
-			got.AwaitingRunID != cur.AwaitingRunID || got.LastError != cur.LastError ||
-			got.LastReason != cur.LastReason ||
+			got.LastError != cur.LastError || got.LastReason != cur.LastReason ||
 			!sameTime(got.NextAttemptAt, cur.NextAttemptAt) ||
 			!sameTime(got.LastErrorAt, cur.LastErrorAt) || !sameTime(got.UpdatedAt, cur.UpdatedAt) {
 			t.Fatalf("cursor round trip: %+v != %+v", got, cur)
+		}
+		if (got.Awaiting == nil) != (cur.Awaiting == nil) || (got.Awaited == nil) != (cur.Awaited == nil) {
+			t.Fatalf("cursor await round trip: %+v != %+v", got, cur)
+		}
+		if cur.Awaiting != nil {
+			if got.Awaiting.Mode != cur.Awaiting.Mode || !slices.Equal(got.Awaiting.Targets, cur.Awaiting.Targets) ||
+				!sameTime(got.Awaiting.Deadline, cur.Awaiting.Deadline) {
+				t.Fatalf("awaiting round trip: %+v != %+v", got.Awaiting, cur.Awaiting)
+			}
+			if !slices.Equal(got.Awaited.Targets, cur.Awaited.Targets) || !slices.Equal(got.Awaited.Done, cur.Awaited.Done) ||
+				got.Awaited.Expired != cur.Awaited.Expired {
+				t.Fatalf("awaited round trip: %+v != %+v", got.Awaited, cur.Awaited)
+			}
 		}
 
 		// StepRecord.

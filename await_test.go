@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"testing"
 	"time"
 
@@ -98,19 +99,21 @@ func TestWaitInsideHandlerFailsFast(t *testing.T) {
 	}
 }
 
-func TestAwaitTarget(t *testing.T) {
-	const id = durable.RunID("01ARZ3NDEKTSV4RRFFQ69G5FAV")
-	if got, ok := durable.AwaitTarget(durable.AwaitRun(id)); !ok || got != id {
-		t.Fatalf("AwaitTarget(AwaitRun(%q)) = %q, %v", id, got, ok)
+func TestAwaitRequest(t *testing.T) {
+	const a, b = durable.RunID("01ARZ3NDEKTSV4RRFFQ69G5FAV"), durable.RunID("01ARZ3NDEKTSV4RRFFQ69G5FAW")
+	if got, ok := durable.AwaitRequest(durable.AwaitRun(a)); !ok || got.Mode != durable.AwaitModeAll || !slices.Equal(got.Targets, []durable.RunID{a}) || !got.Deadline.IsZero() {
+		t.Fatalf("AwaitRequest(AwaitRun(%q)) = %+v, %v", a, got, ok)
 	}
 	// Wrapped resolutions still classify: middleware sees whatever the
-	// handler stack returned.
-	if got, ok := durable.AwaitTarget(fmt.Errorf("wrapped: %w", durable.AwaitRun(id))); !ok || got != id {
-		t.Fatalf("AwaitTarget(wrapped) = %q, %v", got, ok)
+	// handler stack returned. Duplicate targets collapse; the deadline is
+	// set by the engine at park time, never by the resolution.
+	got, ok := durable.AwaitRequest(fmt.Errorf("wrapped: %w", durable.AwaitAny([]durable.RunID{b, a, b}, durable.WithAwaitTimeout(time.Minute))))
+	if !ok || got.Mode != durable.AwaitModeAny || !slices.Equal(got.Targets, []durable.RunID{b, a}) || !got.Deadline.IsZero() {
+		t.Fatalf("AwaitRequest(wrapped AwaitAny) = %+v, %v", got, ok)
 	}
 	for _, err := range []error{nil, errors.New("boom"), durable.Fail(errors.New("boom"))} {
-		if got, ok := durable.AwaitTarget(err); ok || got != "" {
-			t.Fatalf("AwaitTarget(%v) = %q, %v; want miss", err, got, ok)
+		if got, ok := durable.AwaitRequest(err); ok || len(got.Targets) != 0 {
+			t.Fatalf("AwaitRequest(%v) = %+v, %v; want miss", err, got, ok)
 		}
 	}
 }

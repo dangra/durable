@@ -144,9 +144,11 @@ func (r Run) Status(ctx context.Context) (Status, error) {
 		if ie := e.invalidFor(r.id); ie != nil {
 			st.State = RunStateInvalid
 			st.InvalidReason = ie.Reason
-		} else if rec.AwaitingRunID != "" && rec.Cancel == nil {
+		} else if rec.Awaiting != nil && rec.Cancel == nil {
 			st.State = RunStateAwaiting
-			st.AwaitingRunID = rec.AwaitingRunID
+			st.AwaitingRunIDs = append([]RunID(nil), rec.Awaiting.Targets...)
+			st.AwaitMode = rec.Awaiting.Mode
+			st.AwaitDeadline = rec.Awaiting.Deadline
 		} else if class, ok := e.pool.ParkedOn(r.id); ok {
 			st.State = RunStateThrottled
 			st.ThrottledClass = class

@@ -90,8 +90,9 @@ func inject(ctx context.Context, cfg config) propagation.MapCarrier {
 // WithBaggage). A handler error records on the span and
 // sets Error status; a permanent failure additionally stamps the
 // durable.failure_kind and durable.reason the engine will commit
-// (FailureInfo). An AwaitRun resolution is a park, not a failure, and
-// becomes a durable.await_target attribute instead. A handler panic is
+// (FailureInfo). A park resolution (AwaitRun, AwaitAll, AwaitAny) is not
+// a failure and becomes durable.await_targets and durable.await_mode
+// attributes instead. A handler panic is
 // recorded on the span — exception event with stack trace, Error
 // status, durable.panicked — and re-panicked for the engine, which
 // treats it as an ordinary retryable error.
@@ -163,8 +164,14 @@ func Middleware(opts ...Option) durable.Middleware {
 
 			out, err := next(ctx, inv)
 			if err != nil {
-				if target, ok := durable.AwaitTarget(err); ok {
-					span.SetAttributes(AttrAwaitTarget.String(string(target)))
+				if park, ok := durable.AwaitRequest(err); ok {
+					targets := make([]string, len(park.Targets))
+					for i, id := range park.Targets {
+						targets[i] = string(id)
+					}
+					span.SetAttributes(
+						AttrAwaitTargets.StringSlice(targets),
+						AttrAwaitMode.String(park.Mode.String()))
 				} else {
 					span.RecordError(err)
 					span.SetStatus(codes.Error, err.Error())

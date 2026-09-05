@@ -241,6 +241,56 @@ func (FailureKind) EnumDescriptor() ([]byte, []int) {
 	return file_durable_storage_v1_storage_proto_rawDescGZIP(), []int{3}
 }
 
+type AwaitMode int32
+
+const (
+	// UNSPECIFIED decodes as ALL, the mode of a single-target park.
+	AwaitMode_AWAIT_MODE_UNSPECIFIED AwaitMode = 0
+	AwaitMode_AWAIT_MODE_ALL         AwaitMode = 1
+	AwaitMode_AWAIT_MODE_ANY         AwaitMode = 2
+)
+
+// Enum value maps for AwaitMode.
+var (
+	AwaitMode_name = map[int32]string{
+		0: "AWAIT_MODE_UNSPECIFIED",
+		1: "AWAIT_MODE_ALL",
+		2: "AWAIT_MODE_ANY",
+	}
+	AwaitMode_value = map[string]int32{
+		"AWAIT_MODE_UNSPECIFIED": 0,
+		"AWAIT_MODE_ALL":         1,
+		"AWAIT_MODE_ANY":         2,
+	}
+)
+
+func (x AwaitMode) Enum() *AwaitMode {
+	p := new(AwaitMode)
+	*p = x
+	return p
+}
+
+func (x AwaitMode) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (AwaitMode) Descriptor() protoreflect.EnumDescriptor {
+	return file_durable_storage_v1_storage_proto_enumTypes[4].Descriptor()
+}
+
+func (AwaitMode) Type() protoreflect.EnumType {
+	return &file_durable_storage_v1_storage_proto_enumTypes[4]
+}
+
+func (x AwaitMode) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use AwaitMode.Descriptor instead.
+func (AwaitMode) EnumDescriptor() ([]byte, []int) {
+	return file_durable_storage_v1_storage_proto_rawDescGZIP(), []int{4}
+}
+
 // RunMeta holds the write-once identity of a run.
 type RunMeta struct {
 	state      protoimpl.MessageState `protogen:"open.v1"`
@@ -337,6 +387,131 @@ func (x *RunMeta) GetAnnotations() map[string]string {
 	return nil
 }
 
+// Await is a park of the in-flight operation on other runs.
+type Await struct {
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	Mode   AwaitMode              `protobuf:"varint,1,opt,name=mode,proto3,enum=durable.storage.v1.AwaitMode" json:"mode,omitempty"`
+	RunIds []string               `protobuf:"bytes,2,rep,name=run_ids,json=runIds,proto3" json:"run_ids,omitempty"`
+	// Absent when the park has no deadline.
+	Deadline      *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=deadline,proto3" json:"deadline,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Await) Reset() {
+	*x = Await{}
+	mi := &file_durable_storage_v1_storage_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Await) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Await) ProtoMessage() {}
+
+func (x *Await) ProtoReflect() protoreflect.Message {
+	mi := &file_durable_storage_v1_storage_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Await.ProtoReflect.Descriptor instead.
+func (*Await) Descriptor() ([]byte, []int) {
+	return file_durable_storage_v1_storage_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *Await) GetMode() AwaitMode {
+	if x != nil {
+		return x.Mode
+	}
+	return AwaitMode_AWAIT_MODE_UNSPECIFIED
+}
+
+func (x *Await) GetRunIds() []string {
+	if x != nil {
+		return x.RunIds
+	}
+	return nil
+}
+
+func (x *Await) GetDeadline() *timestamppb.Timestamp {
+	if x != nil {
+		return x.Deadline
+	}
+	return nil
+}
+
+// Wake is the resolved memory of a park: its targets, the ones terminal or
+// missing at wake time, and whether the deadline fired first. It survives
+// the operation's retries and restarts.
+type Wake struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Targets       []string               `protobuf:"bytes,1,rep,name=targets,proto3" json:"targets,omitempty"`
+	Done          []string               `protobuf:"bytes,2,rep,name=done,proto3" json:"done,omitempty"`
+	Expired       bool                   `protobuf:"varint,3,opt,name=expired,proto3" json:"expired,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Wake) Reset() {
+	*x = Wake{}
+	mi := &file_durable_storage_v1_storage_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Wake) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Wake) ProtoMessage() {}
+
+func (x *Wake) ProtoReflect() protoreflect.Message {
+	mi := &file_durable_storage_v1_storage_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Wake.ProtoReflect.Descriptor instead.
+func (*Wake) Descriptor() ([]byte, []int) {
+	return file_durable_storage_v1_storage_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *Wake) GetTargets() []string {
+	if x != nil {
+		return x.Targets
+	}
+	return nil
+}
+
+func (x *Wake) GetDone() []string {
+	if x != nil {
+		return x.Done
+	}
+	return nil
+}
+
+func (x *Wake) GetExpired() bool {
+	if x != nil {
+		return x.Expired
+	}
+	return false
+}
+
 // Cursor is the per-run scheduling state rewritten on every attempt.
 type Cursor struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -350,15 +525,20 @@ type Cursor struct {
 	LastReason    string                 `protobuf:"bytes,6,opt,name=last_reason,json=lastReason,proto3" json:"last_reason,omitempty"`
 	LastErrorAt   *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=last_error_at,json=lastErrorAt,proto3" json:"last_error_at,omitempty"`
 	UpdatedAt     *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
-	// Parks the in-flight operation until this run terminates.
+	// Single-target park written by durable <= v0.3; read as an ALL park of
+	// one target when awaiting is absent, never written.
+	//
+	// Deprecated: Marked as deprecated in durable/storage/v1/storage.proto.
 	AwaitingRunId string `protobuf:"bytes,9,opt,name=awaiting_run_id,json=awaitingRunId,proto3" json:"awaiting_run_id,omitempty"`
+	Awaiting      *Await `protobuf:"bytes,10,opt,name=awaiting,proto3" json:"awaiting,omitempty"`
+	Awaited       *Wake  `protobuf:"bytes,11,opt,name=awaited,proto3" json:"awaited,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Cursor) Reset() {
 	*x = Cursor{}
-	mi := &file_durable_storage_v1_storage_proto_msgTypes[1]
+	mi := &file_durable_storage_v1_storage_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -370,7 +550,7 @@ func (x *Cursor) String() string {
 func (*Cursor) ProtoMessage() {}
 
 func (x *Cursor) ProtoReflect() protoreflect.Message {
-	mi := &file_durable_storage_v1_storage_proto_msgTypes[1]
+	mi := &file_durable_storage_v1_storage_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -383,7 +563,7 @@ func (x *Cursor) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Cursor.ProtoReflect.Descriptor instead.
 func (*Cursor) Descriptor() ([]byte, []int) {
-	return file_durable_storage_v1_storage_proto_rawDescGZIP(), []int{1}
+	return file_durable_storage_v1_storage_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *Cursor) GetPhase() Phase {
@@ -442,11 +622,26 @@ func (x *Cursor) GetUpdatedAt() *timestamppb.Timestamp {
 	return nil
 }
 
+// Deprecated: Marked as deprecated in durable/storage/v1/storage.proto.
 func (x *Cursor) GetAwaitingRunId() string {
 	if x != nil {
 		return x.AwaitingRunId
 	}
 	return ""
+}
+
+func (x *Cursor) GetAwaiting() *Await {
+	if x != nil {
+		return x.Awaiting
+	}
+	return nil
+}
+
+func (x *Cursor) GetAwaited() *Wake {
+	if x != nil {
+		return x.Awaited
+	}
+	return nil
 }
 
 type StepRecord struct {
@@ -462,7 +657,7 @@ type StepRecord struct {
 
 func (x *StepRecord) Reset() {
 	*x = StepRecord{}
-	mi := &file_durable_storage_v1_storage_proto_msgTypes[2]
+	mi := &file_durable_storage_v1_storage_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -474,7 +669,7 @@ func (x *StepRecord) String() string {
 func (*StepRecord) ProtoMessage() {}
 
 func (x *StepRecord) ProtoReflect() protoreflect.Message {
-	mi := &file_durable_storage_v1_storage_proto_msgTypes[2]
+	mi := &file_durable_storage_v1_storage_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -487,7 +682,7 @@ func (x *StepRecord) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StepRecord.ProtoReflect.Descriptor instead.
 func (*StepRecord) Descriptor() ([]byte, []int) {
-	return file_durable_storage_v1_storage_proto_rawDescGZIP(), []int{2}
+	return file_durable_storage_v1_storage_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *StepRecord) GetForwardStatus() OpStatus {
@@ -540,7 +735,7 @@ type FailureRecord struct {
 
 func (x *FailureRecord) Reset() {
 	*x = FailureRecord{}
-	mi := &file_durable_storage_v1_storage_proto_msgTypes[3]
+	mi := &file_durable_storage_v1_storage_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -552,7 +747,7 @@ func (x *FailureRecord) String() string {
 func (*FailureRecord) ProtoMessage() {}
 
 func (x *FailureRecord) ProtoReflect() protoreflect.Message {
-	mi := &file_durable_storage_v1_storage_proto_msgTypes[3]
+	mi := &file_durable_storage_v1_storage_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -565,7 +760,7 @@ func (x *FailureRecord) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FailureRecord.ProtoReflect.Descriptor instead.
 func (*FailureRecord) Descriptor() ([]byte, []int) {
-	return file_durable_storage_v1_storage_proto_rawDescGZIP(), []int{3}
+	return file_durable_storage_v1_storage_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *FailureRecord) GetStepId() string {
@@ -627,7 +822,7 @@ type Failures struct {
 
 func (x *Failures) Reset() {
 	*x = Failures{}
-	mi := &file_durable_storage_v1_storage_proto_msgTypes[4]
+	mi := &file_durable_storage_v1_storage_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -639,7 +834,7 @@ func (x *Failures) String() string {
 func (*Failures) ProtoMessage() {}
 
 func (x *Failures) ProtoReflect() protoreflect.Message {
-	mi := &file_durable_storage_v1_storage_proto_msgTypes[4]
+	mi := &file_durable_storage_v1_storage_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -652,7 +847,7 @@ func (x *Failures) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Failures.ProtoReflect.Descriptor instead.
 func (*Failures) Descriptor() ([]byte, []int) {
-	return file_durable_storage_v1_storage_proto_rawDescGZIP(), []int{4}
+	return file_durable_storage_v1_storage_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *Failures) GetRoot() *FailureRecord {
@@ -680,7 +875,7 @@ type Terminal struct {
 
 func (x *Terminal) Reset() {
 	*x = Terminal{}
-	mi := &file_durable_storage_v1_storage_proto_msgTypes[5]
+	mi := &file_durable_storage_v1_storage_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -692,7 +887,7 @@ func (x *Terminal) String() string {
 func (*Terminal) ProtoMessage() {}
 
 func (x *Terminal) ProtoReflect() protoreflect.Message {
-	mi := &file_durable_storage_v1_storage_proto_msgTypes[5]
+	mi := &file_durable_storage_v1_storage_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -705,7 +900,7 @@ func (x *Terminal) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Terminal.ProtoReflect.Descriptor instead.
 func (*Terminal) Descriptor() ([]byte, []int) {
-	return file_durable_storage_v1_storage_proto_rawDescGZIP(), []int{5}
+	return file_durable_storage_v1_storage_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *Terminal) GetOutcome() Outcome {
@@ -732,7 +927,7 @@ type CancelRequest struct {
 
 func (x *CancelRequest) Reset() {
 	*x = CancelRequest{}
-	mi := &file_durable_storage_v1_storage_proto_msgTypes[6]
+	mi := &file_durable_storage_v1_storage_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -744,7 +939,7 @@ func (x *CancelRequest) String() string {
 func (*CancelRequest) ProtoMessage() {}
 
 func (x *CancelRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_durable_storage_v1_storage_proto_msgTypes[6]
+	mi := &file_durable_storage_v1_storage_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -757,7 +952,7 @@ func (x *CancelRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelRequest.ProtoReflect.Descriptor instead.
 func (*CancelRequest) Descriptor() ([]byte, []int) {
-	return file_durable_storage_v1_storage_proto_rawDescGZIP(), []int{6}
+	return file_durable_storage_v1_storage_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *CancelRequest) GetCause() string {
@@ -793,7 +988,15 @@ const file_durable_storage_v1_storage_proto_rawDesc = "" +
 	"\vannotations\x18\a \x03(\v2,.durable.storage.v1.RunMeta.AnnotationsEntryR\vannotations\x1a>\n" +
 	"\x10AnnotationsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x95\x03\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x8b\x01\n" +
+	"\x05Await\x121\n" +
+	"\x04mode\x18\x01 \x01(\x0e2\x1d.durable.storage.v1.AwaitModeR\x04mode\x12\x17\n" +
+	"\arun_ids\x18\x02 \x03(\tR\x06runIds\x126\n" +
+	"\bdeadline\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\bdeadline\"N\n" +
+	"\x04Wake\x12\x18\n" +
+	"\atargets\x18\x01 \x03(\tR\atargets\x12\x12\n" +
+	"\x04done\x18\x02 \x03(\tR\x04done\x12\x18\n" +
+	"\aexpired\x18\x03 \x01(\bR\aexpired\"\x84\x04\n" +
 	"\x06Cursor\x12/\n" +
 	"\x05phase\x18\x01 \x01(\x0e2\x19.durable.storage.v1.PhaseR\x05phase\x12\x17\n" +
 	"\astep_id\x18\x02 \x01(\tR\x06stepId\x12\x1a\n" +
@@ -805,8 +1008,11 @@ const file_durable_storage_v1_storage_proto_rawDesc = "" +
 	"lastReason\x12>\n" +
 	"\rlast_error_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\vlastErrorAt\x129\n" +
 	"\n" +
-	"updated_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12&\n" +
-	"\x0fawaiting_run_id\x18\t \x01(\tR\rawaitingRunId\"\xfe\x01\n" +
+	"updated_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12*\n" +
+	"\x0fawaiting_run_id\x18\t \x01(\tB\x02\x18\x01R\rawaitingRunId\x125\n" +
+	"\bawaiting\x18\n" +
+	" \x01(\v2\x19.durable.storage.v1.AwaitR\bawaiting\x122\n" +
+	"\aawaited\x18\v \x01(\v2\x18.durable.storage.v1.WakeR\aawaited\"\xfe\x01\n" +
 	"\n" +
 	"StepRecord\x12C\n" +
 	"\x0eforward_status\x18\x01 \x01(\x0e2\x1c.durable.storage.v1.OpStatusR\rforwardStatus\x12)\n" +
@@ -850,7 +1056,11 @@ const file_durable_storage_v1_storage_proto_rawDesc = "" +
 	"\x18FAILURE_KIND_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13FAILURE_KIND_SYSTEM\x10\x01\x12\x15\n" +
 	"\x11FAILURE_KIND_USER\x10\x02\x12\x19\n" +
-	"\x15FAILURE_KIND_CANCELED\x10\x03B8Z6github.com/dangra/durable/internal/storagepb;storagepbb\x06proto3"
+	"\x15FAILURE_KIND_CANCELED\x10\x03*O\n" +
+	"\tAwaitMode\x12\x1a\n" +
+	"\x16AWAIT_MODE_UNSPECIFIED\x10\x00\x12\x12\n" +
+	"\x0eAWAIT_MODE_ALL\x10\x01\x12\x12\n" +
+	"\x0eAWAIT_MODE_ANY\x10\x02B8Z6github.com/dangra/durable/internal/storagepb;storagepbb\x06proto3"
 
 var (
 	file_durable_storage_v1_storage_proto_rawDescOnce sync.Once
@@ -864,44 +1074,51 @@ func file_durable_storage_v1_storage_proto_rawDescGZIP() []byte {
 	return file_durable_storage_v1_storage_proto_rawDescData
 }
 
-var file_durable_storage_v1_storage_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
-var file_durable_storage_v1_storage_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_durable_storage_v1_storage_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
+var file_durable_storage_v1_storage_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_durable_storage_v1_storage_proto_goTypes = []any{
 	(Phase)(0),                    // 0: durable.storage.v1.Phase
 	(Outcome)(0),                  // 1: durable.storage.v1.Outcome
 	(OpStatus)(0),                 // 2: durable.storage.v1.OpStatus
 	(FailureKind)(0),              // 3: durable.storage.v1.FailureKind
-	(*RunMeta)(nil),               // 4: durable.storage.v1.RunMeta
-	(*Cursor)(nil),                // 5: durable.storage.v1.Cursor
-	(*StepRecord)(nil),            // 6: durable.storage.v1.StepRecord
-	(*FailureRecord)(nil),         // 7: durable.storage.v1.FailureRecord
-	(*Failures)(nil),              // 8: durable.storage.v1.Failures
-	(*Terminal)(nil),              // 9: durable.storage.v1.Terminal
-	(*CancelRequest)(nil),         // 10: durable.storage.v1.CancelRequest
-	nil,                           // 11: durable.storage.v1.RunMeta.AnnotationsEntry
-	(*timestamppb.Timestamp)(nil), // 12: google.protobuf.Timestamp
+	(AwaitMode)(0),                // 4: durable.storage.v1.AwaitMode
+	(*RunMeta)(nil),               // 5: durable.storage.v1.RunMeta
+	(*Await)(nil),                 // 6: durable.storage.v1.Await
+	(*Wake)(nil),                  // 7: durable.storage.v1.Wake
+	(*Cursor)(nil),                // 8: durable.storage.v1.Cursor
+	(*StepRecord)(nil),            // 9: durable.storage.v1.StepRecord
+	(*FailureRecord)(nil),         // 10: durable.storage.v1.FailureRecord
+	(*Failures)(nil),              // 11: durable.storage.v1.Failures
+	(*Terminal)(nil),              // 12: durable.storage.v1.Terminal
+	(*CancelRequest)(nil),         // 13: durable.storage.v1.CancelRequest
+	nil,                           // 14: durable.storage.v1.RunMeta.AnnotationsEntry
+	(*timestamppb.Timestamp)(nil), // 15: google.protobuf.Timestamp
 }
 var file_durable_storage_v1_storage_proto_depIdxs = []int32{
-	12, // 0: durable.storage.v1.RunMeta.created_at:type_name -> google.protobuf.Timestamp
-	11, // 1: durable.storage.v1.RunMeta.annotations:type_name -> durable.storage.v1.RunMeta.AnnotationsEntry
-	0,  // 2: durable.storage.v1.Cursor.phase:type_name -> durable.storage.v1.Phase
-	12, // 3: durable.storage.v1.Cursor.next_attempt_at:type_name -> google.protobuf.Timestamp
-	12, // 4: durable.storage.v1.Cursor.last_error_at:type_name -> google.protobuf.Timestamp
-	12, // 5: durable.storage.v1.Cursor.updated_at:type_name -> google.protobuf.Timestamp
-	2,  // 6: durable.storage.v1.StepRecord.forward_status:type_name -> durable.storage.v1.OpStatus
-	2,  // 7: durable.storage.v1.StepRecord.unwind_status:type_name -> durable.storage.v1.OpStatus
-	0,  // 8: durable.storage.v1.FailureRecord.phase:type_name -> durable.storage.v1.Phase
-	12, // 9: durable.storage.v1.FailureRecord.at:type_name -> google.protobuf.Timestamp
-	3,  // 10: durable.storage.v1.FailureRecord.kind:type_name -> durable.storage.v1.FailureKind
-	7,  // 11: durable.storage.v1.Failures.root:type_name -> durable.storage.v1.FailureRecord
-	7,  // 12: durable.storage.v1.Failures.unwind:type_name -> durable.storage.v1.FailureRecord
-	1,  // 13: durable.storage.v1.Terminal.outcome:type_name -> durable.storage.v1.Outcome
-	12, // 14: durable.storage.v1.CancelRequest.at:type_name -> google.protobuf.Timestamp
-	15, // [15:15] is the sub-list for method output_type
-	15, // [15:15] is the sub-list for method input_type
-	15, // [15:15] is the sub-list for extension type_name
-	15, // [15:15] is the sub-list for extension extendee
-	0,  // [0:15] is the sub-list for field type_name
+	15, // 0: durable.storage.v1.RunMeta.created_at:type_name -> google.protobuf.Timestamp
+	14, // 1: durable.storage.v1.RunMeta.annotations:type_name -> durable.storage.v1.RunMeta.AnnotationsEntry
+	4,  // 2: durable.storage.v1.Await.mode:type_name -> durable.storage.v1.AwaitMode
+	15, // 3: durable.storage.v1.Await.deadline:type_name -> google.protobuf.Timestamp
+	0,  // 4: durable.storage.v1.Cursor.phase:type_name -> durable.storage.v1.Phase
+	15, // 5: durable.storage.v1.Cursor.next_attempt_at:type_name -> google.protobuf.Timestamp
+	15, // 6: durable.storage.v1.Cursor.last_error_at:type_name -> google.protobuf.Timestamp
+	15, // 7: durable.storage.v1.Cursor.updated_at:type_name -> google.protobuf.Timestamp
+	6,  // 8: durable.storage.v1.Cursor.awaiting:type_name -> durable.storage.v1.Await
+	7,  // 9: durable.storage.v1.Cursor.awaited:type_name -> durable.storage.v1.Wake
+	2,  // 10: durable.storage.v1.StepRecord.forward_status:type_name -> durable.storage.v1.OpStatus
+	2,  // 11: durable.storage.v1.StepRecord.unwind_status:type_name -> durable.storage.v1.OpStatus
+	0,  // 12: durable.storage.v1.FailureRecord.phase:type_name -> durable.storage.v1.Phase
+	15, // 13: durable.storage.v1.FailureRecord.at:type_name -> google.protobuf.Timestamp
+	3,  // 14: durable.storage.v1.FailureRecord.kind:type_name -> durable.storage.v1.FailureKind
+	10, // 15: durable.storage.v1.Failures.root:type_name -> durable.storage.v1.FailureRecord
+	10, // 16: durable.storage.v1.Failures.unwind:type_name -> durable.storage.v1.FailureRecord
+	1,  // 17: durable.storage.v1.Terminal.outcome:type_name -> durable.storage.v1.Outcome
+	15, // 18: durable.storage.v1.CancelRequest.at:type_name -> google.protobuf.Timestamp
+	19, // [19:19] is the sub-list for method output_type
+	19, // [19:19] is the sub-list for method input_type
+	19, // [19:19] is the sub-list for extension type_name
+	19, // [19:19] is the sub-list for extension extendee
+	0,  // [0:19] is the sub-list for field type_name
 }
 
 func init() { file_durable_storage_v1_storage_proto_init() }
@@ -914,8 +1131,8 @@ func file_durable_storage_v1_storage_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_durable_storage_v1_storage_proto_rawDesc), len(file_durable_storage_v1_storage_proto_rawDesc)),
-			NumEnums:      4,
-			NumMessages:   8,
+			NumEnums:      5,
+			NumMessages:   10,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

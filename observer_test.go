@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -297,7 +298,7 @@ func TestObserverAwaitWake(t *testing.T) {
 		if !awaiting {
 			t.Errorf("no AttemptAwaiting event: %+v", log.attempts)
 		}
-		if len(log.wakes) != 1 || log.wakes[0].RunID != wrun.ID() || log.wakes[0].Target != trun.ID() {
+		if len(log.wakes) != 1 || log.wakes[0].RunID != wrun.ID() || !slices.Equal(log.wakes[0].Targets, []durable.RunID{trun.ID()}) {
 			t.Errorf("wakes = %+v", log.wakes)
 		}
 	})

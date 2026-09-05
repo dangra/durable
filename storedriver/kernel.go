@@ -47,6 +47,26 @@ func (p Phase) String() string {
 	}
 }
 
+// AwaitMode is how a multi-target park resolves: when every target is
+// terminal, or when the first one is.
+type AwaitMode uint8
+
+const (
+	AwaitModeAll AwaitMode = iota + 1
+	AwaitModeAny
+)
+
+func (m AwaitMode) String() string {
+	switch m {
+	case AwaitModeAll:
+		return "all"
+	case AwaitModeAny:
+		return "any"
+	default:
+		return "unknown"
+	}
+}
+
 // Outcome is the terminal business outcome of a Run.
 type Outcome uint8
 

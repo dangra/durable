@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+
 	"github.com/dangra/durable"
 )
 
@@ -47,6 +49,36 @@ func TestCursorRoundTrip(t *testing.T) {
 			LastErrorAt:   at(90),
 			UpdatedAt:     at(101),
 		},
+		{
+			Phase:    durable.PhaseForward,
+			StepID:   "ship/v1",
+			Attempts: 2,
+			Awaiting: &storedriver.Await{
+				Mode:     storedriver.AwaitModeAny,
+				Targets:  []durable.RunID{"01ARZ3NDEKTSV4RRFFQ69G5FAV", "01ARZ3NDEKTSV4RRFFQ69G5FAW"},
+				Deadline: at(500),
+			},
+			UpdatedAt: at(150),
+		},
+		{
+			Phase:    durable.PhaseUnwind,
+			StepID:   "ship/v1",
+			Attempts: 3,
+			Awaited: &storedriver.Wake{
+				Targets: []durable.RunID{"01ARZ3NDEKTSV4RRFFQ69G5FAV", "01ARZ3NDEKTSV4RRFFQ69G5FAW"},
+				Done:    []durable.RunID{"01ARZ3NDEKTSV4RRFFQ69G5FAW"},
+				Expired: true,
+			},
+			UpdatedAt: at(160),
+		},
+		{
+			// A single-target park with no deadline: the common case.
+			Phase:     durable.PhaseForward,
+			StepID:    "ship/v1",
+			Attempts:  1,
+			Awaiting:  &storedriver.Await{Mode: storedriver.AwaitModeAll, Targets: []durable.RunID{"01ARZ3NDEKTSV4RRFFQ69G5FAV"}},
+			UpdatedAt: at(170),
+		},
 		{Phase: durable.PhaseDone, UpdatedAt: at(200)}, // idle, zero times preserved
 	}
 	for _, c := range cases {
@@ -61,6 +93,35 @@ func TestCursorRoundTrip(t *testing.T) {
 		if !reflect.DeepEqual(c, got) {
 			t.Fatalf("round trip mismatch:\n got: %+v\nwant: %+v", got, c)
 		}
+	}
+}
+
+// A cursor written by durable <= v0.3 carries its park in the singular
+// awaiting_run_id field; it decodes as an ALL park of one target.
+func TestCursorDecodesLegacyPark(t *testing.T) {
+	b, err := proto.Marshal(&Cursor{Phase: Phase_PHASE_FORWARD, StepId: "ship/v1", Attempts: 1, AwaitingRunId: "01ARZ3NDEKTSV4RRFFQ69G5FAV"})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	got, err := UnmarshalCursor(b)
+	if err != nil {
+		t.Fatalf("UnmarshalCursor: %v", err)
+	}
+	want := &storedriver.Await{Mode: storedriver.AwaitModeAll, Targets: []durable.RunID{"01ARZ3NDEKTSV4RRFFQ69G5FAV"}}
+	if !reflect.DeepEqual(got.Awaiting, want) {
+		t.Fatalf("Awaiting = %+v, want %+v", got.Awaiting, want)
+	}
+	// Re-encoding writes only the new field.
+	b2, err := MarshalCursor(got)
+	if err != nil {
+		t.Fatalf("MarshalCursor: %v", err)
+	}
+	pb := &Cursor{}
+	if err := proto.Unmarshal(b2, pb); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if pb.GetAwaitingRunId() != "" || pb.GetAwaiting() == nil {
+		t.Fatalf("re-encoded cursor = %+v; want park in the awaiting message only", pb)
 	}
 }
 

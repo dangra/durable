@@ -31,7 +31,8 @@ type canonRecord struct {
 	Output                               []byte
 	Outcome                              *durable.Outcome
 	NextAttemptAt, LastErrorAt           int64
-	AwaitingRunID                        string
+	Awaiting                             *canonAwait
+	Awaited                              *storedriver.Wake
 	LastError, LastReason                string
 	Cancel                               *canonCancel
 	CreatedAt, UpdatedAt                 int64
@@ -45,6 +46,12 @@ type canonStep struct {
 type canonCancel struct {
 	Cause string
 	At    int64
+}
+
+type canonAwait struct {
+	Mode     storedriver.AwaitMode
+	Targets  []durable.RunID
+	Deadline int64
 }
 
 func nanos(t time.Time) int64 {
@@ -77,9 +84,12 @@ func canonicalize(rec *storedriver.RunRecord) *canonRecord {
 		Annotations:   rec.Annotations,
 		Output:        normBytes(rec.Output),
 		NextAttemptAt: nanos(rec.NextAttemptAt), LastErrorAt: nanos(rec.LastErrorAt),
-		AwaitingRunID: string(rec.AwaitingRunID),
-		LastError:     rec.LastError, LastReason: rec.LastReason,
+		Awaited:   rec.Awaited.Clone(),
+		LastError: rec.LastError, LastReason: rec.LastReason,
 		CreatedAt: nanos(rec.CreatedAt), UpdatedAt: nanos(rec.UpdatedAt),
+	}
+	if a := rec.Awaiting; a != nil {
+		c.Awaiting = &canonAwait{Mode: a.Mode, Targets: append([]durable.RunID(nil), a.Targets...), Deadline: nanos(a.Deadline)}
 	}
 	if rec.Outcome != nil {
 		oc := *rec.Outcome

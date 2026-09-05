@@ -95,6 +95,15 @@ func attr(sp sdktrace.ReadOnlySpan, key string) (string, bool) {
 	return "", false
 }
 
+func attrSlice(sp sdktrace.ReadOnlySpan, key string) ([]string, bool) {
+	for _, kv := range sp.Attributes() {
+		if string(kv.Key) == key {
+			return kv.Value.AsStringSlice(), true
+		}
+	}
+	return nil, false
+}
+
 func TestMiddlewareSpansLinkToOrigin(t *testing.T) {
 	recorder := tracetest.NewSpanRecorder()
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
@@ -243,13 +252,16 @@ func TestMiddlewareAwaitIsNotAnError(t *testing.T) {
 
 	parked := 0
 	for _, sp := range recorder.Ended() {
-		target, ok := attr(sp, string(durableotel.AttrAwaitTarget))
+		targets, ok := attrSlice(sp, string(durableotel.AttrAwaitTargets))
 		if !ok {
 			continue
 		}
 		parked++
-		if target != string(missing) {
-			t.Fatalf("await target = %q, want %q", target, missing)
+		if len(targets) != 1 || targets[0] != string(missing) {
+			t.Fatalf("await targets = %q, want [%q]", targets, missing)
+		}
+		if mode, _ := attr(sp, string(durableotel.AttrAwaitMode)); mode != "all" {
+			t.Fatalf("await mode = %q, want all", mode)
 		}
 		if sp.Status().Code == codes.Error {
 			t.Fatal("park span carries Error status; a park is not a failure")

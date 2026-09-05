@@ -299,7 +299,9 @@ type Status struct {
     CancelRequested bool
     CancelCause     string
 
-    AwaitingRunID RunID
+    AwaitingRunIDs []RunID
+    AwaitMode      AwaitMode
+    AwaitDeadline  time.Time
 }
 ```
 

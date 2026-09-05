@@ -8,6 +8,7 @@ import (
 	"go.opentelemetry.io/otel/metric"
 
 	"github.com/dangra/durable"
+	"github.com/dangra/durable/observe"
 )
 
 // Histogram bucket boundaries, in seconds. The OTel defaults top out
@@ -25,7 +26,7 @@ var (
 	storeBoundaries = []float64{.0005, .001, .0025, .005, .01, .025, .05, .1, .25, .5, 1, 2.5}
 )
 
-// NewObserver returns a durable.Observer that translates engine
+// NewObserver returns a observe.Observer that translates engine
 // lifecycle events into OpenTelemetry metrics, for installation via
 // durable.WithObserver. Instruments, all under the durable.* namespace
 // with durations in seconds:
@@ -49,9 +50,9 @@ var (
 // (5ms–20m), run-scale (100ms–24h), and store-call-scale (0.5ms–2.5s) —
 // instead of the OTel defaults that stop near 10s. Counters built from
 // engine events are operational signal, not accounting — see the
-// durable.Observer contract. For point-in-time occupancy gauges, see
+// observe.Observer contract. For point-in-time occupancy gauges, see
 // RegisterStats.
-func NewObserver(opts ...Option) (durable.Observer, error) {
+func NewObserver(opts ...Option) (observe.Observer, error) {
 	cfg := newConfig(opts)
 	meter := cfg.meterProvider.Meter(ScopeName)
 
@@ -82,18 +83,18 @@ func NewObserver(opts ...Option) (durable.Observer, error) {
 		storeOpDuration = histogram("durable.store.op.duration", "Store call latency.", storeBoundaries)
 	)
 	if err := errors.Join(errs...); err != nil {
-		return durable.Observer{}, err
+		return observe.Observer{}, err
 	}
 
 	// Observer callbacks run synchronously on engine goroutines; recording
 	// against pre-built or cheaply-built attribute sets keeps them fast.
 	ctx := context.Background()
-	return durable.Observer{
-		RunScheduled: func(ev durable.RunEvent) {
+	return observe.Observer{
+		RunScheduled: func(ev observe.RunEvent) {
 			scheduled.Add(ctx, 1, metric.WithAttributeSet(attribute.NewSet(
 				AttrPipeline.String(string(ev.PipelineID)))))
 		},
-		AttemptDone: func(ev durable.AttemptEvent) {
+		AttemptDone: func(ev observe.AttemptEvent) {
 			set := attribute.NewSet(
 				AttrPipeline.String(string(ev.PipelineID)),
 				AttrStep.String(string(ev.StepID)),
@@ -104,14 +105,14 @@ func NewObserver(opts ...Option) (durable.Observer, error) {
 			attempts.Add(ctx, 1, metric.WithAttributeSet(set))
 			attemptDuration.Record(ctx, ev.Duration.Seconds(), metric.WithAttributeSet(set))
 		},
-		RunUnwinding: func(ev durable.RunFailureEvent) {
+		RunUnwinding: func(ev observe.RunFailureEvent) {
 			unwinding.Add(ctx, 1, metric.WithAttributeSet(attribute.NewSet(
 				AttrPipeline.String(string(ev.PipelineID)),
 				AttrFailureKind.String(ev.Kind.String()),
 				AttrReason.String(ev.Reason),
 			)))
 		},
-		RunTerminal: func(ev durable.RunTerminalEvent) {
+		RunTerminal: func(ev observe.RunTerminalEvent) {
 			attrs := []attribute.KeyValue{
 				AttrPipeline.String(string(ev.PipelineID)),
 				AttrOutcome.String(ev.Outcome.String()),
@@ -127,24 +128,24 @@ func NewObserver(opts ...Option) (durable.Observer, error) {
 				AttrOutcome.String(ev.Outcome.String()),
 			)))
 		},
-		RunInvalid: func(ev durable.RunFailureEvent) {
+		RunInvalid: func(ev observe.RunFailureEvent) {
 			invalidated.Add(ctx, 1, metric.WithAttributeSet(attribute.NewSet(
 				AttrPipeline.String(string(ev.PipelineID)),
 				AttrReason.String(ev.Reason),
 			)))
 		},
-		WaiterWoken: func(ev durable.WakeEvent) {
+		WaiterWoken: func(ev observe.WakeEvent) {
 			awaitDuration.Record(ctx, ev.Duration.Seconds(), metric.WithAttributeSet(attribute.NewSet(
 				AttrPipeline.String(string(ev.PipelineID)))))
 		},
-		ClassWait: func(ev durable.ClassWaitEvent) {
+		ClassWait: func(ev observe.ClassWaitEvent) {
 			classWait.Record(ctx, ev.Duration.Seconds(), metric.WithAttributeSet(attribute.NewSet(
 				AttrClass.String(ev.Class))))
 		},
 		RunsReaped: func(count int) {
 			reaped.Add(ctx, int64(count))
 		},
-		StoreOp: func(ev durable.StoreOpEvent) {
+		StoreOp: func(ev observe.StoreOpEvent) {
 			storeOpDuration.Record(ctx, ev.Duration.Seconds(), metric.WithAttributeSet(attribute.NewSet(
 				AttrStoreOp.String(ev.Op),
 				AttrStoreWrite.Bool(ev.Write),

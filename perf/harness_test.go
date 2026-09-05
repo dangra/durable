@@ -2,7 +2,7 @@
 // workload scenarios modeled on the flyd machine-orchestration use case.
 //
 // Metrics come in two tiers. Deterministic counters gate tightly in CI:
-// transitions/run (logical store writes observed via a durable.Observer,
+// transitions/run (logical store writes observed via a observe.Observer,
 // exactly deterministic, gated two-sided at 0.1%) and the
 // near-deterministic byte and allocation metrics (diskB/* on the best
 // sample at 15%, B/op and allocs/op on the median at 10%). Every scenario
@@ -34,6 +34,7 @@ import (
 
 	"github.com/dangra/durable"
 	"github.com/dangra/durable/bboltstore"
+	"github.com/dangra/durable/observe"
 )
 
 // The flyd machine-start shape: a fat config input through a pipeline of
@@ -73,9 +74,9 @@ type env struct {
 // Write-ness comes from StoreOpEvent.Write, which the engine's store
 // decorator declares method-by-method — a write method added to the
 // Store interface later is counted here without touching this file.
-func countingObserver(writes *atomic.Int64) durable.Observer {
-	return durable.Observer{
-		StoreOp: func(ev durable.StoreOpEvent) {
+func countingObserver(writes *atomic.Int64) observe.Observer {
+	return observe.Observer{
+		StoreOp: func(ev observe.StoreOpEvent) {
 			// ReapTerminal is the one write op excluded by name: reaps
 			// count one logical delete per run via RunsReaped below,
 			// not one per batch call.

@@ -9,6 +9,7 @@ import (
 
 	"github.com/dangra/durable"
 	"github.com/dangra/durable/durabletest"
+	"github.com/dangra/durable/observe"
 )
 
 type tenantKey struct{}
@@ -22,7 +23,7 @@ func TestScheduleAnnotator(t *testing.T) {
 		mu   sync.Mutex
 		seen map[string]string
 	)
-	obs := durable.Observer{RunScheduled: func(ev durable.RunEvent) {
+	obs := observe.Observer{RunScheduled: func(ev observe.RunEvent) {
 		mu.Lock()
 		seen = ev.Annotations
 		mu.Unlock()

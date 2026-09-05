@@ -91,7 +91,7 @@ back — run [examples/release-train](examples/release-train/).
 ## Observability
 
 The engine logs through `log/slog`, emits typed lifecycle events
-(`Observer`), and snapshots occupancy (`Engine.Stats`); cross-cutting
+(`observe.Observer`), and snapshots occupancy (`Engine.Stats`); cross-cutting
 concerns use net/http-style middleware over the uniform type-erased
 operation layer (see [the design note](spec/http-analogy.md)). The core
 never depends on a telemetry library —

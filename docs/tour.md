@@ -456,7 +456,7 @@ Full rules: [spec/03-evolution.md](../spec/03-evolution.md).
 ## Observability
 
 The engine logs through `log/slog` with canonical keys, emits typed
-lifecycle events (`Observer`), and snapshots occupancy
+lifecycle events (`observe.Observer`), and snapshots occupancy
 (`Engine.Stats`) — see the [README](../README.md#observability). The
 [contrib/durableotel](../contrib/durableotel/) module packages the
 OpenTelemetry integration (per-attempt spans linked to the scheduling

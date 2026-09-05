@@ -32,7 +32,7 @@ func TestScheduleAnnotator(t *testing.T) {
 		ID: "annotated",
 		Steps: []durable.StepConfig{{
 			ID: "noop/v1",
-			Run: func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				return nil, nil
 			},
 		}},
@@ -107,7 +107,7 @@ func TestScheduleAnnotatorInvalidUTF8(t *testing.T) {
 		ID: "annotated-bad",
 		Steps: []durable.StepConfig{{
 			ID: "noop/v1",
-			Run: func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				return nil, nil
 			},
 		}},

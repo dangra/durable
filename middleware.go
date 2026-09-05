@@ -16,7 +16,7 @@ import (
 // Result semantics are those of any handler: nil error resolves the
 // operation successfully, an ordinary error leaves it unresolved and
 // retried, and Fail resolves it as permanent failure.
-type Handler func(ctx context.Context, inv *Invocation) (proto.Message, error)
+type Handler func(ctx context.Context, inv Invocation) (proto.Message, error)
 
 // Middleware wraps a Handler — durable's analog of
 // func(http.Handler) http.Handler. Use it for cross-cutting concerns such
@@ -83,7 +83,7 @@ func FailFastOnCancel(opts ...FailFastOption) Middleware {
 		o(&cfg)
 	}
 	return func(next Handler) Handler {
-		return func(ctx context.Context, inv *Invocation) (proto.Message, error) {
+		return func(ctx context.Context, inv Invocation) (proto.Message, error) {
 			if inv.Phase() != PhaseForward || cfg.except[inv.StepID()] {
 				return next(ctx, inv)
 			}

@@ -59,7 +59,7 @@ func BenchmarkRunWrites(b *testing.B) {
 		steps = append(steps, durable.StepConfig{
 			ID:       durable.StepID(fmt.Sprintf("step-%d/v1", i)),
 			HasState: true,
-			Run: func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				return wrapperspb.Bytes(state), nil
 			},
 		})
@@ -95,7 +95,7 @@ func BenchmarkRetryWrites(b *testing.B) {
 		ID: "bench-retry",
 		Steps: []durable.StepConfig{{
 			ID: "flaky/v1",
-			Run: func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				if inv.Attempt() <= retries {
 					return nil, errors.New("transient")
 				}
@@ -133,7 +133,7 @@ func BenchmarkConcurrentRuns(b *testing.B) {
 	for i := 0; i < 4; i++ {
 		steps = append(steps, durable.StepConfig{
 			ID: durable.StepID(fmt.Sprintf("step-%d/v1", i)),
-			Run: func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				return nil, nil
 			},
 		})

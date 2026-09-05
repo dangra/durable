@@ -23,7 +23,7 @@ var ShipStep = durable.NewStateStepRef("ship/v1", func() *Ship { return &Ship{} 
 
 // ReserveStockInvocation is passed to ReserveStockHandler methods.
 type ReserveStockInvocation struct {
-	core *durable.Invocation
+	core durable.Invocation
 }
 
 func (inv ReserveStockInvocation) PipelineID() durable.PipelineID { return inv.core.PipelineID() }
@@ -87,7 +87,7 @@ func (f ReserveStockFuncs) Unwind(ctx context.Context, inv ReserveStockInvocatio
 
 // ChargePaymentInvocation is passed to ChargePaymentHandler methods.
 type ChargePaymentInvocation struct {
-	core *durable.Invocation
+	core durable.Invocation
 }
 
 func (inv ChargePaymentInvocation) PipelineID() durable.PipelineID { return inv.core.PipelineID() }
@@ -151,7 +151,7 @@ func (f ChargePaymentFuncs) Unwind(ctx context.Context, inv ChargePaymentInvocat
 
 // ShipInvocation is passed to ShipHandler methods.
 type ShipInvocation struct {
-	core *durable.Invocation
+	core durable.Invocation
 }
 
 func (inv ShipInvocation) PipelineID() durable.PipelineID { return inv.core.PipelineID() }
@@ -208,12 +208,12 @@ type FulfillOrderReducer func(*FulfillOrder) *FulfillOrderOutput
 
 var fulfillOrderViews sync.Map
 
-func (x *FulfillOrder) durableView() *durable.ReduceView {
+func (x *FulfillOrder) durableView() durable.ReduceView {
 	v, ok := fulfillOrderViews.Load(x)
 	if !ok {
 		panic("orderspb: FulfillOrder is only usable as a reducer view during reduction")
 	}
-	return v.(*durable.ReduceView)
+	return v.(durable.ReduceView)
 }
 
 // Input returns a defensive caller-owned copy of the immutable pipeline input.
@@ -244,7 +244,7 @@ func NewFulfillOrder(
 	return &FulfillOrderDefinition{def: durable.NewDefinition(durable.DefinitionConfig{
 		ID:       "fulfill-order",
 		NewInput: func() proto.Message { return &FulfillOrderInput{} },
-		Reduce: func(view *durable.ReduceView) proto.Message {
+		Reduce: func(view durable.ReduceView) proto.Message {
 			x := &FulfillOrder{}
 			fulfillOrderViews.Store(x, view)
 			defer fulfillOrderViews.Delete(x)
@@ -255,14 +255,14 @@ func NewFulfillOrder(
 				ID:       "reserve-stock/v1",
 				Unwind:   true,
 				HasState: true,
-				Run: func(ctx context.Context, core *durable.Invocation) (proto.Message, error) {
+				Run: func(ctx context.Context, core durable.Invocation) (proto.Message, error) {
 					state, err := reserveStock.Run(ctx, ReserveStockInvocation{core: core})
 					if state == nil {
 						return nil, err
 					}
 					return state, err
 				},
-				UnwindFunc: func(ctx context.Context, core *durable.Invocation, failure durable.Failure) error {
+				UnwindFunc: func(ctx context.Context, core durable.Invocation, failure durable.Failure) error {
 					return reserveStock.Unwind(ctx, ReserveStockInvocation{core: core}, failure)
 				},
 			},
@@ -270,21 +270,21 @@ func NewFulfillOrder(
 				ID:       "charge-payment/v1",
 				Unwind:   true,
 				HasState: true,
-				Run: func(ctx context.Context, core *durable.Invocation) (proto.Message, error) {
+				Run: func(ctx context.Context, core durable.Invocation) (proto.Message, error) {
 					state, err := chargePayment.Run(ctx, ChargePaymentInvocation{core: core})
 					if state == nil {
 						return nil, err
 					}
 					return state, err
 				},
-				UnwindFunc: func(ctx context.Context, core *durable.Invocation, failure durable.Failure) error {
+				UnwindFunc: func(ctx context.Context, core durable.Invocation, failure durable.Failure) error {
 					return chargePayment.Unwind(ctx, ChargePaymentInvocation{core: core}, failure)
 				},
 			},
 			{
 				ID:       "ship/v1",
 				HasState: true,
-				Run: func(ctx context.Context, core *durable.Invocation) (proto.Message, error) {
+				Run: func(ctx context.Context, core durable.Invocation) (proto.Message, error) {
 					state, err := ship.Run(ctx, ShipInvocation{core: core})
 					if state == nil {
 						return nil, err

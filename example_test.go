@@ -14,7 +14,7 @@ import (
 // operation, in the style of net/http middleware.
 func ExampleWithMiddleware() {
 	logging := func(next durable.Handler) durable.Handler {
-		return func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+		return func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 			state, err := next(ctx, inv)
 			fmt.Printf("%s %s attempt=%d\n", inv.Phase(), inv.StepID(), inv.Attempt())
 			return state, err
@@ -26,7 +26,7 @@ func ExampleWithMiddleware() {
 		ID: "greeter",
 		Steps: []durable.StepConfig{{
 			ID: "hello/v1",
-			Run: func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				return nil, nil
 			},
 		}},

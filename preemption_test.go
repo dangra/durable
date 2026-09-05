@@ -27,7 +27,7 @@ func TestPreemptionCarriesCause(t *testing.T) {
 	running := make(chan struct{})
 	def := durable.NewDefinition(durable.DefinitionConfig{
 		ID: "coop",
-		Steps: []durable.StepConfig{stateless("work/v1", func(ctx context.Context, inv *durable.Invocation) error {
+		Steps: []durable.StepConfig{stateless("work/v1", func(ctx context.Context, inv durable.Invocation) error {
 			if inv.CancelRequested() {
 				return nil // cooperative resolution
 			}
@@ -85,7 +85,7 @@ func TestStopCarriesCause(t *testing.T) {
 	var once sync.Once
 	def := durable.NewDefinition(durable.DefinitionConfig{
 		ID: "stoppable",
-		Steps: []durable.StepConfig{stateless("work/v1", func(ctx context.Context, inv *durable.Invocation) error {
+		Steps: []durable.StepConfig{stateless("work/v1", func(ctx context.Context, inv durable.Invocation) error {
 			select {
 			case <-ctx.Done():
 				mu.Lock()
@@ -130,7 +130,7 @@ func TestStopCarriesCause(t *testing.T) {
 	// cancellation.
 	def2 := durable.NewDefinition(durable.DefinitionConfig{
 		ID: "stoppable",
-		Steps: []durable.StepConfig{stateless("work/v1", func(ctx context.Context, inv *durable.Invocation) error {
+		Steps: []durable.StepConfig{stateless("work/v1", func(ctx context.Context, inv durable.Invocation) error {
 			return nil
 		})},
 	})
@@ -174,15 +174,15 @@ func TestFailFastOnCancel(t *testing.T) {
 			{
 				ID:     "prepare/v1",
 				Unwind: true,
-				Run: func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+				Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 					return nil, nil
 				},
-				UnwindFunc: func(ctx context.Context, inv *durable.Invocation, f durable.Failure) error {
+				UnwindFunc: func(ctx context.Context, inv durable.Invocation, f durable.Failure) error {
 					unwound.Store(true)
 					return nil
 				},
 			},
-			stateless("block/v1", func(ctx context.Context, inv *durable.Invocation) error {
+			stateless("block/v1", func(ctx context.Context, inv durable.Invocation) error {
 				attempts.Add(1)
 				close(running)
 				<-ctx.Done()
@@ -236,7 +236,7 @@ func TestFailFastShortCircuit(t *testing.T) {
 	tried := make(chan struct{}, 64)
 	def := durable.NewDefinition(durable.DefinitionConfig{
 		ID: "shortcircuit",
-		Steps: []durable.StepConfig{stateless("flaky/v1", func(ctx context.Context, inv *durable.Invocation) error {
+		Steps: []durable.StepConfig{stateless("flaky/v1", func(ctx context.Context, inv durable.Invocation) error {
 			if inv.CancelRequested() {
 				sawCancel.Store(true)
 			}
@@ -294,7 +294,7 @@ func TestFailFastExcept(t *testing.T) {
 	running := make(chan struct{})
 	def := durable.NewDefinition(durable.DefinitionConfig{
 		ID: "excepted",
-		Steps: []durable.StepConfig{stateless("careful/v1", func(ctx context.Context, inv *durable.Invocation) error {
+		Steps: []durable.StepConfig{stateless("careful/v1", func(ctx context.Context, inv durable.Invocation) error {
 			attempts.Add(1)
 			if inv.CancelRequested() {
 				sawCancel.Store(true)
@@ -352,7 +352,7 @@ func TestFailFastExcept(t *testing.T) {
 func TestFabricatedPreemptionNotCanceled(t *testing.T) {
 	def := durable.NewDefinition(durable.DefinitionConfig{
 		ID: "fabricated",
-		Steps: []durable.StepConfig{stateless("liar/v1", func(ctx context.Context, inv *durable.Invocation) error {
+		Steps: []durable.StepConfig{stateless("liar/v1", func(ctx context.Context, inv durable.Invocation) error {
 			return durable.Fail(fmt.Errorf("pretend: %w", &durable.PreemptedError{Cause: "fake"}))
 		})},
 	})
@@ -390,7 +390,7 @@ func TestFailFastShutdownUntouched(t *testing.T) {
 	running := make(chan struct{})
 	var once sync.Once
 	handler := func(done bool) durable.StepConfig {
-		return stateless("work/v1", func(ctx context.Context, inv *durable.Invocation) error {
+		return stateless("work/v1", func(ctx context.Context, inv durable.Invocation) error {
 			if done {
 				return nil
 			}

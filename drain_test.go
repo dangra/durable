@@ -23,7 +23,7 @@ func TestDrainLetsAttemptFinish(t *testing.T) {
 	running, release := make(chan struct{}), make(chan struct{})
 	def := durable.NewDefinition(durable.DefinitionConfig{
 		ID: "drained",
-		Steps: []durable.StepConfig{stateless("work/v1", func(ctx context.Context, inv *durable.Invocation) error {
+		Steps: []durable.StepConfig{stateless("work/v1", func(ctx context.Context, inv durable.Invocation) error {
 			close(running)
 			<-release
 			mu.Lock()
@@ -71,7 +71,7 @@ func TestDrainLetsAttemptFinish(t *testing.T) {
 		durable.WithLogger(discardTestLogger()))
 	pipe3, err := durable.NewDefinition(durable.DefinitionConfig{
 		ID: "drained",
-		Steps: []durable.StepConfig{stateless("work/v1", func(ctx context.Context, inv *durable.Invocation) error {
+		Steps: []durable.StepConfig{stateless("work/v1", func(ctx context.Context, inv durable.Invocation) error {
 			t.Error("handler re-executed; the drained attempt must have committed")
 			return nil
 		})},
@@ -107,7 +107,7 @@ func TestDrainDeadlinePreempts(t *testing.T) {
 	running := make(chan struct{})
 	def := durable.NewDefinition(durable.DefinitionConfig{
 		ID: "stubborn",
-		Steps: []durable.StepConfig{stateless("work/v1", func(ctx context.Context, inv *durable.Invocation) error {
+		Steps: []durable.StepConfig{stateless("work/v1", func(ctx context.Context, inv durable.Invocation) error {
 			close(running)
 			<-ctx.Done()
 			mu.Lock()
@@ -153,7 +153,7 @@ func TestDrainStartsNoNewAttempts(t *testing.T) {
 	)
 	running := make(chan struct{})
 	step := func(id durable.StepID) durable.StepConfig {
-		return stateless(id, func(ctx context.Context, inv *durable.Invocation) error {
+		return stateless(id, func(ctx context.Context, inv durable.Invocation) error {
 			mu.Lock()
 			ran = append(ran, string(inv.StepID()))
 			mu.Unlock()

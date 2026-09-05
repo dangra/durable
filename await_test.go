@@ -26,7 +26,7 @@ func TestWaitInsideHandlerFailsFast(t *testing.T) {
 	child := durable.NewDefinition(durable.DefinitionConfig{
 		ID: "child",
 		Steps: []durable.StepConfig{
-			stateless("work/v1", func(ctx context.Context, inv *durable.Invocation) error {
+			stateless("work/v1", func(ctx context.Context, inv durable.Invocation) error {
 				select {
 				case <-release:
 					return nil
@@ -46,7 +46,7 @@ func TestWaitInsideHandlerFailsFast(t *testing.T) {
 	parent := durable.NewDefinition(durable.DefinitionConfig{
 		ID: "parent",
 		Steps: []durable.StepConfig{
-			stateless("ship/v1", func(ctx context.Context, inv *durable.Invocation) error {
+			stateless("ship/v1", func(ctx context.Context, inv durable.Invocation) error {
 				if awaited, woken := inv.AwaitedRunID(); woken {
 					run, err := childPipe.Run(ctx, awaited)
 					if err != nil {
@@ -132,7 +132,7 @@ func TestAwaitRunParksUntilTargetCompletes(t *testing.T) {
 	target := durable.NewDefinition(durable.DefinitionConfig{
 		ID: "await-target",
 		Steps: []durable.StepConfig{
-			stateless("t/v1", func(ctx context.Context, inv *durable.Invocation) error {
+			stateless("t/v1", func(ctx context.Context, inv durable.Invocation) error {
 				select {
 				case <-release:
 					return nil
@@ -147,7 +147,7 @@ func TestAwaitRunParksUntilTargetCompletes(t *testing.T) {
 	waiterDef = durable.NewDefinition(durable.DefinitionConfig{
 		ID: "await-waiter",
 		Steps: []durable.StepConfig{
-			stateless("w/v1", func(ctx context.Context, inv *durable.Invocation) error {
+			stateless("w/v1", func(ctx context.Context, inv durable.Invocation) error {
 				waiterAttempts.Store(inv.Attempt())
 				run, ok, err := targetPipe.ActiveRun(ctx, "res")
 				if err != nil {
@@ -208,14 +208,14 @@ func TestAwaitedRunIDPreventsChildRespawn(t *testing.T) {
 	child := durable.NewDefinition(durable.DefinitionConfig{
 		ID: "spawn-child",
 		Steps: []durable.StepConfig{
-			stateless("c/v1", func(ctx context.Context, inv *durable.Invocation) error { return nil }),
+			stateless("c/v1", func(ctx context.Context, inv durable.Invocation) error { return nil }),
 		},
 	})
 	var childPipe *durable.Pipeline
 	parent := durable.NewDefinition(durable.DefinitionConfig{
 		ID: "spawn-parent",
 		Steps: []durable.StepConfig{
-			stateless("p/v1", func(ctx context.Context, inv *durable.Invocation) error {
+			stateless("p/v1", func(ctx context.Context, inv durable.Invocation) error {
 				if _, ok := inv.AwaitedRunID(); ok {
 					sawAwaited.Store(true)
 					return nil // child completed; do not respawn
@@ -258,7 +258,7 @@ func TestAwaitRunResolvesImmediatelyForMissingTarget(t *testing.T) {
 	def := durable.NewDefinition(durable.DefinitionConfig{
 		ID: "await-missing",
 		Steps: []durable.StepConfig{
-			stateless("s/v1", func(ctx context.Context, inv *durable.Invocation) error {
+			stateless("s/v1", func(ctx context.Context, inv durable.Invocation) error {
 				if id, ok := inv.AwaitedRunID(); ok {
 					if id != "no-such-run" {
 						return durable.Fail(errors.New("wrong awaited id"))
@@ -283,7 +283,7 @@ func TestAwaitCycleIsInvalid(t *testing.T) {
 		return durable.NewDefinition(durable.DefinitionConfig{
 			ID: id,
 			Steps: []durable.StepConfig{
-				stateless(durable.StepID(string(id)+"/v1"), func(ctx context.Context, inv *durable.Invocation) error {
+				stateless(durable.StepID(string(id)+"/v1"), func(ctx context.Context, inv durable.Invocation) error {
 					if _, ok := inv.AwaitedRunID(); ok {
 						return nil
 					}
@@ -345,7 +345,7 @@ func TestCancelCutsThroughAwait(t *testing.T) {
 	target := durable.NewDefinition(durable.DefinitionConfig{
 		ID: "cancel-await-target",
 		Steps: []durable.StepConfig{
-			stateless("t/v1", func(ctx context.Context, inv *durable.Invocation) error {
+			stateless("t/v1", func(ctx context.Context, inv durable.Invocation) error {
 				select {
 				case <-release:
 					return nil
@@ -359,7 +359,7 @@ func TestCancelCutsThroughAwait(t *testing.T) {
 	waiter := durable.NewDefinition(durable.DefinitionConfig{
 		ID: "cancel-await-waiter",
 		Steps: []durable.StepConfig{
-			stateless("w/v1", func(ctx context.Context, inv *durable.Invocation) error {
+			stateless("w/v1", func(ctx context.Context, inv durable.Invocation) error {
 				if inv.CancelRequested() {
 					return nil
 				}

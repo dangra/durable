@@ -153,7 +153,7 @@ func machinePipeline(id durable.PipelineID, specs [numSteps]stepSpec) *durable.D
 			HasState:         true,
 			Unwind:           spec.unwind,
 			ConcurrencyClass: spec.class,
-			Run: func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				if inv.Attempt() <= spec.retries {
 					return nil, errTransient
 				}
@@ -164,7 +164,7 @@ func machinePipeline(id durable.PipelineID, specs [numSteps]stepSpec) *durable.D
 			},
 		}
 		if spec.unwind {
-			sc.UnwindFunc = func(ctx context.Context, inv *durable.Invocation, f durable.Failure) error {
+			sc.UnwindFunc = func(ctx context.Context, inv durable.Invocation, f durable.Failure) error {
 				return nil
 			}
 		}

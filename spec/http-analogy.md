@@ -9,11 +9,11 @@ analogy with Go's `net/http`; the normative contracts live in
 
 | net/http | durable |
 |---|---|
-| `http.Handler` | `durable.Handler` — the uniform type-erased operation `func(ctx, *Invocation) (proto.Message, error)` |
+| `http.Handler` | `durable.Handler` — the uniform type-erased operation `func(ctx, Invocation) (proto.Message, error)` |
 | `http.HandlerFunc` | generated func adapters (`XFunc`, `XFuncs`) |
 | middleware `func(http.Handler) http.Handler` | `durable.Middleware`, installed with `WithMiddleware` |
 | `ServeMux` and route patterns | the protobuf Pipeline topology; `StepID` plays the route pattern |
-| `*http.Request` | `*durable.Invocation` — identity, attempt, phase, input, State lookup |
+| `*http.Request` | `durable.Invocation` — identity, attempt, phase, input, State lookup; an interface, so tests can fake it |
 | `http.ResponseWriter` | — (deliberately absent; see below) |
 | `http.Server` / `Server.Shutdown` | `Engine` / `Engine.Stop` |
 

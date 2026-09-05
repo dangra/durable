@@ -2,11 +2,21 @@ package durable
 
 import "google.golang.org/protobuf/proto"
 
-// StateSource is a source of committed Step State bytes: an Invocation or a
-// ReduceView. Only types in this package implement it.
+// StateSource is a source of committed Step State bytes: an Invocation or
+// a ReduceView. Its methods are the plumbing beneath LookupState; handlers
+// never call them. The engine's invocations and views implement it, as
+// does durabletest's fake.
 type StateSource interface {
-	stateBytes(StepID) ([]byte, bool)
-	reportViolation(error)
+	// StateBytes returns the committed State of the Step as persisted, or
+	// ok=false when the Run has none for it.
+	StateBytes(StepID) ([]byte, bool)
+
+	// ReportViolation records a runtime contract violation observed while
+	// reading durable data — committed State or Input that cannot be
+	// decoded under the current schema. The engine invalidates the Run
+	// for the current deployment once the attempt returns; the first
+	// report wins.
+	ReportViolation(error)
 }
 
 // LookupState returns the committed State of the referenced Step, or
@@ -22,7 +32,7 @@ type StateSource interface {
 // those instead.
 func LookupState[T proto.Message](src StateSource, ref StateStepRef[T]) (T, bool) {
 	var zero T
-	b, ok := src.stateBytes(ref.id)
+	b, ok := src.StateBytes(ref.id)
 	if !ok {
 		return zero, false
 	}
@@ -31,7 +41,7 @@ func LookupState[T proto.Message](src StateSource, ref StateStepRef[T]) (T, bool
 		// Committed State that cannot be decoded under the current schema
 		// is a runtime contract violation: the Run becomes invalid for the
 		// current deployment.
-		src.reportViolation(&stateDecodeError{step: ref.id, err: err})
+		src.ReportViolation(&stateDecodeError{step: ref.id, err: err})
 		return zero, false
 	}
 	return msg, true

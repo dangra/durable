@@ -37,7 +37,9 @@
 // and the Err* sentinels.
 //
 // Writing handlers. Invocation carries input, prior state, and attempt
-// metadata. The ways out: success, an ordinary error (retried — a
+// metadata; it is an interface the engine implements, and
+// durabletest.NewInvocation fakes it so handlers are unit-testable
+// without an engine. The ways out: success, an ordinary error (retried — a
 // returned ctx.Err() included), Fail with FailOptions and
 // kind/reason attribution, or AwaitRun, AwaitAll, and AwaitAny to park on
 // other Runs, bounded by WithAwaitTimeout (the woken attempt reads the
@@ -103,8 +105,8 @@
 //     in the spirit of database/sql/driver. Users pick an existing
 //     implementation and never import it.
 //   - bboltstore is the production bbolt-backed Store.
-//   - durabletest provides the in-memory Store and fake Clock for
-//     tests.
+//   - durabletest provides the in-memory Store, the fake Clock, and the
+//     fake Invocation for tests.
 //   - durablepb and cmd/protoc-gen-durable are the protobuf options and
 //     the code generator behind the generated typed API.
 //   - contrib/durableotel (separate module) is the OpenTelemetry

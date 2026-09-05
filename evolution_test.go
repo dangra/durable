@@ -23,7 +23,7 @@ func TestRecoveryResumesAcrossEngines(t *testing.T) {
 		return durable.NewDefinition(durable.DefinitionConfig{
 			ID: "recoverable",
 			Steps: []durable.StepConfig{
-				stateless("only/v1", func(ctx context.Context, inv *durable.Invocation) error {
+				stateless("only/v1", func(ctx context.Context, inv durable.Invocation) error {
 					attempts.Store(inv.Attempt())
 					if !succeed {
 						return errors.New("still deploying")
@@ -87,16 +87,16 @@ func TestRetiredStepIsBypassed(t *testing.T) {
 	def := durable.NewDefinition(durable.DefinitionConfig{
 		ID: "evolving",
 		Steps: []durable.StepConfig{
-			stateless("a/v1", func(context.Context, *durable.Invocation) error { return nil }),
+			stateless("a/v1", func(context.Context, durable.Invocation) error { return nil }),
 			{
 				ID:      "b/v1",
 				Retired: true,
-				Run: func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+				Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 					bRan.Store(true)
 					return nil, nil
 				},
 			},
-			stateless("c/v1", func(context.Context, *durable.Invocation) error {
+			stateless("c/v1", func(context.Context, durable.Invocation) error {
 				cRan.Store(true)
 				return nil
 			}),
@@ -131,11 +131,11 @@ func TestRetiredUnresolvedStepContinues(t *testing.T) {
 	def := durable.NewDefinition(durable.DefinitionConfig{
 		ID: "evolving",
 		Steps: []durable.StepConfig{
-			stateless("a/v1", func(context.Context, *durable.Invocation) error { return nil }),
+			stateless("a/v1", func(context.Context, durable.Invocation) error { return nil }),
 			{
 				ID:      "b/v1",
 				Retired: true,
-				Run: func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+				Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 					bAttempt.Store(inv.Attempt())
 					return nil, nil
 				},
@@ -164,9 +164,9 @@ func TestUnresolvedStepRemovedIsInvalid(t *testing.T) {
 	def := durable.NewDefinition(durable.DefinitionConfig{
 		ID: "evolving",
 		Steps: []durable.StepConfig{
-			stateless("a/v1", func(context.Context, *durable.Invocation) error { return nil }),
+			stateless("a/v1", func(context.Context, durable.Invocation) error { return nil }),
 			// b/v1 removed while unresolved.
-			stateless("c/v1", func(context.Context, *durable.Invocation) error { return nil }),
+			stateless("c/v1", func(context.Context, durable.Invocation) error { return nil }),
 		},
 	})
 	_, pipes := startEngine(t, store, def)
@@ -192,9 +192,9 @@ func TestInvalidReducerRepairedByRedeploy(t *testing.T) {
 		return durable.NewDefinition(durable.DefinitionConfig{
 			ID: "reduced",
 			Steps: []durable.StepConfig{
-				stateless("s/v1", func(context.Context, *durable.Invocation) error { return nil }),
+				stateless("s/v1", func(context.Context, durable.Invocation) error { return nil }),
 			},
-			Reduce: func(v *durable.ReduceView) proto.Message {
+			Reduce: func(v durable.ReduceView) proto.Message {
 				if broken {
 					panic("bad reducer")
 				}
@@ -246,7 +246,7 @@ func TestNilStateFromStateProducingHandlerIsInvalid(t *testing.T) {
 			{
 				ID:       "s/v1",
 				HasState: true,
-				Run: func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+				Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 					return nil, nil
 				},
 			},

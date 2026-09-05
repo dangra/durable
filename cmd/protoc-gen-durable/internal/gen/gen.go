@@ -294,7 +294,7 @@ func emitInvocation(g *protogen.GeneratedFile, pl *pipelineDecl, s *stepDecl) {
 
 	g.P("// ", inv, " is passed to ", goName, "Handler methods.")
 	g.P("type ", inv, " struct {")
-	g.P("core *", core)
+	g.P("core ", core)
 	g.P("}")
 	g.P()
 	g.P("func (inv ", inv, ") PipelineID() ", g.QualifiedGoIdent(durablePkg.Ident("PipelineID")), " { return inv.core.PipelineID() }")
@@ -414,12 +414,12 @@ func emitMarkerView(g *protogen.GeneratedFile, pl *pipelineDecl) {
 
 	g.P("var ", views, " ", g.QualifiedGoIdent(syncPkg.Ident("Map")))
 	g.P()
-	g.P("func (x *", name, ") durableView() *", view, " {")
+	g.P("func (x *", name, ") durableView() ", view, " {")
 	g.P("v, ok := ", views, ".Load(x)")
 	g.P("if !ok {")
 	g.P("panic(", strconv(string(pl.file.GoPackageName)+": "+name+" is only usable as a reducer view during reduction"), ")")
 	g.P("}")
-	g.P("return v.(*", view, ")")
+	g.P("return v.(", view, ")")
 	g.P("}")
 	g.P()
 	if pl.input != nil {
@@ -478,7 +478,7 @@ func emitDefinition(g *protogen.GeneratedFile, pl *pipelineDecl) {
 		g.P("NewInput: func() ", protoMsg, " { return &", g.QualifiedGoIdent(pl.input.GoIdent), "{} },")
 	}
 	if pl.output != nil {
-		g.P("Reduce: func(view *", g.QualifiedGoIdent(durablePkg.Ident("ReduceView")), ") ", protoMsg, " {")
+		g.P("Reduce: func(view ", g.QualifiedGoIdent(durablePkg.Ident("ReduceView")), ") ", protoMsg, " {")
 		g.P("x := &", g.QualifiedGoIdent(pl.msg.GoIdent), "{}")
 		g.P(views, ".Store(x, view)")
 		g.P("defer ", views, ".Delete(x)")
@@ -502,7 +502,7 @@ func emitDefinition(g *protogen.GeneratedFile, pl *pipelineDecl) {
 		}
 		if s.hasState {
 			g.P("HasState: true,")
-			g.P("Run: func(ctx ", ctx, ", core *", core, ") (", protoMsg, ", error) {")
+			g.P("Run: func(ctx ", ctx, ", core ", core, ") (", protoMsg, ", error) {")
 			g.P("state, err := ", param, ".Run(ctx, ", goName, "Invocation{core: core})")
 			g.P("if state == nil {")
 			g.P("return nil, err")
@@ -510,12 +510,12 @@ func emitDefinition(g *protogen.GeneratedFile, pl *pipelineDecl) {
 			g.P("return state, err")
 			g.P("},")
 		} else {
-			g.P("Run: func(ctx ", ctx, ", core *", core, ") (", protoMsg, ", error) {")
+			g.P("Run: func(ctx ", ctx, ", core ", core, ") (", protoMsg, ", error) {")
 			g.P("return nil, ", param, ".Run(ctx, ", goName, "Invocation{core: core})")
 			g.P("},")
 		}
 		if s.opts.GetUnwind() {
-			g.P("UnwindFunc: func(ctx ", ctx, ", core *", core, ", failure ", g.QualifiedGoIdent(durablePkg.Ident("Failure")), ") error {")
+			g.P("UnwindFunc: func(ctx ", ctx, ", core ", core, ", failure ", g.QualifiedGoIdent(durablePkg.Ident("Failure")), ") error {")
 			g.P("return ", param, ".Unwind(ctx, ", goName, "Invocation{core: core}, failure)")
 			g.P("},")
 		}

@@ -33,7 +33,7 @@ func TestAnnotatorEngineWide(t *testing.T) {
 		ID: "declared-once",
 		Steps: []durable.StepConfig{{
 			ID: "probe/v1",
-			Run: func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				mu.Lock()
 				defer mu.Unlock()
 				for _, m := range baggage.FromContext(ctx).Members() {

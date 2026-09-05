@@ -37,19 +37,19 @@ func sagaDef() *durable.Definition {
 			{
 				ID:     "prepare/v1",
 				Unwind: true,
-				Run: func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+				Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 					if inv.Attempt() == 1 {
 						return nil, errors.New("transient")
 					}
 					return nil, nil
 				},
-				UnwindFunc: func(ctx context.Context, inv *durable.Invocation, f durable.Failure) error {
+				UnwindFunc: func(ctx context.Context, inv durable.Invocation, f durable.Failure) error {
 					return nil
 				},
 			},
 			{
 				ID: "explode/v1",
-				Run: func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+				Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 					return nil, durable.Fail(errors.New("boom"),
 						durable.WithUserKind(), durable.WithReason("invalid-input"))
 				},
@@ -223,7 +223,7 @@ func TestMiddlewareAwaitIsNotAnError(t *testing.T) {
 		ID: "awaiter",
 		Steps: []durable.StepConfig{{
 			ID: "wait/v1",
-			Run: func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				if _, woken := inv.AwaitedRunID(); !woken {
 					return nil, durable.AwaitRun(missing)
 				}
@@ -285,7 +285,7 @@ func TestMiddlewarePanicRecordedAndRethrown(t *testing.T) {
 		ID: "panicky",
 		Steps: []durable.StepConfig{{
 			ID: "boom/v1",
-			Run: func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				if inv.Attempt() == 1 {
 					panic("kaboom")
 				}
@@ -389,7 +389,7 @@ func TestWithTraceContextRoundTrip(t *testing.T) {
 	// schedule.
 	engine := durable.NewEngine(durabletest.NewMemStore(), fastRetry, quietLogger(),
 		durable.WithMiddleware(func(next durable.Handler) durable.Handler {
-			return func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+			return func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				for k, v := range inv.Annotations() {
 					got[k] = v
 				}
@@ -400,7 +400,7 @@ func TestWithTraceContextRoundTrip(t *testing.T) {
 		ID: "probe",
 		Steps: []durable.StepConfig{{
 			ID: "noop/v1",
-			Run: func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				return nil, nil
 			},
 		}},

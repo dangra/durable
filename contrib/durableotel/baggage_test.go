@@ -46,7 +46,7 @@ func runBaggageProbe(t *testing.T, tp *sdktrace.TracerProvider, schedule []durab
 		ID: "baggage-probe",
 		Steps: []durable.StepConfig{{
 			ID: "probe/v1",
-			Run: func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				mu.Lock()
 				defer mu.Unlock()
 				for _, m := range baggage.FromContext(ctx).Members() {

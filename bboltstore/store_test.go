@@ -106,7 +106,7 @@ func TestEngineSurvivesRestart(t *testing.T) {
 			ID: "restartable",
 			Steps: []durable.StepConfig{{
 				ID: "only/v1",
-				Run: func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+				Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 					if !*succeed {
 						return nil, errors.New("not yet")
 					}

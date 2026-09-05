@@ -322,7 +322,8 @@ remain the authoritative contract.
 
 ## Invocation accessors
 
-Every handler receives a typed Invocation wrapping the untyped core.
+Every handler receives a typed Invocation wrapping `durable.Invocation`,
+an interface the Engine implements and application code never does.
 Beyond typed `Input()` and `State(...)`, it exposes:
 
 ```text
@@ -338,6 +339,14 @@ Logger                                  a slog.Logger with the canonical keys
 
 All return caller-owned copies; none can be used to reach durable state
 of other Runs except through the public `Run` handle.
+
+Because the core is an interface, a handler is unit-testable without an
+Engine or a Store: `durabletest.NewInvocation` builds a fake from an
+`InvocationConfig` (identity, Input, committed States keyed by StepID,
+annotations, park memory) that satisfies both `durable.Invocation` and
+`durable.ReduceView`, and records the contract violations a real Engine
+would invalidate the Run for. Generated code wraps it the same way it
+wraps the Engine's.
 
 ---
 

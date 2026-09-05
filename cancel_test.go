@@ -19,7 +19,7 @@ func TestCancelScheduledRunFreesSlot(t *testing.T) {
 	def := durable.NewDefinition(durable.DefinitionConfig{
 		ID: "cancel-scheduled",
 		Steps: []durable.StepConfig{
-			stateless("s/v1", func(ctx context.Context, inv *durable.Invocation) error {
+			stateless("s/v1", func(ctx context.Context, inv durable.Invocation) error {
 				t.Error("step of canceled scheduled run executed")
 				return nil
 			}),
@@ -59,7 +59,7 @@ func TestCancelPreemptsAndUnwinds(t *testing.T) {
 		sawRequested atomic.Bool
 		cRan         atomic.Bool
 	)
-	unwind := func(ctx context.Context, inv *durable.Invocation, f durable.Failure) error {
+	unwind := func(ctx context.Context, inv durable.Invocation, f durable.Failure) error {
 		mu.Lock()
 		unwound = append(unwound, inv.StepID())
 		mu.Unlock()
@@ -72,7 +72,7 @@ func TestCancelPreemptsAndUnwinds(t *testing.T) {
 			{
 				ID:     "a/v1",
 				Unwind: true,
-				Run: func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+				Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 					return nil, nil
 				},
 				UnwindFunc: unwind,
@@ -80,7 +80,7 @@ func TestCancelPreemptsAndUnwinds(t *testing.T) {
 			{
 				ID:     "b/v1",
 				Unwind: true,
-				Run: func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+				Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 					if inv.CancelRequested() {
 						// The doomed operation resolves cleanly.
 						sawRequested.Store(true)
@@ -93,7 +93,7 @@ func TestCancelPreemptsAndUnwinds(t *testing.T) {
 				},
 				UnwindFunc: unwind,
 			},
-			stateless("c/v1", func(ctx context.Context, inv *durable.Invocation) error {
+			stateless("c/v1", func(ctx context.Context, inv durable.Invocation) error {
 				cRan.Store(true)
 				return nil
 			}),
@@ -139,7 +139,7 @@ func TestCancelTerminalRun(t *testing.T) {
 	def := durable.NewDefinition(durable.DefinitionConfig{
 		ID: "cancel-terminal",
 		Steps: []durable.StepConfig{
-			stateless("s/v1", func(context.Context, *durable.Invocation) error { return nil }),
+			stateless("s/v1", func(context.Context, durable.Invocation) error { return nil }),
 		},
 	})
 	_, pipes := startEngine(t, durabletest.NewMemStore(), def)
@@ -157,7 +157,7 @@ func TestOrganicFailureBeatsCancel(t *testing.T) {
 	def := durable.NewDefinition(durable.DefinitionConfig{
 		ID: "cancel-organic",
 		Steps: []durable.StepConfig{
-			stateless("s/v1", func(ctx context.Context, inv *durable.Invocation) error {
+			stateless("s/v1", func(ctx context.Context, inv durable.Invocation) error {
 				if inv.CancelRequested() {
 					return durable.Fail(errors.New("broken anyway"))
 				}

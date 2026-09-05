@@ -35,7 +35,7 @@ func BenchmarkAwaitFanIn(b *testing.B) {
 		ID: "fanin-child",
 		Steps: []durable.StepConfig{{
 			ID: "fanin-child-hold/v1",
-			Run: func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				entered.Add(1)
 				select {
 				case <-gate(inv.ResourceID()):
@@ -52,7 +52,7 @@ func BenchmarkAwaitFanIn(b *testing.B) {
 		ID: "fanin-parent",
 		Steps: []durable.StepConfig{{
 			ID: "fanin-parent-ship/v1",
-			Run: func(ctx context.Context, inv *durable.Invocation) (proto.Message, error) {
+			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				if w, ok := inv.Awaited(); ok {
 					if len(w.Pending()) != 0 || w.Expired {
 						return nil, durable.Fail(fmt.Errorf("woke with %d pending, expired=%v", len(w.Pending()), w.Expired))

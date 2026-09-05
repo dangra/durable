@@ -28,7 +28,7 @@ var CreateMachineStep = durable.NewStateStepRef("create-machine/v1", func() *Cre
 
 // ValidateInvocation is passed to ValidateHandler methods.
 type ValidateInvocation struct {
-	core *durable.Invocation
+	core durable.Invocation
 }
 
 func (inv ValidateInvocation) PipelineID() durable.PipelineID { return inv.core.PipelineID() }
@@ -80,7 +80,7 @@ func (f ValidateFunc) Run(ctx context.Context, inv ValidateInvocation) error { r
 
 // SelectHostInvocation is passed to SelectHostHandler methods.
 type SelectHostInvocation struct {
-	core *durable.Invocation
+	core durable.Invocation
 }
 
 func (inv SelectHostInvocation) PipelineID() durable.PipelineID { return inv.core.PipelineID() }
@@ -134,7 +134,7 @@ func (f SelectHostFunc) Run(ctx context.Context, inv SelectHostInvocation) (*Sel
 
 // ReserveCapacityInvocation is passed to ReserveCapacityHandler methods.
 type ReserveCapacityInvocation struct {
-	core *durable.Invocation
+	core durable.Invocation
 }
 
 func (inv ReserveCapacityInvocation) PipelineID() durable.PipelineID { return inv.core.PipelineID() }
@@ -198,7 +198,7 @@ func (f ReserveCapacityFuncs) Unwind(ctx context.Context, inv ReserveCapacityInv
 
 // CreateMachineInvocation is passed to CreateMachineHandler methods.
 type CreateMachineInvocation struct {
-	core *durable.Invocation
+	core durable.Invocation
 }
 
 func (inv CreateMachineInvocation) PipelineID() durable.PipelineID { return inv.core.PipelineID() }
@@ -259,12 +259,12 @@ type ProvisionMachineReducer func(*ProvisionMachine) *ProvisionMachineOutput
 
 var provisionMachineViews sync.Map
 
-func (x *ProvisionMachine) durableView() *durable.ReduceView {
+func (x *ProvisionMachine) durableView() durable.ReduceView {
 	v, ok := provisionMachineViews.Load(x)
 	if !ok {
 		panic("machinespb: ProvisionMachine is only usable as a reducer view during reduction")
 	}
-	return v.(*durable.ReduceView)
+	return v.(durable.ReduceView)
 }
 
 // Input returns a defensive caller-owned copy of the immutable pipeline input.
@@ -297,7 +297,7 @@ func NewProvisionMachine(
 		ID:             "provision-machine",
 		ExclusionGroup: "machine-lifecycle",
 		NewInput:       func() proto.Message { return &ProvisionMachineInput{} },
-		Reduce: func(view *durable.ReduceView) proto.Message {
+		Reduce: func(view durable.ReduceView) proto.Message {
 			x := &ProvisionMachine{}
 			provisionMachineViews.Store(x, view)
 			defer provisionMachineViews.Delete(x)
@@ -306,14 +306,14 @@ func NewProvisionMachine(
 		Steps: []durable.StepConfig{
 			{
 				ID: "validate/v1",
-				Run: func(ctx context.Context, core *durable.Invocation) (proto.Message, error) {
+				Run: func(ctx context.Context, core durable.Invocation) (proto.Message, error) {
 					return nil, validate.Run(ctx, ValidateInvocation{core: core})
 				},
 			},
 			{
 				ID:       "select-host/v1",
 				HasState: true,
-				Run: func(ctx context.Context, core *durable.Invocation) (proto.Message, error) {
+				Run: func(ctx context.Context, core durable.Invocation) (proto.Message, error) {
 					state, err := selectHost.Run(ctx, SelectHostInvocation{core: core})
 					if state == nil {
 						return nil, err
@@ -326,21 +326,21 @@ func NewProvisionMachine(
 				Unwind:           true,
 				ConcurrencyClass: "host-capacity-api",
 				HasState:         true,
-				Run: func(ctx context.Context, core *durable.Invocation) (proto.Message, error) {
+				Run: func(ctx context.Context, core durable.Invocation) (proto.Message, error) {
 					state, err := reserveCapacity.Run(ctx, ReserveCapacityInvocation{core: core})
 					if state == nil {
 						return nil, err
 					}
 					return state, err
 				},
-				UnwindFunc: func(ctx context.Context, core *durable.Invocation, failure durable.Failure) error {
+				UnwindFunc: func(ctx context.Context, core durable.Invocation, failure durable.Failure) error {
 					return reserveCapacity.Unwind(ctx, ReserveCapacityInvocation{core: core}, failure)
 				},
 			},
 			{
 				ID:       "create-machine/v1",
 				HasState: true,
-				Run: func(ctx context.Context, core *durable.Invocation) (proto.Message, error) {
+				Run: func(ctx context.Context, core durable.Invocation) (proto.Message, error) {
 					state, err := createMachine.Run(ctx, CreateMachineInvocation{core: core})
 					if state == nil {
 						return nil, err
@@ -492,7 +492,7 @@ var ReleaseMachineStep = durable.NewStepRef("release-machine/v1")
 
 // ReleaseMachineInvocation is passed to ReleaseMachineHandler methods.
 type ReleaseMachineInvocation struct {
-	core *durable.Invocation
+	core durable.Invocation
 }
 
 func (inv ReleaseMachineInvocation) PipelineID() durable.PipelineID { return inv.core.PipelineID() }
@@ -542,12 +542,12 @@ func (f ReleaseMachineFunc) Run(ctx context.Context, inv ReleaseMachineInvocatio
 
 var decommissionMachineViews sync.Map
 
-func (x *DecommissionMachine) durableView() *durable.ReduceView {
+func (x *DecommissionMachine) durableView() durable.ReduceView {
 	v, ok := decommissionMachineViews.Load(x)
 	if !ok {
 		panic("machinespb: DecommissionMachine is only usable as a reducer view during reduction")
 	}
-	return v.(*durable.ReduceView)
+	return v.(durable.ReduceView)
 }
 
 // State returns the committed state of the referenced step for the run
@@ -572,7 +572,7 @@ func NewDecommissionMachine(
 		Steps: []durable.StepConfig{
 			{
 				ID: "release-machine/v1",
-				Run: func(ctx context.Context, core *durable.Invocation) (proto.Message, error) {
+				Run: func(ctx context.Context, core durable.Invocation) (proto.Message, error) {
 					return nil, releaseMachine.Run(ctx, ReleaseMachineInvocation{core: core})
 				},
 			},

@@ -137,6 +137,13 @@ The three ways out of a handler:
   At-least-once means the handler may run again *after* succeeding
   (crash between effect and commit), so make it idempotent: check
   whether the migration is already applied before applying it.
+  `ctx.Err()` is an ordinary error too: `context.Canceled` says the
+  ctx died, not *why*, so the engine never infers durable intent from
+  the error value — it classifies only await/permanent/nil/other. When
+  your ctx dies, return `ctx.Err()` as-is; whatever killed it is already
+  tracked on its own channel (a pending cancel gates the next dispatch,
+  a shutdown resumes via recovery), so don't wrap it in `Fail` — a
+  preempted attempt is not necessarily a permanent failure.
 - **Permanent failure** — declare it explicitly:
 
 ```go
@@ -236,6 +243,37 @@ func (h *shiftTraffic) Run(ctx context.Context, inv deploypb.ShiftTrafficInvocat
 ```
 
 Runnable: [`ExampleRun_Cancel`](https://pkg.go.dev/github.com/dangra/durable#example-Run_Cancel).
+
+### What about context.Context?
+
+Context is a delivery mechanism here, never the source of truth. Four
+contexts are in play, deliberately unrelated:
+
+1. **`Schedule`'s ctx** governs only the store write that accepts the
+   Run. It never reaches handlers — the Run outlives the request — and
+   no values flow from it; annotations are the only bridge.
+2. **The attempt ctx** a handler receives is derived fresh per attempt
+   from the *engine's* context. It dies for exactly two reasons:
+   engine shutdown, or the one-time preemption after `Cancel`.
+3. **`Cancel`'s own ctx** governs only the store write recording the
+   request. The durable record is the real signal; the preemption is a
+   courtesy wake-up for a blocked handler.
+4. **Post-cancel attempts get a fresh, live ctx.** Cancellation is not
+   delivered as a permanently dead context: the re-executed attempt
+   sees `inv.CancelRequested()` on a working ctx, and unwind handlers
+   run under live contexts too — compensation must be able to do real
+   work, and a poisoned ctx would make rollback impossible. The actual
+   stop is enforced by the engine (a pending cancel gates dispatch
+   from selecting new forward work), not by handlers honoring a dead
+   ctx.
+
+Engine **shutdown is not cancellation**: `Stop` kills every in-flight
+attempt ctx but leaves unresolved Runs nonterminal, with no failure
+recorded — the next `Start` resumes them (that is the
+[durability chapter](#durability-crash-restart-continue)). Shutdown is
+ephemeral and process-scoped; `Cancel` is durable intent that survives
+restart and drives the Run to a terminal `Canceled()` outcome via
+unwind.
 
 ## Composing runs: AwaitRun
 

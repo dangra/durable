@@ -36,6 +36,7 @@ import (
 	"github.com/dangra/durable/bboltstore"
 	"github.com/dangra/durable/engine"
 	"github.com/dangra/durable/observe"
+	"github.com/dangra/durable/pipelinedef"
 )
 
 // The flyd machine-start shape: a fat config input through a pipeline of
@@ -97,7 +98,7 @@ func countingObserver(writes, reads *atomic.Int64) observe.Observer {
 
 // newEnv builds a store and engine with the given definition bound, not
 // yet started.
-func newEnv(b *testing.B, def *engine.Definition, opts ...engine.Option) *env {
+func newEnv(b *testing.B, def *pipelinedef.Definition, opts ...engine.Option) *env {
 	b.Helper()
 	store, err := bboltstore.Open(filepath.Join(b.TempDir(), "perf.db"))
 	if err != nil {
@@ -114,7 +115,7 @@ func newEnv(b *testing.B, def *engine.Definition, opts ...engine.Option) *env {
 		engine.WithObserver(countingObserver(writes, reads)),
 	}, opts...)
 	e := engine.New(store, opts...)
-	pipe, err := def.Bind(e)
+	pipe, err := e.Bind(def)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -144,12 +145,12 @@ type stepSpec struct {
 	class     string // concurrency class, if any
 }
 
-func machinePipeline(id durable.PipelineID, specs [numSteps]stepSpec) *engine.Definition {
+func machinePipeline(id durable.PipelineID, specs [numSteps]stepSpec) *pipelinedef.Definition {
 	state := wrapperspb.Bytes(make([]byte, stateSize))
-	var steps []engine.StepConfig
+	var steps []pipelinedef.Step
 	for i, spec := range specs {
 		spec := spec
-		sc := engine.StepConfig{
+		sc := pipelinedef.Step{
 			ID:               durable.StepID(fmt.Sprintf("%s-step-%d/v1", id, i)),
 			HasState:         true,
 			Unwind:           spec.unwind,
@@ -171,7 +172,7 @@ func machinePipeline(id durable.PipelineID, specs [numSteps]stepSpec) *engine.De
 		}
 		steps = append(steps, sc)
 	}
-	return engine.NewDefinition(engine.DefinitionConfig{
+	return pipelinedef.New(pipelinedef.Config{
 		ID:       id,
 		Steps:    steps,
 		NewInput: func() proto.Message { return &wrapperspb.BytesValue{} },

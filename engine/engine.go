@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/dangra/durable"
 	"github.com/dangra/durable/observe"
+	"github.com/dangra/durable/pipelinedef"
 	"github.com/dangra/durable/storedriver"
 	"log/slog"
 	"math"
@@ -215,7 +216,7 @@ type Engine struct {
 	// pipelines and stepOwner are written by register, under mu, and
 	// frozen by Start; a Put after that panics, and workers read them
 	// lock-free.
-	pipelines frozen.Map[durable.PipelineID, *Definition]
+	pipelines frozen.Map[durable.PipelineID, *boundDef]
 	stepOwner frozen.Map[durable.StepID, durable.PipelineID]
 
 	// waiters broadcasts a Run's terminal/invalid notification to
@@ -273,7 +274,7 @@ func New(store storedriver.Store, opts ...Option) *Engine {
 	return e
 }
 
-func (e *Engine) register(d *Definition) error {
+func (e *Engine) register(d *boundDef) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.started {
@@ -344,7 +345,7 @@ func (e *Engine) Start(ctx context.Context) error {
 	}
 
 	e.mu.Lock()
-	e.pipelines.Range(func(_ durable.PipelineID, d *Definition) bool {
+	e.pipelines.Range(func(_ durable.PipelineID, d *boundDef) bool {
 		for _, sc := range d.steps {
 			if sc.ConcurrencyClass != "" {
 				if _, ok := e.classCapacity[sc.ConcurrencyClass]; !ok {
@@ -1095,7 +1096,7 @@ func (e *Engine) retryGate(rec *storedriver.RunRecord) (time.Duration, bool) {
 
 // runForward reserves an attempt and executes one forward operation.
 // done=true means the loop should reconcile again immediately.
-func (e *Engine) runForward(rec *storedriver.RunRecord, def *Definition, stepID durable.StepID) (done bool, delay time.Duration, again bool) {
+func (e *Engine) runForward(rec *storedriver.RunRecord, def *boundDef, stepID durable.StepID) (done bool, delay time.Duration, again bool) {
 	sc := def.step(stepID)
 	sr := rec.Step(stepID)
 
@@ -1206,7 +1207,7 @@ func (e *Engine) runForward(rec *storedriver.RunRecord, def *Definition, stepID 
 }
 
 // runUnwind reserves an attempt and executes one unwind operation.
-func (e *Engine) runUnwind(rec *storedriver.RunRecord, def *Definition, stepID durable.StepID) (done bool, delay time.Duration, again bool) {
+func (e *Engine) runUnwind(rec *storedriver.RunRecord, def *boundDef, stepID durable.StepID) (done bool, delay time.Duration, again bool) {
 	sc := def.step(stepID)
 	sr := rec.Step(stepID)
 
@@ -1285,7 +1286,7 @@ func (e *Engine) runUnwind(rec *storedriver.RunRecord, def *Definition, stepID d
 
 // reduceAndComplete runs the Reducer (if any) and commits terminal success.
 // It returns false when the Run became invalid or the store failed.
-func (e *Engine) reduceAndComplete(rec *storedriver.RunRecord, def *Definition) bool {
+func (e *Engine) reduceAndComplete(rec *storedriver.RunRecord, def *boundDef) bool {
 	if def.cfg.Reduce != nil {
 		view := &reduceView{
 			input:    rec.Input,
@@ -1322,7 +1323,7 @@ func (e *Engine) reduceAndComplete(rec *storedriver.RunRecord, def *Definition) 
 	return true
 }
 
-func (e *Engine) invocation(rec *storedriver.RunRecord, def *Definition, stepID durable.StepID, attempt uint64, phase durable.Phase) *attemptInvocation {
+func (e *Engine) invocation(rec *storedriver.RunRecord, def *boundDef, stepID durable.StepID, attempt uint64, phase durable.Phase) *attemptInvocation {
 	return &attemptInvocation{
 		pipelineID:      rec.PipelineID,
 		resourceID:      rec.ResourceID,
@@ -1355,7 +1356,7 @@ func committedStates(rec *storedriver.RunRecord) map[durable.StepID][]byte {
 	return states
 }
 
-func (e *Engine) invokeForward(sc *StepConfig, inv *attemptInvocation) (state proto.Message, panicked bool, err error) {
+func (e *Engine) invokeForward(sc *pipelinedef.Step, inv *attemptInvocation) (state proto.Message, panicked bool, err error) {
 	defer func() {
 		if p := recover(); p != nil {
 			panicked = true
@@ -1371,7 +1372,7 @@ func (e *Engine) invokeForward(sc *StepConfig, inv *attemptInvocation) (state pr
 	return state, false, err
 }
 
-func (e *Engine) invokeUnwind(sc *StepConfig, inv *attemptInvocation, failure durable.Failure) (panicked bool, err error) {
+func (e *Engine) invokeUnwind(sc *pipelinedef.Step, inv *attemptInvocation, failure durable.Failure) (panicked bool, err error) {
 	defer func() {
 		if p := recover(); p != nil {
 			panicked = true
@@ -1390,7 +1391,7 @@ func (e *Engine) invokeUnwind(sc *StepConfig, inv *attemptInvocation, failure du
 	return false, err
 }
 
-func (e *Engine) invokeReduce(def *Definition, view *reduceView) (out proto.Message, err error) {
+func (e *Engine) invokeReduce(def *boundDef, view *reduceView) (out proto.Message, err error) {
 	defer func() {
 		if p := recover(); p != nil {
 			err = fmt.Errorf("reducer panic: %v", p)

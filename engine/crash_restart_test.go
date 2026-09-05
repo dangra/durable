@@ -17,6 +17,7 @@ import (
 	"github.com/dangra/durable/bboltstore"
 	"github.com/dangra/durable/durabletest"
 	"github.com/dangra/durable/engine"
+	"github.com/dangra/durable/pipelinedef"
 )
 
 // The crash-restart model stress exercises durable's core promise: an
@@ -57,11 +58,11 @@ const (
 	crashRuns     = 14
 )
 
-func crashPipeline(seed uint64) *engine.Definition {
-	var steps []engine.StepConfig
+func crashPipeline(seed uint64) *pipelinedef.Definition {
+	var steps []pipelinedef.Step
 	for i := 0; i < crashSteps; i++ {
 		id := durable.StepID(fmt.Sprintf("crash-step-%d/v1", i))
-		sc := engine.StepConfig{
+		sc := pipelinedef.Step{
 			ID:     id,
 			Unwind: i < crashSteps-1,
 			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
@@ -92,15 +93,15 @@ func crashPipeline(seed uint64) *engine.Definition {
 		}
 		steps = append(steps, sc)
 	}
-	return engine.NewDefinition(engine.DefinitionConfig{ID: "crash", Steps: steps})
+	return pipelinedef.New(pipelinedef.Config{ID: "crash", Steps: steps})
 }
 
 // waiterPipeline parks on a scripted target Run via AwaitRun, covering
 // await parks and watcher recovery across restarts.
-func waiterPipeline(target func(durable.ResourceID) durable.RunID) *engine.Definition {
-	return engine.NewDefinition(engine.DefinitionConfig{
+func waiterPipeline(target func(durable.ResourceID) durable.RunID) *pipelinedef.Definition {
+	return pipelinedef.New(pipelinedef.Config{
 		ID: "crash-waiter",
-		Steps: []engine.StepConfig{{
+		Steps: []pipelinedef.Step{{
 			ID: "await/v1",
 			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				if _, ok := inv.AwaitedRunID(); ok {
@@ -152,11 +153,11 @@ func runCrashScenario(t *testing.T, seed uint64, store storedriver.Store) {
 		e := engine.New(store, fastRetry,
 			engine.WithRecoveryBackoff(0), engine.WithConcurrency(8),
 			engine.WithLogger(discardTestLogger()))
-		crashPipe, err := def.Bind(e)
+		crashPipe, err := e.Bind(def)
 		if err != nil {
 			t.Fatalf("Bind crash: %v", err)
 		}
-		waitPipe, err := waiter.Bind(e)
+		waitPipe, err := e.Bind(waiter)
 		if err != nil {
 			t.Fatalf("Bind waiter: %v", err)
 		}

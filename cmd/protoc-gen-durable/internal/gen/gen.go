@@ -20,6 +20,7 @@ import (
 const (
 	durablePkg = protogen.GoImportPath("github.com/dangra/durable")
 	enginePkg  = protogen.GoImportPath("github.com/dangra/durable/engine")
+	defPkg     = protogen.GoImportPath("github.com/dangra/durable/pipelinedef")
 	contextPkg = protogen.GoImportPath("context")
 	syncPkg    = protogen.GoImportPath("sync")
 	protoPkg   = protogen.GoImportPath("google.golang.org/protobuf/proto")
@@ -278,12 +279,12 @@ func emitStepRef(g *protogen.GeneratedFile, s *stepDecl) {
 	id := s.opts.GetId()
 	if s.hasState {
 		g.P("// ", goName, "Step is the typed reference to the state-producing step ", strconv(id), ".")
-		g.P("var ", goName, "Step = ", g.QualifiedGoIdent(durablePkg.Ident("NewStateStepRef")),
+		g.P("var ", goName, "Step = ", g.QualifiedGoIdent(defPkg.Ident("StateStepRef")),
 			"(", strconv(id), ", func() *", g.QualifiedGoIdent(s.msg.GoIdent), " { return &", g.QualifiedGoIdent(s.msg.GoIdent), "{} })")
 	} else {
 		g.P("// ", goName, "Step is the reference to the stateless step ", strconv(id), ".")
 		g.P("// It is not accepted by State lookup.")
-		g.P("var ", goName, "Step = ", g.QualifiedGoIdent(durablePkg.Ident("NewStepRef")), "(", strconv(id), ")")
+		g.P("var ", goName, "Step = ", g.QualifiedGoIdent(defPkg.Ident("StepRef")), "(", strconv(id), ")")
 	}
 	g.P()
 }
@@ -448,7 +449,7 @@ func emitDefinition(g *protogen.GeneratedFile, pl *pipelineDecl) {
 
 	g.P("// ", name, "Definition is the unbound pipeline definition.")
 	g.P("type ", name, "Definition struct {")
-	g.P("def *", g.QualifiedGoIdent(enginePkg.Ident("Definition")))
+	g.P("def *", g.QualifiedGoIdent(defPkg.Ident("Definition")))
 	g.P("}")
 	g.P()
 
@@ -467,7 +468,7 @@ func emitDefinition(g *protogen.GeneratedFile, pl *pipelineDecl) {
 		g.P("reduce ", name, "Reducer,")
 	}
 	g.P(") *", name, "Definition {")
-	g.P("return &", name, "Definition{def: ", g.QualifiedGoIdent(enginePkg.Ident("NewDefinition")), "(", g.QualifiedGoIdent(enginePkg.Ident("DefinitionConfig")), "{")
+	g.P("return &", name, "Definition{def: ", g.QualifiedGoIdent(defPkg.Ident("New")), "(", g.QualifiedGoIdent(defPkg.Ident("Config")), "{")
 	g.P("ID: ", strconv(pl.opts.GetId()), ",")
 	if eg := pl.opts.GetExclusionGroup(); eg != "" {
 		g.P("ExclusionGroup: ", strconv(eg), ",")
@@ -486,7 +487,7 @@ func emitDefinition(g *protogen.GeneratedFile, pl *pipelineDecl) {
 		g.P("return reduce(x)")
 		g.P("},")
 	}
-	g.P("Steps: []", g.QualifiedGoIdent(enginePkg.Ident("StepConfig")), "{")
+	g.P("Steps: []", g.QualifiedGoIdent(defPkg.Ident("Step")), "{")
 	for _, s := range pl.steps {
 		goName := s.msg.GoIdent.GoName
 		param := lowerFirst(goName)
@@ -530,7 +531,7 @@ func emitDefinition(g *protogen.GeneratedFile, pl *pipelineDecl) {
 	g.P("// Bind registers the definition with an engine. It is allowed only before")
 	g.P("// Engine.Start.")
 	g.P("func (d *", name, "Definition) Bind(e *", g.QualifiedGoIdent(enginePkg.Ident("Engine")), ") (*", name, "Pipeline, error) {")
-	g.P("p, err := d.def.Bind(e)")
+	g.P("p, err := e.Bind(d.def)")
 	g.P("if err != nil {")
 	g.P("return nil, err")
 	g.P("}")

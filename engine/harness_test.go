@@ -13,6 +13,7 @@ import (
 
 	"github.com/dangra/durable"
 	"github.com/dangra/durable/engine"
+	"github.com/dangra/durable/pipelinedef"
 	"github.com/dangra/durable/storedriver"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/wrapperspb"
@@ -31,11 +32,11 @@ func newString() *wrapperspb.StringValue { return &wrapperspb.StringValue{} }
 // refFor builds the typed reference a generator would emit for a
 // state-producing step whose state is a StringValue.
 func refFor(id durable.StepID) durable.StateStepRef[*wrapperspb.StringValue] {
-	return durable.NewStateStepRef(id, newString)
+	return pipelinedef.StateStepRef(id, newString)
 }
 
-func stateless(id durable.StepID, run func(context.Context, durable.Invocation) error) engine.StepConfig {
-	return engine.StepConfig{
+func stateless(id durable.StepID, run func(context.Context, durable.Invocation) error) pipelinedef.Step {
+	return pipelinedef.Step{
 		ID: id,
 		Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 			return nil, run(ctx, inv)
@@ -43,12 +44,12 @@ func stateless(id durable.StepID, run func(context.Context, durable.Invocation) 
 	}
 }
 
-func startEngine(t *testing.T, store storedriver.Store, defs ...*engine.Definition) (*engine.Engine, []*engine.Pipeline) {
+func startEngine(t *testing.T, store storedriver.Store, defs ...*pipelinedef.Definition) (*engine.Engine, []*engine.Pipeline) {
 	t.Helper()
 	e := engine.New(store, fastRetry, engine.WithRecoveryBackoff(0))
 	var pipes []*engine.Pipeline
 	for _, d := range defs {
-		p, err := d.Bind(e)
+		p, err := e.Bind(d)
 		if err != nil {
 			t.Fatalf("Bind: %v", err)
 		}
@@ -102,10 +103,10 @@ func waitForState(t *testing.T, run engine.Run, want engine.RunState) engine.Sta
 	}
 }
 
-func trivialChild(id durable.PipelineID) *engine.Definition {
-	return engine.NewDefinition(engine.DefinitionConfig{
+func trivialChild(id durable.PipelineID) *pipelinedef.Definition {
+	return pipelinedef.New(pipelinedef.Config{
 		ID: id,
-		Steps: []engine.StepConfig{
+		Steps: []pipelinedef.Step{
 			stateless("c/v1", func(ctx context.Context, inv durable.Invocation) error { return nil }),
 		},
 	})
@@ -136,10 +137,10 @@ func (g *gates) open(r durable.ResourceID) { close(g.get(r)) }
 
 // gatedChild completes when its resource's gate opens, and resolves
 // promptly on cancellation.
-func gatedChild(id durable.PipelineID, g *gates) *engine.Definition {
-	return engine.NewDefinition(engine.DefinitionConfig{
+func gatedChild(id durable.PipelineID, g *gates) *pipelinedef.Definition {
+	return pipelinedef.New(pipelinedef.Config{
 		ID: id,
-		Steps: []engine.StepConfig{
+		Steps: []pipelinedef.Step{
 			stateless("c/v1", func(ctx context.Context, inv durable.Invocation) error {
 				if inv.CancelRequested() {
 					return nil

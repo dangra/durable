@@ -34,16 +34,16 @@ type StateSource interface {
 // those instead.
 func LookupState[T proto.Message](src StateSource, ref StateStepRef[T]) (T, bool) {
 	var zero T
-	b, ok := src.StateBytes(ref.id)
+	b, ok := src.StateBytes(ref.Step)
 	if !ok {
 		return zero, false
 	}
-	msg := ref.new()
+	msg := ref.New()
 	if err := proto.Unmarshal(b, msg); err != nil {
 		// Committed State that cannot be decoded under the current schema
 		// is a runtime contract violation: the Run becomes invalid for the
 		// current deployment.
-		src.ReportViolation(&stateDecodeError{step: ref.id, err: err})
+		src.ReportViolation(&stateDecodeError{step: ref.Step, err: err})
 		return zero, false
 	}
 	return msg, true

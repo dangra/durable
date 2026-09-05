@@ -12,6 +12,7 @@ import (
 	"github.com/dangra/durable"
 	"github.com/dangra/durable/durabletest"
 	"github.com/dangra/durable/engine"
+	"github.com/dangra/durable/pipelinedef"
 	"github.com/dangra/durable/storedriver"
 	"google.golang.org/protobuf/proto"
 )
@@ -20,10 +21,10 @@ func TestRecoveryResumesAcrossEngines(t *testing.T) {
 	store := durabletest.NewMemStore()
 	var attempts atomic.Uint64
 
-	makeDef := func(succeed bool) *engine.Definition {
-		return engine.NewDefinition(engine.DefinitionConfig{
+	makeDef := func(succeed bool) *pipelinedef.Definition {
+		return pipelinedef.New(pipelinedef.Config{
 			ID: "recoverable",
-			Steps: []engine.StepConfig{
+			Steps: []pipelinedef.Step{
 				stateless("only/v1", func(ctx context.Context, inv durable.Invocation) error {
 					attempts.Store(inv.Attempt())
 					if !succeed {
@@ -37,7 +38,7 @@ func TestRecoveryResumesAcrossEngines(t *testing.T) {
 
 	// Deployment 1: the step never succeeds.
 	e1 := engine.New(store, fastRetry)
-	p1, _ := makeDef(false).Bind(e1)
+	p1, _ := e1.Bind(makeDef(false))
 	if err := e1.Start(context.Background()); err != nil {
 		t.Fatalf("Start1: %v", err)
 	}
@@ -59,7 +60,7 @@ func TestRecoveryResumesAcrossEngines(t *testing.T) {
 
 	// Deployment 2: same store, corrected handler.
 	e2 := engine.New(store, fastRetry, engine.WithRecoveryBackoff(0))
-	p2, _ := makeDef(true).Bind(e2)
+	p2, _ := e2.Bind(makeDef(true))
 	if err := e2.Start(context.Background()); err != nil {
 		t.Fatalf("Start2: %v", err)
 	}
@@ -85,9 +86,9 @@ func TestRetiredStepIsBypassed(t *testing.T) {
 	})
 
 	var bRan, cRan atomic.Bool
-	def := engine.NewDefinition(engine.DefinitionConfig{
+	def := pipelinedef.New(pipelinedef.Config{
 		ID: "evolving",
-		Steps: []engine.StepConfig{
+		Steps: []pipelinedef.Step{
 			stateless("a/v1", func(context.Context, durable.Invocation) error { return nil }),
 			{
 				ID:      "b/v1",
@@ -129,9 +130,9 @@ func TestRetiredUnresolvedStepContinues(t *testing.T) {
 	})
 
 	var bAttempt atomic.Uint64
-	def := engine.NewDefinition(engine.DefinitionConfig{
+	def := pipelinedef.New(pipelinedef.Config{
 		ID: "evolving",
-		Steps: []engine.StepConfig{
+		Steps: []pipelinedef.Step{
 			stateless("a/v1", func(context.Context, durable.Invocation) error { return nil }),
 			{
 				ID:      "b/v1",
@@ -162,9 +163,9 @@ func TestUnresolvedStepRemovedIsInvalid(t *testing.T) {
 		"b/v1": {ForwardStatus: storedriver.OpUnresolved, ForwardAttempts: 1},
 	})
 
-	def := engine.NewDefinition(engine.DefinitionConfig{
+	def := pipelinedef.New(pipelinedef.Config{
 		ID: "evolving",
-		Steps: []engine.StepConfig{
+		Steps: []pipelinedef.Step{
 			stateless("a/v1", func(context.Context, durable.Invocation) error { return nil }),
 			// b/v1 removed while unresolved.
 			stateless("c/v1", func(context.Context, durable.Invocation) error { return nil }),
@@ -189,10 +190,10 @@ func TestUnresolvedStepRemovedIsInvalid(t *testing.T) {
 func TestInvalidReducerRepairedByRedeploy(t *testing.T) {
 	store := durabletest.NewMemStore()
 
-	makeDef := func(broken bool) *engine.Definition {
-		return engine.NewDefinition(engine.DefinitionConfig{
+	makeDef := func(broken bool) *pipelinedef.Definition {
+		return pipelinedef.New(pipelinedef.Config{
 			ID: "reduced",
-			Steps: []engine.StepConfig{
+			Steps: []pipelinedef.Step{
 				stateless("s/v1", func(context.Context, durable.Invocation) error { return nil }),
 			},
 			Reduce: func(v durable.ReduceView) proto.Message {
@@ -206,7 +207,7 @@ func TestInvalidReducerRepairedByRedeploy(t *testing.T) {
 
 	// Deployment 1: broken reducer invalidates the Run without retry loops.
 	e1 := engine.New(store, fastRetry)
-	p1, _ := makeDef(true).Bind(e1)
+	p1, _ := e1.Bind(makeDef(true))
 	if err := e1.Start(context.Background()); err != nil {
 		t.Fatalf("Start1: %v", err)
 	}
@@ -224,7 +225,7 @@ func TestInvalidReducerRepairedByRedeploy(t *testing.T) {
 
 	// Deployment 2: corrected reducer completes the same nonterminal Run.
 	e2 := engine.New(store, fastRetry, engine.WithRecoveryBackoff(0))
-	p2, _ := makeDef(false).Bind(e2)
+	p2, _ := e2.Bind(makeDef(false))
 	if err := e2.Start(context.Background()); err != nil {
 		t.Fatalf("Start2: %v", err)
 	}
@@ -241,9 +242,9 @@ func TestInvalidReducerRepairedByRedeploy(t *testing.T) {
 }
 
 func TestNilStateFromStateProducingHandlerIsInvalid(t *testing.T) {
-	def := engine.NewDefinition(engine.DefinitionConfig{
+	def := pipelinedef.New(pipelinedef.Config{
 		ID: "nilstate",
-		Steps: []engine.StepConfig{
+		Steps: []pipelinedef.Step{
 			{
 				ID:       "s/v1",
 				HasState: true,

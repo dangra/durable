@@ -15,6 +15,7 @@ import (
 
 	"github.com/dangra/durable"
 	"github.com/dangra/durable/engine"
+	"github.com/dangra/durable/pipelinedef"
 )
 
 // The benchmarks model the flyd machine-start shape: a fat input (32KB
@@ -28,7 +29,7 @@ const (
 	benchSteps     = 8
 )
 
-func benchEngine(b *testing.B, def *engine.Definition) (*Store, *engine.Pipeline) {
+func benchEngine(b *testing.B, def *pipelinedef.Definition) (*Store, *engine.Pipeline) {
 	b.Helper()
 	s, err := Open(filepath.Join(b.TempDir(), "bench.db"))
 	if err != nil {
@@ -39,7 +40,7 @@ func benchEngine(b *testing.B, def *engine.Definition) (*Store, *engine.Pipeline
 		engine.WithConcurrency(64),
 		engine.WithLogger(slog.New(slog.DiscardHandler)),
 	)
-	p, err := def.Bind(e)
+	p, err := e.Bind(def)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -55,9 +56,9 @@ func benchEngine(b *testing.B, def *engine.Definition) (*Store, *engine.Pipeline
 
 func BenchmarkRunWrites(b *testing.B) {
 	state := make([]byte, benchStateSize)
-	var steps []engine.StepConfig
+	var steps []pipelinedef.Step
 	for i := 0; i < benchSteps; i++ {
-		steps = append(steps, engine.StepConfig{
+		steps = append(steps, pipelinedef.Step{
 			ID:       durable.StepID(fmt.Sprintf("step-%d/v1", i)),
 			HasState: true,
 			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
@@ -65,7 +66,7 @@ func BenchmarkRunWrites(b *testing.B) {
 			},
 		})
 	}
-	def := engine.NewDefinition(engine.DefinitionConfig{
+	def := pipelinedef.New(pipelinedef.Config{
 		ID:       "bench-run",
 		Steps:    steps,
 		NewInput: func() proto.Message { return &wrapperspb.BytesValue{} },
@@ -92,9 +93,9 @@ func BenchmarkRunWrites(b *testing.B) {
 
 func BenchmarkRetryWrites(b *testing.B) {
 	const retries = 10
-	def := engine.NewDefinition(engine.DefinitionConfig{
+	def := pipelinedef.New(pipelinedef.Config{
 		ID: "bench-retry",
-		Steps: []engine.StepConfig{{
+		Steps: []pipelinedef.Step{{
 			ID: "flaky/v1",
 			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				if inv.Attempt() <= retries {
@@ -130,16 +131,16 @@ func BenchmarkRetryWrites(b *testing.B) {
 // payloads isolate commit costs from byte costs.
 func BenchmarkConcurrentRuns(b *testing.B) {
 	const parallel = 32
-	var steps []engine.StepConfig
+	var steps []pipelinedef.Step
 	for i := 0; i < 4; i++ {
-		steps = append(steps, engine.StepConfig{
+		steps = append(steps, pipelinedef.Step{
 			ID: durable.StepID(fmt.Sprintf("step-%d/v1", i)),
 			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				return nil, nil
 			},
 		})
 	}
-	def := engine.NewDefinition(engine.DefinitionConfig{ID: "bench-conc", Steps: steps})
+	def := pipelinedef.New(pipelinedef.Config{ID: "bench-conc", Steps: steps})
 	_, p := benchEngine(b, def)
 
 	b.ResetTimer()

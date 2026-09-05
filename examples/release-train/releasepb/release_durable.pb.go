@@ -10,21 +10,22 @@ import (
 	context "context"
 	durable "github.com/dangra/durable"
 	engine "github.com/dangra/durable/engine"
+	pipelinedef "github.com/dangra/durable/pipelinedef"
 	proto "google.golang.org/protobuf/proto"
 	sync "sync"
 )
 
 // ProvisionEnvStep is the typed reference to the state-producing step "provision-env/v1".
-var ProvisionEnvStep = durable.NewStateStepRef("provision-env/v1", func() *ProvisionEnv { return &ProvisionEnv{} })
+var ProvisionEnvStep = pipelinedef.StateStepRef("provision-env/v1", func() *ProvisionEnv { return &ProvisionEnv{} })
 
 // RunMigrationsStep is the typed reference to the state-producing step "run-migrations/v1".
-var RunMigrationsStep = durable.NewStateStepRef("run-migrations/v1", func() *RunMigrations { return &RunMigrations{} })
+var RunMigrationsStep = pipelinedef.StateStepRef("run-migrations/v1", func() *RunMigrations { return &RunMigrations{} })
 
 // CanaryAnalysisStep is the typed reference to the state-producing step "canary-analysis/v1".
-var CanaryAnalysisStep = durable.NewStateStepRef("canary-analysis/v1", func() *CanaryAnalysis { return &CanaryAnalysis{} })
+var CanaryAnalysisStep = pipelinedef.StateStepRef("canary-analysis/v1", func() *CanaryAnalysis { return &CanaryAnalysis{} })
 
 // ShiftTrafficStep is the typed reference to the state-producing step "shift-traffic/v1".
-var ShiftTrafficStep = durable.NewStateStepRef("shift-traffic/v1", func() *ShiftTraffic { return &ShiftTraffic{} })
+var ShiftTrafficStep = pipelinedef.StateStepRef("shift-traffic/v1", func() *ShiftTraffic { return &ShiftTraffic{} })
 
 // ProvisionEnvInvocation is passed to ProvisionEnvHandler methods.
 type ProvisionEnvInvocation struct {
@@ -295,7 +296,7 @@ func (x *DeployService) State[T proto.Message](step durable.StateStepRef[T]) (T,
 
 // DeployServiceDefinition is the unbound pipeline definition.
 type DeployServiceDefinition struct {
-	def *engine.Definition
+	def *pipelinedef.Definition
 }
 
 // NewDeployService assembles the "deploy-service" pipeline definition
@@ -307,7 +308,7 @@ func NewDeployService(
 	shiftTraffic ShiftTrafficHandler,
 	reduce DeployServiceReducer,
 ) *DeployServiceDefinition {
-	return &DeployServiceDefinition{def: engine.NewDefinition(engine.DefinitionConfig{
+	return &DeployServiceDefinition{def: pipelinedef.New(pipelinedef.Config{
 		ID:       "deploy-service",
 		NewInput: func() proto.Message { return &DeployServiceInput{} },
 		Reduce: func(view durable.ReduceView) proto.Message {
@@ -316,7 +317,7 @@ func NewDeployService(
 			defer deployServiceViews.Delete(x)
 			return reduce(x)
 		},
-		Steps: []engine.StepConfig{
+		Steps: []pipelinedef.Step{
 			{
 				ID:       "provision-env/v1",
 				Unwind:   true,
@@ -376,7 +377,7 @@ func NewDeployService(
 // Bind registers the definition with an engine. It is allowed only before
 // Engine.Start.
 func (d *DeployServiceDefinition) Bind(e *engine.Engine) (*DeployServicePipeline, error) {
-	p, err := d.def.Bind(e)
+	p, err := e.Bind(d.def)
 	if err != nil {
 		return nil, err
 	}
@@ -509,18 +510,18 @@ func (r DeployServiceResult) Output() *DeployServiceOutput { return r.output }
 
 // PlanReleaseStep is the reference to the stateless step "plan/v1".
 // It is not accepted by State lookup.
-var PlanReleaseStep = durable.NewStepRef("plan/v1")
+var PlanReleaseStep = pipelinedef.StepRef("plan/v1")
 
 // ShipWebStep is the reference to the stateless step "ship-web/v1".
 // It is not accepted by State lookup.
-var ShipWebStep = durable.NewStepRef("ship-web/v1")
+var ShipWebStep = pipelinedef.StepRef("ship-web/v1")
 
 // ShipApiStep is the reference to the stateless step "ship-api/v1".
 // It is not accepted by State lookup.
-var ShipApiStep = durable.NewStepRef("ship-api/v1")
+var ShipApiStep = pipelinedef.StepRef("ship-api/v1")
 
 // AnnounceStep is the typed reference to the state-producing step "announce/v1".
-var AnnounceStep = durable.NewStateStepRef("announce/v1", func() *Announce { return &Announce{} })
+var AnnounceStep = pipelinedef.StateStepRef("announce/v1", func() *Announce { return &Announce{} })
 
 // PlanReleaseInvocation is passed to PlanReleaseHandler methods.
 type PlanReleaseInvocation struct {
@@ -758,7 +759,7 @@ func (x *ReleaseTrain) State[T proto.Message](step durable.StateStepRef[T]) (T, 
 
 // ReleaseTrainDefinition is the unbound pipeline definition.
 type ReleaseTrainDefinition struct {
-	def *engine.Definition
+	def *pipelinedef.Definition
 }
 
 // NewReleaseTrain assembles the "release-train" pipeline definition
@@ -769,10 +770,10 @@ func NewReleaseTrain(
 	shipApi ShipApiHandler,
 	announce AnnounceHandler,
 ) *ReleaseTrainDefinition {
-	return &ReleaseTrainDefinition{def: engine.NewDefinition(engine.DefinitionConfig{
+	return &ReleaseTrainDefinition{def: pipelinedef.New(pipelinedef.Config{
 		ID:       "release-train",
 		NewInput: func() proto.Message { return &ReleaseTrainInput{} },
-		Steps: []engine.StepConfig{
+		Steps: []pipelinedef.Step{
 			{
 				ID: "plan/v1",
 				Run: func(ctx context.Context, core durable.Invocation) (proto.Message, error) {
@@ -809,7 +810,7 @@ func NewReleaseTrain(
 // Bind registers the definition with an engine. It is allowed only before
 // Engine.Start.
 func (d *ReleaseTrainDefinition) Bind(e *engine.Engine) (*ReleaseTrainPipeline, error) {
-	p, err := d.def.Bind(e)
+	p, err := e.Bind(d.def)
 	if err != nil {
 		return nil, err
 	}

@@ -13,13 +13,14 @@ import (
 	"github.com/dangra/durable"
 	"github.com/dangra/durable/durabletest"
 	"github.com/dangra/durable/engine"
+	"github.com/dangra/durable/pipelinedef"
 	"google.golang.org/protobuf/proto"
 )
 
 func TestCancelScheduledRunFreesSlot(t *testing.T) {
-	def := engine.NewDefinition(engine.DefinitionConfig{
+	def := pipelinedef.New(pipelinedef.Config{
 		ID: "cancel-scheduled",
-		Steps: []engine.StepConfig{
+		Steps: []pipelinedef.Step{
 			stateless("s/v1", func(ctx context.Context, inv durable.Invocation) error {
 				t.Error("step of canceled scheduled run executed")
 				return nil
@@ -67,9 +68,9 @@ func TestCancelPreemptsAndUnwinds(t *testing.T) {
 		return nil
 	}
 	blocked := make(chan struct{})
-	def := engine.NewDefinition(engine.DefinitionConfig{
+	def := pipelinedef.New(pipelinedef.Config{
 		ID: "cancel-midflight",
-		Steps: []engine.StepConfig{
+		Steps: []pipelinedef.Step{
 			{
 				ID:     "a/v1",
 				Unwind: true,
@@ -137,9 +138,9 @@ func TestCancelPreemptsAndUnwinds(t *testing.T) {
 }
 
 func TestCancelTerminalRun(t *testing.T) {
-	def := engine.NewDefinition(engine.DefinitionConfig{
+	def := pipelinedef.New(pipelinedef.Config{
 		ID: "cancel-terminal",
-		Steps: []engine.StepConfig{
+		Steps: []pipelinedef.Step{
 			stateless("s/v1", func(context.Context, durable.Invocation) error { return nil }),
 		},
 	})
@@ -155,9 +156,9 @@ func TestCancelTerminalRun(t *testing.T) {
 
 func TestOrganicFailureBeatsCancel(t *testing.T) {
 	blocked := make(chan struct{})
-	def := engine.NewDefinition(engine.DefinitionConfig{
+	def := pipelinedef.New(pipelinedef.Config{
 		ID: "cancel-organic",
-		Steps: []engine.StepConfig{
+		Steps: []pipelinedef.Step{
 			stateless("s/v1", func(ctx context.Context, inv durable.Invocation) error {
 				if inv.CancelRequested() {
 					return durable.Fail(errors.New("broken anyway"))

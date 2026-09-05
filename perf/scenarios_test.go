@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/dangra/durable/engine"
+	"github.com/dangra/durable/pipelinedef"
 )
 
 func discardLogger() *slog.Logger { return slog.New(slog.DiscardHandler) }
@@ -74,9 +75,9 @@ type dualEnv struct {
 	healthyPipe *engine.Pipeline
 }
 
-func newStorePair(b *testing.B, storm, healthy *engine.Definition) (*dualEnv, error) {
+func newStorePair(b *testing.B, storm, healthy *pipelinedef.Definition) (*dualEnv, error) {
 	v := newEnv(b, storm)
-	healthyPipe, err := healthy.Bind(v.eng)
+	healthyPipe, err := v.eng.Bind(healthy)
 	if err != nil {
 		return nil, err
 	}

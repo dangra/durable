@@ -66,7 +66,7 @@ func StartAfter(d time.Duration) ScheduleOption {
 // handles wrap it.
 type Pipeline struct {
 	engine *Engine
-	def    *Definition
+	def    *boundDef
 }
 
 // ID returns the PipelineID.

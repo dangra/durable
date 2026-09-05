@@ -15,6 +15,7 @@ import (
 	"github.com/dangra/durable/contrib/durableotel"
 	"github.com/dangra/durable/durabletest"
 	"github.com/dangra/durable/engine"
+	"github.com/dangra/durable/pipelinedef"
 )
 
 // baggageCtx is a scheduling-side ctx carrying two baggage members, the
@@ -43,9 +44,9 @@ func runBaggageProbe(t *testing.T, tp *sdktrace.TracerProvider, schedule []engin
 	var mu sync.Mutex
 	seen, annotations = map[string]string{}, map[string]string{}
 
-	def := engine.NewDefinition(engine.DefinitionConfig{
+	def := pipelinedef.New(pipelinedef.Config{
 		ID: "baggage-probe",
-		Steps: []engine.StepConfig{{
+		Steps: []pipelinedef.Step{{
 			ID: "probe/v1",
 			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				mu.Lock()
@@ -63,7 +64,7 @@ func runBaggageProbe(t *testing.T, tp *sdktrace.TracerProvider, schedule []engin
 	eng := engine.New(durabletest.NewMemStore(), fastRetry, quietLogger(),
 		engine.WithMiddleware(durableotel.Middleware(
 			append([]durableotel.Option{durableotel.WithTracerProvider(tp)}, mwOpts...)...)))
-	pipe, err := def.Bind(eng)
+	pipe, err := eng.Bind(def)
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
 	}

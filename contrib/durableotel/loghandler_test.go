@@ -19,6 +19,7 @@ import (
 	"github.com/dangra/durable/contrib/durableotel"
 	"github.com/dangra/durable/durabletest"
 	"github.com/dangra/durable/engine"
+	"github.com/dangra/durable/pipelinedef"
 )
 
 // logLines decodes one JSON object per line from buf.
@@ -123,9 +124,9 @@ func TestLogCorrelationEndToEnd(t *testing.T) {
 	// after the run.
 	logger := slog.New(durableotel.NewLogHandler(slog.NewJSONHandler(&buf, nil)))
 
-	def := engine.NewDefinition(engine.DefinitionConfig{
+	def := pipelinedef.New(pipelinedef.Config{
 		ID: "logged",
-		Steps: []engine.StepConfig{{
+		Steps: []pipelinedef.Step{{
 			ID: "work/v1",
 			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				mu.Lock()
@@ -138,7 +139,7 @@ func TestLogCorrelationEndToEnd(t *testing.T) {
 	eng := engine.New(durabletest.NewMemStore(), fastRetry,
 		engine.WithLogger(logger),
 		engine.WithMiddleware(durableotel.Middleware(durableotel.WithTracerProvider(tp))))
-	pipe, err := def.Bind(eng)
+	pipe, err := eng.Bind(def)
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
 	}

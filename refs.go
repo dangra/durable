@@ -10,30 +10,23 @@ type StepIdentifier interface {
 	ID() StepID
 }
 
-// StepRef is a generated reference to a stateless Step. It is not accepted
-// by State lookup; passing it to a generated State method fails to compile.
+// StepRef is a reference to a stateless Step; generated packages export
+// one per stateless Step. It is not accepted by State lookup: passing it
+// to a generated State method fails to compile.
 type StepRef struct {
-	id StepID
+	Step StepID
 }
 
-// NewStepRef constructs a StepRef. It is intended for generated code.
-func NewStepRef(id StepID) StepRef { return StepRef{id: id} }
+func (r StepRef) ID() StepID { return r.Step }
 
-func (r StepRef) ID() StepID { return r.id }
-
-// StateStepRef is a generated typed reference to a state-producing Step.
-// It carries the Step identity and the concrete State type, so dynamic
-// State lookups are strongly typed with no assertions or reflection in
-// application code.
+// StateStepRef is a typed reference to a state-producing Step; generated
+// packages export one per such Step. It carries the Step identity and the
+// concrete State type, so dynamic State lookups are strongly typed with
+// no assertions or reflection in application code. New allocates the
+// message LookupState decodes into; a ref with a nil New is unusable.
 type StateStepRef[T proto.Message] struct {
-	id  StepID
-	new func() T
+	Step StepID
+	New  func() T
 }
 
-// NewStateStepRef constructs a StateStepRef. It is intended for generated
-// code.
-func NewStateStepRef[T proto.Message](id StepID, new func() T) StateStepRef[T] {
-	return StateStepRef[T]{id: id, new: new}
-}
-
-func (r StateStepRef[T]) ID() StepID { return r.id }
+func (r StateStepRef[T]) ID() StepID { return r.Step }

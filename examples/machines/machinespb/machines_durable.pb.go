@@ -10,22 +10,23 @@ import (
 	context "context"
 	durable "github.com/dangra/durable"
 	engine "github.com/dangra/durable/engine"
+	pipelinedef "github.com/dangra/durable/pipelinedef"
 	proto "google.golang.org/protobuf/proto"
 	sync "sync"
 )
 
 // ValidateStep is the reference to the stateless step "validate/v1".
 // It is not accepted by State lookup.
-var ValidateStep = durable.NewStepRef("validate/v1")
+var ValidateStep = pipelinedef.StepRef("validate/v1")
 
 // SelectHostStep is the typed reference to the state-producing step "select-host/v1".
-var SelectHostStep = durable.NewStateStepRef("select-host/v1", func() *SelectHost { return &SelectHost{} })
+var SelectHostStep = pipelinedef.StateStepRef("select-host/v1", func() *SelectHost { return &SelectHost{} })
 
 // ReserveCapacityStep is the typed reference to the state-producing step "reserve-capacity/v1".
-var ReserveCapacityStep = durable.NewStateStepRef("reserve-capacity/v1", func() *ReserveCapacity { return &ReserveCapacity{} })
+var ReserveCapacityStep = pipelinedef.StateStepRef("reserve-capacity/v1", func() *ReserveCapacity { return &ReserveCapacity{} })
 
 // CreateMachineStep is the typed reference to the state-producing step "create-machine/v1".
-var CreateMachineStep = durable.NewStateStepRef("create-machine/v1", func() *CreateMachine { return &CreateMachine{} })
+var CreateMachineStep = pipelinedef.StateStepRef("create-machine/v1", func() *CreateMachine { return &CreateMachine{} })
 
 // ValidateInvocation is passed to ValidateHandler methods.
 type ValidateInvocation struct {
@@ -282,7 +283,7 @@ func (x *ProvisionMachine) State[T proto.Message](step durable.StateStepRef[T]) 
 
 // ProvisionMachineDefinition is the unbound pipeline definition.
 type ProvisionMachineDefinition struct {
-	def *engine.Definition
+	def *pipelinedef.Definition
 }
 
 // NewProvisionMachine assembles the "provision-machine" pipeline definition
@@ -294,7 +295,7 @@ func NewProvisionMachine(
 	createMachine CreateMachineHandler,
 	reduce ProvisionMachineReducer,
 ) *ProvisionMachineDefinition {
-	return &ProvisionMachineDefinition{def: engine.NewDefinition(engine.DefinitionConfig{
+	return &ProvisionMachineDefinition{def: pipelinedef.New(pipelinedef.Config{
 		ID:             "provision-machine",
 		ExclusionGroup: "machine-lifecycle",
 		NewInput:       func() proto.Message { return &ProvisionMachineInput{} },
@@ -304,7 +305,7 @@ func NewProvisionMachine(
 			defer provisionMachineViews.Delete(x)
 			return reduce(x)
 		},
-		Steps: []engine.StepConfig{
+		Steps: []pipelinedef.Step{
 			{
 				ID: "validate/v1",
 				Run: func(ctx context.Context, core durable.Invocation) (proto.Message, error) {
@@ -356,7 +357,7 @@ func NewProvisionMachine(
 // Bind registers the definition with an engine. It is allowed only before
 // Engine.Start.
 func (d *ProvisionMachineDefinition) Bind(e *engine.Engine) (*ProvisionMachinePipeline, error) {
-	p, err := d.def.Bind(e)
+	p, err := e.Bind(d.def)
 	if err != nil {
 		return nil, err
 	}
@@ -489,7 +490,7 @@ func (r ProvisionMachineResult) Output() *ProvisionMachineOutput { return r.outp
 
 // ReleaseMachineStep is the reference to the stateless step "release-machine/v1".
 // It is not accepted by State lookup.
-var ReleaseMachineStep = durable.NewStepRef("release-machine/v1")
+var ReleaseMachineStep = pipelinedef.StepRef("release-machine/v1")
 
 // ReleaseMachineInvocation is passed to ReleaseMachineHandler methods.
 type ReleaseMachineInvocation struct {
@@ -559,7 +560,7 @@ func (x *DecommissionMachine) State[T proto.Message](step durable.StateStepRef[T
 
 // DecommissionMachineDefinition is the unbound pipeline definition.
 type DecommissionMachineDefinition struct {
-	def *engine.Definition
+	def *pipelinedef.Definition
 }
 
 // NewDecommissionMachine assembles the "decommission-machine" pipeline definition
@@ -567,10 +568,10 @@ type DecommissionMachineDefinition struct {
 func NewDecommissionMachine(
 	releaseMachine ReleaseMachineHandler,
 ) *DecommissionMachineDefinition {
-	return &DecommissionMachineDefinition{def: engine.NewDefinition(engine.DefinitionConfig{
+	return &DecommissionMachineDefinition{def: pipelinedef.New(pipelinedef.Config{
 		ID:             "decommission-machine",
 		ExclusionGroup: "machine-lifecycle",
-		Steps: []engine.StepConfig{
+		Steps: []pipelinedef.Step{
 			{
 				ID: "release-machine/v1",
 				Run: func(ctx context.Context, core durable.Invocation) (proto.Message, error) {
@@ -584,7 +585,7 @@ func NewDecommissionMachine(
 // Bind registers the definition with an engine. It is allowed only before
 // Engine.Start.
 func (d *DecommissionMachineDefinition) Bind(e *engine.Engine) (*DecommissionMachinePipeline, error) {
-	p, err := d.def.Bind(e)
+	p, err := e.Bind(d.def)
 	if err != nil {
 		return nil, err
 	}

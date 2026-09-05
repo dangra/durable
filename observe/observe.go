@@ -52,7 +52,7 @@ type Observer struct {
 	// RunsReaped fires after each retention sweep that deleted anything.
 	RunsReaped func(count int)
 	// StoreOp fires after every storedriver.Store call, reads included. Installing
-	// it wraps the storedriver.Store at NewEngine time.
+	// it wraps the storedriver.Store at engine.New time.
 	StoreOp func(StoreOpEvent)
 }
 

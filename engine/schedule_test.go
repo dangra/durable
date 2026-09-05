@@ -33,7 +33,7 @@ func TestScheduleValidation(t *testing.T) {
 		t.Fatalf("Bind: %v", err)
 	}
 	if _, _, err := p.Schedule(context.Background(), "r", str("x")); !errors.Is(err, engine.ErrNotStarted) {
-		t.Fatalf("Schedule before Start = %v, want ErrEngineNotStarted", err)
+		t.Fatalf("Schedule before Start = %v, want engine.ErrNotStarted", err)
 	}
 	if err := e.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)

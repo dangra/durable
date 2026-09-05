@@ -136,8 +136,9 @@ bboltstore, durabletest, contrib/durableotel, generated code
   contract does not depend on the store SPI.
 
 Normative identifiers in this specification are qualified by package
-where it matters; unqualified names (`Invocation`, `Fail`, `Wake`) are
-the `durable` package's.
+where it matters. Unqualified handler-facing names (`Invocation`,
+`Fail`, `Wake`) are the `durable` package's; unqualified runtime names
+(`Engine`, `Run`, `Result`, `Status`, `RunState`) are `engine`'s.
 
 ---
 

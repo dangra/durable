@@ -16,7 +16,7 @@ import (
 // storage layer's key encoding reserves NUL as a field separator (a NUL
 // inside an identifier could alias two distinct slots onto one key), and
 // the durable representation serializes identifiers into protobuf string
-// fields, which reject invalid UTF-8. NewDefinition panics on a bad
+// fields, which reject invalid UTF-8. Engine.Bind rejects a bad
 // identifier (a code-generation bug); Schedule rejects a bad ResourceID
 // with an error.
 

@@ -14,8 +14,17 @@ definition using monotonic forward and unwind frontiers.
 
 Start with the [guided tour](docs/tour.md) — every feature introduced
 as an operational need, with runnable
-[godoc examples](https://pkg.go.dev/github.com/dangra/durable#pkg-examples).
+[godoc examples](https://pkg.go.dev/github.com/dangra/durable/engine#pkg-examples).
 The full specification lives in [spec/](spec/README.md).
+
+The module is split by audience. Handler code imports only `durable`,
+the handler contract: what a step receives, how it resolves, and the
+middleware layer. Wiring code imports `engine`, which runs pipelines:
+opening a store, binding the generated definitions, scheduling and
+waiting on runs. Generated code additionally imports `pipelinedef`, the
+type-erased definition it builds; the shared vocabulary lives in
+`kernel` and is aliased into `durable`. Store implementers use
+`storedriver`, telemetry adapters `observe`.
 
 **Requires Go 1.27+** (the generated `State` API uses generic methods).
 
@@ -63,7 +72,7 @@ func (h *createMachine) Run(
 }
 ```
 
-Run it:
+Wire it up — this side of an application imports `engine`, handler files never do:
 
 ```go
 store, _ := bboltstore.Open("machines.db")

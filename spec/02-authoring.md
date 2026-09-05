@@ -573,7 +573,39 @@ returns:
 *machines.ProvisionMachinePipeline
 ```
 
-`Bind` is allowed only before `Engine.Start`.
+`Bind` is allowed only before `Engine.Start` (`engine.ErrStarted`
+afterwards). The generated `Bind` delegates to `engine.Bind`, which is
+the single validator of a definition: an empty or malformed identifier,
+a pipeline with no steps or a duplicated step, a step with no forward
+adapter, or an unwind declaration that disagrees with its adapter is a
+`Bind` error. For generated code such an error indicates a
+code-generation bug; construction itself never panics.
+
+---
+
+## Untyped definitions
+
+Beneath every generated constructor is a `pipelinedef.Definition`: the
+type-erased description of a pipeline (`pipelinedef.Config`, one
+`pipelinedef.Step` per step, the `NewInput` and `Reduce` adapters).
+Generated code builds it and hands it to `engine.Bind`; hand-rolled
+pipelines — tests, mostly — build the same value directly:
+
+```go
+def := pipelinedef.New(pipelinedef.Config{
+    ID: "p",
+    Steps: []pipelinedef.Step{{
+        ID:  "s/v1",
+        Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) { ... },
+    }},
+})
+pipe, err := eng.Bind(def)
+```
+
+`pipelinedef.New` validates nothing; it copies the step list and applies
+the pipeline-level concurrency class. The typed step references generated
+packages export are built the same way (`pipelinedef.StepRef`,
+`pipelinedef.StateStepRef`) and are plain values with exported fields.
 
 ---
 
@@ -683,11 +715,11 @@ type PipelineMismatchError struct {
 
 ## Plain Run handle
 
-Conceptually:
+Conceptually (in package `engine`):
 
 ```go
 type Run struct {
-    id     RunID
+    id     durable.RunID
     engine *Engine
 }
 ```

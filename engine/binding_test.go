@@ -35,7 +35,7 @@ func TestStepOwnershipIsExclusive(t *testing.T) {
 
 // TestBindAfterStartRejected pins the registration freeze that the
 // engine's lock-free pipelines read rests on: once Start has run,
-// binding another definition must fail with ErrEngineStarted — while
+// binding another definition must fail with engine.ErrStarted — while
 // runs are actively executing, so under the race detector this also
 // covers the exact interleaving of a rejected concurrent registration
 // attempt against unlocked pipeline lookups.
@@ -75,7 +75,7 @@ func TestBindAfterStartRejected(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			if _, err := e.Bind(latecomer); !errors.Is(err, engine.ErrStarted) {
-				t.Errorf("Bind after Start = %v, want ErrEngineStarted; the pipelines freeze is broken", err)
+				t.Errorf("Bind after Start = %v, want engine.ErrStarted; the pipelines freeze is broken", err)
 			}
 		}()
 	}

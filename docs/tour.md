@@ -321,9 +321,12 @@ Steps are named by the references generated code exports (or a bare
 ## Composing runs: AwaitRun
 
 A release train deploys many services: a parent run schedules child
-runs and waits for them. Handlers must never block on other runs
-(`run.Wait` inside a handler can exhaust the worker pool and deadlock);
-instead, a handler *parks*:
+runs and waits for them. Handlers cannot block on other runs: a
+blocked handler holds a worker slot and can deadlock the pool, so
+`run.Wait` called with the attempt context fails fast with
+`durable.ErrRunInProgress` when the target is still running (it still
+returns the `Result` of an already-terminal run). Instead, a handler
+*parks*:
 
 ```go
 func (h *shipServices) Run(ctx context.Context, inv releasepb.ShipServicesInvocation) (*releasepb.ShipServices, error) {

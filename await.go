@@ -19,9 +19,10 @@ import "errors"
 // Awaiting must not form a cycle; a Run whose park would close a cycle of
 // awaits becomes invalid for the current deployment.
 //
-// Handlers MUST NOT block on other Runs (run.Wait inside a handler can
-// exhaust the worker pool and deadlock); AwaitRun is the mechanism for
-// cross-run waiting.
+// Handlers cannot block on other Runs: Run.Wait called with the attempt
+// context fails fast with ErrRunInProgress on a nonterminal target, since
+// a handler blocking on another Run holds a worker slot and can deadlock
+// the pool. AwaitRun is the mechanism for cross-run waiting.
 func AwaitRun(id RunID) error {
 	return &awaitResolution{target: id}
 }

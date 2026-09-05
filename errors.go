@@ -42,6 +42,12 @@ func (e *PreemptedError) Error() string {
 	return "durable: attempt preempted by cancellation: " + e.Cause
 }
 
+// ErrRunInProgress is returned by Run.Wait when it is called from inside a
+// handler (with the attempt context, or one derived from it) and the
+// target Run is not yet terminal. Wait never blocks a worker: a handler
+// that needs another Run's outcome parks with AwaitRun instead.
+var ErrRunInProgress = errors.New("durable: run still in progress; a handler must park with AwaitRun instead of blocking on Wait")
+
 // ErrRunNotFound is returned when no Run exists for a RunID.
 var ErrRunNotFound = storedriver.ErrRunNotFound
 

@@ -149,7 +149,8 @@ type RunTerminalEvent struct {
 
 // WakeEvent reports a park resolving: Duration is how long
 // storedriver.RunID was parked on Targets, Done lists the Targets terminal
-// or missing at wake time, and Target is the first of Targets.
+// or missing at wake time, Expired reports that the park's deadline fired
+// before it resolved per its mode, and Target is the first of Targets.
 type WakeEvent struct {
 	PipelineID storedriver.PipelineID
 	ResourceID storedriver.ResourceID
@@ -157,6 +158,7 @@ type WakeEvent struct {
 	Target     storedriver.RunID
 	Targets    []storedriver.RunID
 	Done       []storedriver.RunID
+	Expired    bool
 	Duration   time.Duration
 }
 

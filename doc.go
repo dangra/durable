@@ -40,7 +40,8 @@
 // metadata. The ways out: success, an ordinary error (retried — a
 // returned ctx.Err() included), Fail with FailOptions and
 // kind/reason attribution, or AwaitRun, AwaitAll, and AwaitAny to park on
-// other Runs (the woken attempt reads the park back through Awaited).
+// other Runs, bounded by WithAwaitTimeout (the woken attempt reads the
+// park back through Awaited).
 // Middleware wraps every attempt (AwaitRequest and FailureInfo classify
 // results; PreemptedError and ErrEngineStopping name why an attempt ctx
 // died); FailFastOnCancel with FailFastExcept opts preemption-safe

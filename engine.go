@@ -862,7 +862,7 @@ func (e *Engine) awaitGate(rec *storedriver.RunRecord) bool {
 			if e.baseCtx.Err() == nil {
 				e.logger.Error("durable: await target read failed", "run", rec.RunID, "target", t, "error", err)
 			}
-			e.resolveAwaitPark(rec, done, false)
+			e.resolveAwaitPark(rec, done, false, false)
 			settleAwait(rec, done, false)
 			return false
 		}
@@ -876,9 +876,23 @@ func (e *Engine) awaitGate(rec *storedriver.RunRecord) bool {
 	}
 	if resolved {
 		cancelAll()
-		e.resolveAwaitPark(rec, done, true)
+		e.resolveAwaitPark(rec, done, true, false)
 		settleAwait(rec, done, false)
 		return false
+	}
+	// A deadline that has passed is a wake too: the handler learns what
+	// finished and decides. The persisted deadline is absolute, so this
+	// holds across restarts.
+	var untilDeadline <-chan time.Time
+	if !park.Deadline.IsZero() {
+		remaining := park.Deadline.Sub(e.clock.Now())
+		if remaining <= 0 {
+			cancelAll()
+			e.resolveAwaitPark(rec, done, true, true)
+			settleAwait(rec, done, true)
+			return false
+		}
+		untilDeadline = e.clock.After(remaining)
 	}
 	parked := rec.RunID
 	e.mu.Lock()
@@ -894,15 +908,19 @@ func (e *Engine) awaitGate(rec *storedriver.RunRecord) bool {
 	// resolved per its mode — is decided by the re-run of this gate, which
 	// also emits WaiterWoken. notify also fires for invalid runs, and that
 	// wake must neither emit nor reset the park.
-	cases := make([]reflect.SelectCase, 0, len(chans)+1)
+	// The deadline timer is one more poke, and a nil channel — no
+	// deadline — is a case that never fires.
+	cases := make([]reflect.SelectCase, 0, len(chans)+2)
 	for _, ch := range chans {
 		cases = append(cases, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(ch)})
 	}
-	cases = append(cases, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(e.dispCtx.Done())})
+	cases = append(cases,
+		reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(untilDeadline)},
+		reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(e.dispCtx.Done())})
 	e.wg.Go(func() {
 		chosen, _, _ := reflect.Select(cases)
 		cancelAll()
-		if chosen < len(chans) {
+		if chosen < len(cases)-1 {
 			e.disp.Dispatch(parked, 0)
 		}
 	})
@@ -934,9 +952,9 @@ func settleAwait(rec *storedriver.RunRecord, done []RunID, expired bool) {
 
 // resolveAwaitPark closes out a Run's park, if one is recorded: the park
 // entry is dropped, and a genuine resolution (the park resolved per its
-// mode, not a store read error) emits WaiterWoken with the full
-// first-park-to-resolution duration.
-func (e *Engine) resolveAwaitPark(rec *storedriver.RunRecord, done []RunID, resolved bool) {
+// mode or expired, not a store read error) emits WaiterWoken with the
+// full first-park-to-resolution duration.
+func (e *Engine) resolveAwaitPark(rec *storedriver.RunRecord, done []RunID, resolved, expired bool) {
 	e.mu.Lock()
 	since, present := e.awaitParked[rec.RunID]
 	delete(e.awaitParked, rec.RunID)
@@ -947,6 +965,7 @@ func (e *Engine) resolveAwaitPark(rec *storedriver.RunRecord, done []RunID, reso
 			PipelineID: rec.PipelineID, ResourceID: rec.ResourceID,
 			RunID: rec.RunID, Target: targets[0],
 			Targets: append([]RunID(nil), targets...), Done: append([]RunID(nil), done...),
+			Expired:  expired,
 			Duration: e.clock.Now().Sub(since)})
 	}
 }
@@ -966,6 +985,9 @@ func (e *Engine) parkAwait(rec *storedriver.RunRecord, stepID StepID, attempts u
 			e.markInvalid(rec, stepID, "await with empty RunID")
 			return false, 0, false
 		}
+	}
+	if ar.timeout > 0 {
+		park.Deadline = e.clock.Now().Add(ar.timeout)
 	}
 	// A new park supersedes the memory of the previous one.
 	rec.Awaiting, rec.Awaited = park, nil

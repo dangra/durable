@@ -1,6 +1,7 @@
-// Edge cases of AwaitRun + AwaitedRunID: the park memory under intermixed
-// ordinary and permanent errors, chained parks, unwind-phase parks,
-// cancellation, and restart.
+// Parks end to end: the AwaitRun memory under intermixed ordinary and
+// permanent errors, chained and unwind-phase parks, cancellation, and
+// restart; AwaitAll and AwaitAny fan-out, select loops, races, and cycles;
+// WithAwaitTimeout expiry, extension, and persistence.
 package durable_test
 
 import (
@@ -1001,5 +1002,222 @@ func TestAwaitAllWithNoTargetsIsInvalid(t *testing.T) {
 	st := waitForState(t, run, durable.RunStateInvalid)
 	if !strings.Contains(st.InvalidReason, "no targets") {
 		t.Fatalf("InvalidReason = %q", st.InvalidReason)
+	}
+}
+
+// ---- Deadlines: WithAwaitTimeout ----
+
+// Expiry is a wake: the attempt runs with Expired set and Done listing
+// what had finished, and the handler decides — here, a permanent failure
+// with a reason.
+func TestAwaitTimeoutExpiryIsAWake(t *testing.T) {
+	var g gates
+	var childPipe *durable.Pipeline
+	var expiredWake atomic.Pointer[durable.Wake]
+	parent := durable.NewDefinition(durable.DefinitionConfig{
+		ID: "timeout-parent",
+		Steps: []durable.StepConfig{
+			stateless("p/v1", func(ctx context.Context, inv *durable.Invocation) error {
+				if w, ok := inv.Awaited(); ok {
+					if !w.Expired {
+						return durable.Fail(fmt.Errorf("woke without expiry: %+v", w))
+					}
+					expiredWake.Store(&w)
+					return durable.Fail(errors.New("children did not finish in time"), durable.WithReason("deploy-timeout"))
+				}
+				ids, err := scheduleChildren(ctx, childPipe, 2)
+				if err != nil {
+					return err
+				}
+				return durable.AwaitAll(ids, durable.WithAwaitTimeout(150*time.Millisecond))
+			}),
+		},
+	})
+	_, pipes := startEngine(t, durabletest.NewMemStore(), gatedChild("timeout-child", &g), parent)
+	childPipe = pipes[0]
+
+	pRun, _, err := pipes[1].Schedule(context.Background(), "parent-res", nil)
+	if err != nil {
+		t.Fatalf("Schedule parent: %v", err)
+	}
+	st := waitForState(t, pRun, durable.RunStateAwaiting)
+	if st.AwaitDeadline.IsZero() {
+		t.Fatalf("Status = %+v; want a deadline", st)
+	}
+	ids := st.AwaitingRunIDs
+	g.open("child-0")
+	first, _ := childPipe.Run(context.Background(), ids[0])
+	waitForState(t, first, durable.RunStateDone)
+	defer g.open("child-1")
+
+	res, err := pRun.Wait(context.Background())
+	if err != nil || res.Succeeded() || res.RootFailure == nil || res.RootFailure.Reason != "deploy-timeout" {
+		t.Fatalf("parent Wait = %+v, %v; want failure with reason deploy-timeout", res, err)
+	}
+	w := expiredWake.Load()
+	if w == nil || !slices.Equal(w.Targets, ids) || !slices.Equal(w.Done, ids[:1]) || !slices.Equal(w.Pending(), ids[1:]) {
+		t.Fatalf("expired Wake = %+v; want Done %v Pending %v", w, ids[:1], ids[1:])
+	}
+}
+
+// A handler can extend: re-park on Pending with a fresh timeout. The
+// extended park wakes normally once the child finishes, and a park whose
+// target finishes first never reports expiry.
+func TestAwaitTimeoutExtendAndCompleteBeforeDeadline(t *testing.T) {
+	var g gates
+	var childPipe *durable.Pipeline
+	var mu sync.Mutex
+	var wakes []durable.Wake
+	parent := durable.NewDefinition(durable.DefinitionConfig{
+		ID: "extend-parent",
+		Steps: []durable.StepConfig{
+			stateless("p/v1", func(ctx context.Context, inv *durable.Invocation) error {
+				if w, ok := inv.Awaited(); ok {
+					mu.Lock()
+					wakes = append(wakes, w)
+					mu.Unlock()
+					if w.Expired {
+						return durable.AwaitAll(w.Pending(), durable.WithAwaitTimeout(time.Minute))
+					}
+					return nil
+				}
+				ids, err := scheduleChildren(ctx, childPipe, 1)
+				if err != nil {
+					return err
+				}
+				return durable.AwaitAll(ids, durable.WithAwaitTimeout(100*time.Millisecond))
+			}),
+		},
+	})
+	_, pipes := startEngine(t, durabletest.NewMemStore(), gatedChild("extend-child", &g), parent)
+	childPipe = pipes[0]
+
+	pRun, _, err := pipes[1].Schedule(context.Background(), "parent-res", nil)
+	if err != nil {
+		t.Fatalf("Schedule parent: %v", err)
+	}
+	first := waitForState(t, pRun, durable.RunStateAwaiting)
+	// Wait for the first park to expire and the second, longer one to be in place.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		st, _ := pRun.Status(context.Background())
+		if st.State == durable.RunStateAwaiting && st.AwaitDeadline.After(first.AwaitDeadline.Add(30*time.Second)) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("parent never re-parked with the extended deadline; status %+v", st)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	g.open("child-0")
+	if res, err := pRun.Wait(context.Background()); err != nil || !res.Succeeded() {
+		t.Fatalf("parent Wait = %+v, %v", res, err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(wakes) != 2 || !wakes[0].Expired || len(wakes[0].Done) != 0 || wakes[1].Expired || len(wakes[1].Done) != 1 {
+		t.Fatalf("wakes = %+v; want [expired with nothing done, completed]", wakes)
+	}
+}
+
+// The deadline is absolute and persisted: a park that expires while no
+// engine is running wakes expired on the next engine. Against bbolt, so
+// the timestamp survives a real round trip.
+func TestAwaitTimeoutSurvivesRestart(t *testing.T) {
+	store, err := bboltstore.Open(filepath.Join(t.TempDir(), "deadline.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	var g gates
+	defer g.open("child-0")
+	var childPipe *durable.Pipeline
+	var wake atomic.Pointer[durable.Wake]
+	parent := durable.NewDefinition(durable.DefinitionConfig{
+		ID: "restart-deadline-parent",
+		Steps: []durable.StepConfig{
+			stateless("p/v1", func(ctx context.Context, inv *durable.Invocation) error {
+				if w, ok := inv.Awaited(); ok {
+					wake.Store(&w)
+					return nil
+				}
+				ids, err := scheduleChildren(ctx, childPipe, 1)
+				if err != nil {
+					return err
+				}
+				return durable.AwaitRun(ids[0], durable.WithAwaitTimeout(100*time.Millisecond))
+			}),
+		},
+	})
+	boot := func() (*durable.Engine, *durable.Pipeline) {
+		e := durable.NewEngine(store, fastRetry, durable.WithRecoveryBackoff(0))
+		cp, err := gatedChild("restart-deadline-child", &g).Bind(e)
+		if err != nil {
+			t.Fatalf("Bind child: %v", err)
+		}
+		pp, err := parent.Bind(e)
+		if err != nil {
+			t.Fatalf("Bind parent: %v", err)
+		}
+		childPipe = cp
+		if err := e.Start(context.Background()); err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+		return e, pp
+	}
+	e1, pp := boot()
+	pRun, _, err := pp.Schedule(context.Background(), "parent-res", nil)
+	if err != nil {
+		t.Fatalf("Schedule parent: %v", err)
+	}
+	st := waitForState(t, pRun, durable.RunStateAwaiting)
+	if err := e1.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	time.Sleep(time.Until(st.AwaitDeadline) + 50*time.Millisecond)
+
+	e2, pp2 := boot()
+	t.Cleanup(func() { _ = e2.Stop(context.Background()) })
+	pRun2, err := pp2.Run(context.Background(), pRun.ID())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res, err := pRun2.Wait(context.Background()); err != nil || !res.Succeeded() {
+		t.Fatalf("parent Wait after restart = %+v, %v", res, err)
+	}
+	w := wake.Load()
+	if w == nil || !w.Expired || len(w.Done) != 0 || !slices.Equal(w.Targets, st.AwaitingRunIDs) {
+		t.Fatalf("Wake after restart = %+v; want expired with the original target pending", w)
+	}
+}
+
+// A non-positive timeout is no deadline.
+func TestAwaitTimeoutNonPositiveIsNoDeadline(t *testing.T) {
+	var g gates
+	defer g.open("child-0")
+	var childPipe *durable.Pipeline
+	parent := durable.NewDefinition(durable.DefinitionConfig{
+		ID: "nodeadline-parent",
+		Steps: []durable.StepConfig{
+			stateless("p/v1", func(ctx context.Context, inv *durable.Invocation) error {
+				if _, ok := inv.Awaited(); ok {
+					return nil
+				}
+				ids, err := scheduleChildren(ctx, childPipe, 1)
+				if err != nil {
+					return err
+				}
+				return durable.AwaitRun(ids[0], durable.WithAwaitTimeout(0))
+			}),
+		},
+	})
+	_, pipes := startEngine(t, durabletest.NewMemStore(), gatedChild("nodeadline-child", &g), parent)
+	childPipe = pipes[0]
+	pRun, _, err := pipes[1].Schedule(context.Background(), "parent-res", nil)
+	if err != nil {
+		t.Fatalf("Schedule parent: %v", err)
+	}
+	if st := waitForState(t, pRun, durable.RunStateAwaiting); !st.AwaitDeadline.IsZero() {
+		t.Fatalf("Status = %+v; want no deadline", st)
 	}
 }

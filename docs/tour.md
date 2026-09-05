@@ -385,7 +385,16 @@ func (h *shipServices) Run(ctx context.Context, inv releasepb.ShipServicesInvoca
 
 `AwaitAny` is the select loop — handle `w.Done`, then
 `return durable.AwaitAny(w.Pending())` to keep waiting — or the race:
-act on the winner and `Cancel` the rest. Two things to know. Scheduling
+act on the winner and `Cancel` the rest.
+
+**Deadlines.** A park has no deadline unless you give it one:
+`durable.AwaitRun(id, durable.WithAwaitTimeout(10*time.Minute))`. Expiry
+is a wake, not a failure: the attempt runs with `w.Expired` set and
+`w.Done` listing whatever had finished, and the handler decides — `Fail`
+with a reason, `Cancel` the pending children, or park again on
+`w.Pending()` to extend. The deadline is stored as an absolute time, so
+it survives restarts, and `Status.AwaitDeadline` shows it. Two things to
+know. Scheduling
 N children in one attempt is safe against a crash halfway only because
 `Schedule` is idempotent on (pipeline, resource, input) *while the child
 is nonterminal*; a child that finishes before the retry is terminal, and

@@ -3,12 +3,27 @@ package durable
 import (
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/dangra/durable/storedriver"
 )
 
 // AwaitOption configures a park; see WithAwaitTimeout.
 type AwaitOption func(*awaitResolution)
+
+// WithAwaitTimeout bounds a park: if it has not resolved per its mode
+// within d of parking, the operation wakes anyway, with Wake.Expired set
+// and Wake.Done listing whatever had finished. Expiry is a wake, not a
+// failure — the handler decides: Fail, cancel what is pending, or park
+// again to extend. The deadline is absolute once parked, so it survives
+// restarts. A non-positive d means no deadline.
+func WithAwaitTimeout(d time.Duration) AwaitOption {
+	return func(ar *awaitResolution) {
+		if d > 0 {
+			ar.timeout = d
+		}
+	}
+}
 
 // AwaitRun parks the current operation until the referenced Run reaches a
 // terminal outcome. Like Fail, it is a resolution returned from a handler —
@@ -77,7 +92,8 @@ func dedupeRunIDs(ids []RunID) []RunID {
 }
 
 type awaitResolution struct {
-	park storedriver.Await
+	park    storedriver.Await
+	timeout time.Duration
 }
 
 func (e *awaitResolution) Error() string {

@@ -107,10 +107,12 @@ type Status struct {
 	// termination this Run is parked on — the first of AwaitingRunIDs.
 	AwaitingRunID RunID
 
-	// AwaitingRunIDs and AwaitMode describe the whole park when State is
-	// RunStateAwaiting.
+	// AwaitingRunIDs, AwaitMode, and AwaitDeadline describe the whole park
+	// when State is RunStateAwaiting; AwaitDeadline is zero for a park
+	// without WithAwaitTimeout.
 	AwaitingRunIDs []RunID
 	AwaitMode      AwaitMode
+	AwaitDeadline  time.Time
 
 	// ThrottledClass is set when State is RunStateThrottled: the
 	// concurrency class the Run is waiting for capacity in.

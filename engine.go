@@ -489,10 +489,20 @@ func hasUnresolvedOp(rec *storedriver.RunRecord) bool {
 	return false
 }
 
+// attemptKey marks a context as an in-flight attempt's; its value is the
+// executing RunID. Run.Wait consults it to refuse blocking a worker.
+type attemptKey struct{}
+
+// inAttempt reports whether ctx is (derived from) a handler attempt context.
+func inAttempt(ctx context.Context) bool {
+	_, ok := ctx.Value(attemptKey{}).(RunID)
+	return ok
+}
+
 // attemptContext derives the per-attempt handler context and registers its
 // cancel so a cancellation request can preempt the in-flight attempt.
 func (e *Engine) attemptContext(id RunID) (context.Context, func()) {
-	ctx, cancel := context.WithCancelCause(e.baseCtx)
+	ctx, cancel := context.WithCancelCause(context.WithValue(e.baseCtx, attemptKey{}, id))
 	e.mu.Lock()
 	e.attemptCancel[id] = cancel
 	e.mu.Unlock()

@@ -21,6 +21,12 @@ func (r Run) ID() RunID { return r.id }
 // caller context cancellation, lookup failure, engine shutdown, or Run
 // invalidity (*InvalidRunError). Pipeline semantic failure is represented
 // by Result.Outcome == OutcomeFailure, not by an error.
+//
+// Inside a handler Wait never blocks: called with the attempt context (or
+// one derived from it) it returns the Result if the Run is already
+// terminal and ErrRunInProgress otherwise. A handler blocking on another
+// Run holds a worker slot and can deadlock the pool; AwaitRun is the
+// mechanism for cross-run waiting.
 func (r Run) Wait(ctx context.Context) (Result, error) {
 	e := r.engine
 	base, ok := e.baseContext()
@@ -37,6 +43,9 @@ func (r Run) Wait(ctx context.Context) (Result, error) {
 		}
 		if ie := e.invalidFor(r.id); ie != nil {
 			return Result{}, ie
+		}
+		if inAttempt(ctx) {
+			return Result{}, ErrRunInProgress
 		}
 		ch, cancel := e.waiters.Watch(r.id)
 		// Re-check after registering so a notification between the read

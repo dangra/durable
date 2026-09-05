@@ -1,6 +1,6 @@
 # `durable`: Durable Linear Pipelines with Unwind Semantics
 
-**Status:** Draft 1.1  
+**Status:** Draft 1.2  
 **Target:** Go 1.27+  
 **Persistence:** Local transactional database such as SQLite or bbolt  
 **Schema and code generation:** Protocol Buffers, Buf, and `protoc-gen-durable`

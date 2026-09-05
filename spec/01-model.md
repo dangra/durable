@@ -307,6 +307,22 @@ computed correctly. Two accelerants bound the wait:
    reconcile partial effects and return `Fail` fast instead of retrying
    toward an unwanted success.
 
+The preemption arrives as the attempt context's cancellation cause:
+`context.Cause(ctx)` is a `*PreemptedError` carrying the request's cause.
+(An Engine shutdown kills the context with `ErrEngineStopping` instead —
+operational, never semantic.) Returning `ctx.Err()` keeps the cooperative
+default: the attempt is retried and the next one observes
+`CancelRequested`. A handler or middleware may instead **yield**: return
+`Fail` wrapping the `*PreemptedError`. The Engine attributes the resulting
+RootFailure `FailureKindCanceled` with the cancellation's cause only when
+its own evidence confirms the preemption — it preempted this attempt, or
+the request is already durable — never on the error value alone, which a
+handler could fabricate with no cancel pending. `FailFastOnCancel` is the
+middleware form of that yield, for pipelines whose forward handlers are
+preemption-safe; `FailFastExcept` keeps named Steps cooperative. Unwind
+operations are never yielded: during a cancellation the unwind is the
+work.
+
 If the pinned operation succeeds, the Step is recorded and participates in
 unwind like any other. If it permanently fails on its own, that organic
 failure becomes the RootFailure — the Run terminates with unwind either
@@ -335,54 +351,96 @@ Additional semantics:
 
 ## Awaiting other Runs
 
-Handlers MUST NOT block on other Runs' completion: an in-handler
-`run.Wait` holds a worker slot, and enough of them exhaust the bounded
-pool and deadlock the Engine. Cross-run waiting is a resolution instead:
+Handlers never block on other Runs' completion: an in-handler `run.Wait`
+would hold a worker slot, and enough of them exhaust the bounded pool and
+deadlock the Engine. `Run.Wait` called with a handler's attempt context
+(or one derived from it) therefore never blocks — it returns the Result
+of an already-terminal Run and `ErrRunInProgress` otherwise. Cross-run
+waiting is a resolution instead: a **park**.
 
 ```go
-return durable.AwaitRun(child.ID())
+return durable.AwaitRun(child.ID())                        // one target
+return durable.AwaitAll(ids)                               // every target
+return durable.AwaitAny(ids)                               // the first target
+return durable.AwaitRun(id, durable.WithAwaitTimeout(d))  // bounded
 ```
 
-`AwaitRun` parks the current operation: it remains unresolved (still
-pinning the Run), the worker is released, no retry attempts burn, and
-`Status` reports `RunStateAwaiting` with the target. The moment the
-target reaches terminality — or immediately, if it is already terminal
-or does not exist (never created, or reaped by retention) — the
-operation re-executes as a fresh attempt. Waking is at-least-once
-re-execution, not resumption: the handler runs again from the top.
+A park names its targets, its mode, and an optional deadline. It parks
+the current operation: the operation remains unresolved (still pinning
+the Run), the worker is released, no retry attempts burn, and `Status`
+reports `RunStateAwaiting` with the targets, mode, and deadline. Any Run
+may be a target, across pipelines; duplicate targets collapse; a park
+with no targets is a contract violation and invalidates the Run.
 
-The wake attempt's Invocation reports what was awaited:
+The park **resolves** when:
+
+- `AwaitModeAll` — every target is terminal or missing (never created,
+  or reaped by retention);
+- `AwaitModeAny` — the first target is;
+- its deadline passes. `WithAwaitTimeout(d)` fixes an absolute deadline
+  at park time that survives restart. Expiry is a wake, not a failure:
+  the handler decides.
+
+A park already satisfied when it is recorded resolves immediately. On
+resolution the operation re-executes as a fresh attempt. Waking is
+at-least-once re-execution, not resumption: the handler runs again from
+the top.
+
+The wake attempt's Invocation reports the park through its **memory**:
 
 ```go
-if childID, ok := inv.AwaitedRunID(); ok {
-    // woken after childID terminated — check its outcome, do not respawn
+type Wake struct {
+    Targets []RunID // what the park was on
+    Done    []RunID // Targets terminal or missing at wake time
+    Expired bool    // the deadline fired first
 }
+func (w Wake) Pending() []RunID // Targets not in Done
+
+if w, ok := inv.Awaited(); ok {
+    // woken: inspect w.Done (Run.Wait on a done target returns at once),
+    // re-park on w.Pending() to keep waiting or to extend a deadline,
+    // Cancel the pending, or Fail
+}
+if id, ok := inv.AwaitedRunID(); ok { /* single-target parks only */ }
 ```
 
 This is the durable memory that makes schedule-then-await steps safe:
 without it, re-execution after the child completed would find a free
-slot and spawn another child. `AwaitedRunID` is populated from the park
-when the wake attempt is reserved and cleared when the operation
-resolves; a crash after scheduling a child but before the park commits
-re-executes without it — the ordinary at-least-once window, closable
-with a deterministic child ResourceID where it matters.
+slot and spawn another child. **The memory belongs to the operation, not
+to one attempt.** It is recorded when the park resolves, carried by every
+later attempt of the operation — across ordinary-error retries and
+Engine restarts — and cleared when the operation resolves (success or
+`Fail`) or parks again. A crash after scheduling a child but before the
+park commits re-executes without it — the ordinary at-least-once window,
+closable with a deterministic child ResourceID where it matters. The
+same caveat bounds fan-out: scheduling N children in one attempt is
+idempotent across a retry only while they are nonterminal; a child that
+finishes before the retry is terminal, and `Schedule` creates a fresh
+one.
 
-Any Run may be awaited, across pipelines. Awaits MUST NOT form a cycle:
-a park that closes a cycle of awaits marks the parking Run invalid for
-the current deployment (detected after the park is durably recorded, so
-concurrently formed cycles cannot escape).
+Awaits MUST NOT form a cycle: a park that closes a cycle of awaits marks
+the parking Run invalid for the current deployment (detected after the
+park is durably recorded, so concurrently formed cycles cannot escape).
+Detection is conservative: a cycle through any edge is refused in every
+mode, including `AwaitModeAny`, where another target might have let the
+park escape — a park that can deadlock is refused, not gambled on.
 
 A pending cancellation bypasses the park: the operation re-executes,
-observes `CancelRequested`, and resolves so cancellation can proceed.
-The park survives restart.
+observes `CancelRequested`, and its `Awaited` memory reports the targets
+with `Done` reflecting their state at that moment, so the handler can
+cancel what it spawned before resolving. The park survives restart.
 
 Canonical shapes:
 
 ```text
 wait-for-existing:   ActiveRun -> found? AwaitRun : proceed
-create-then-wait:    AwaitedRunID? proceed : Schedule -> AwaitRun
+create-then-wait:    Awaited? proceed : Schedule -> AwaitRun
 drain-then-start:    Schedule -> conflict? AwaitRun(blocker) : done
                      (waking re-executes; Schedule retries the freed slot)
+fan-out:             Awaited? inspect Done : Schedule×N -> AwaitAll
+select loop:         Awaited? handle Done; Pending? AwaitAny(Pending) : done
+race:                Awaited? Cancel(Pending); use Done[0] : Schedule×N -> AwaitAny
+deadline:            Awaited.Expired? Fail | Cancel(Pending) | re-park : proceed
 ```
 
 ---
@@ -419,7 +477,8 @@ If Input differs:
 
 ```go
 type ScheduleConflictError struct {
-    RunID RunID
+    RunID      RunID
+    PipelineID PipelineID // the blocking Run's pipeline, for routing to its handle
 }
 ```
 
@@ -445,8 +504,8 @@ ordinary error
 durable.Fail(err)
     permanent semantic operation failure
 
-durable.AwaitRun(id)
-    operation parks until the referenced Run terminates
+durable.AwaitRun(id), AwaitAll(ids), AwaitAny(ids)
+    operation parks until the park resolves (see Awaiting other Runs)
 
 runtime contract violation
     Run invalid for current deployment

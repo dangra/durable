@@ -182,7 +182,12 @@ type Engine struct {
 	awaitParked   map[RunID]time.Time
 	started       bool
 	invalid       map[RunID]*InvalidRunError
-	attemptCancel map[RunID]context.CancelFunc
+	attemptCancel map[RunID]context.CancelCauseFunc
+	// preempted records, per Run, the cause of a cancellation-driven
+	// preemption of its in-flight attempt — the engine-side evidence that
+	// lets a returned Fail wrapping *PreemptedError be attributed as
+	// FailureKindCanceled truthfully. Consumed by the next resolution.
+	preempted map[RunID]string
 
 	// pipelines and stepOwner are written only before Start, under mu
 	// (register rejects later binds); after the Start freeze they are
@@ -200,7 +205,7 @@ type Engine struct {
 	disp *dispatcher.Dispatcher[RunID]
 
 	baseCtx context.Context
-	cancel  context.CancelFunc
+	cancel  context.CancelCauseFunc
 	wg      sync.WaitGroup
 }
 
@@ -217,7 +222,8 @@ func NewEngine(store Store, opts ...Option) *Engine {
 		pipelines:     make(map[PipelineID]*Definition),
 		stepOwner:     make(map[StepID]PipelineID),
 		invalid:       make(map[RunID]*InvalidRunError),
-		attemptCancel: make(map[RunID]context.CancelFunc),
+		attemptCancel: make(map[RunID]context.CancelCauseFunc),
+		preempted:     make(map[RunID]string),
 		classCapacity: make(map[string]int),
 		awaitParked:   make(map[RunID]time.Time),
 	}
@@ -268,7 +274,7 @@ func (e *Engine) Start(ctx context.Context) error {
 		return ErrEngineStarted
 	}
 	e.started = true
-	e.baseCtx, e.cancel = context.WithCancel(context.Background())
+	e.baseCtx, e.cancel = context.WithCancelCause(context.Background())
 	e.disp = dispatcher.New(dispatcher.Config[RunID]{
 		Ctx:         e.baseCtx,
 		Concurrency: e.concurrency,
@@ -390,8 +396,9 @@ func (e *Engine) sweepRetention() {
 }
 
 // Stop gracefully shuts down: it stops scheduling new operations, cancels
-// active handler contexts, and leaves unresolved Runs nonterminal. Shutdown
-// does not create Pipeline failure; a future Engine resumes the Runs.
+// active handler contexts (their context.Cause is ErrEngineStopping), and
+// leaves unresolved Runs nonterminal. Shutdown does not create Pipeline
+// failure; a future Engine resumes the Runs.
 func (e *Engine) Stop(ctx context.Context) error {
 	e.mu.Lock()
 	if !e.started || e.cancel == nil {
@@ -401,7 +408,7 @@ func (e *Engine) Stop(ctx context.Context) error {
 	cancel := e.cancel
 	e.mu.Unlock()
 
-	cancel()
+	cancel(ErrEngineStopping)
 	done := make(chan struct{})
 	go func() {
 		e.wg.Wait()
@@ -441,7 +448,7 @@ func hasUnresolvedOp(rec *RunRecord) bool {
 // attemptContext derives the per-attempt handler context and registers its
 // cancel so a cancellation request can preempt the in-flight attempt.
 func (e *Engine) attemptContext(id RunID) (context.Context, func()) {
-	ctx, cancel := context.WithCancel(e.baseCtx)
+	ctx, cancel := context.WithCancelCause(e.baseCtx)
 	e.mu.Lock()
 	e.attemptCancel[id] = cancel
 	e.mu.Unlock()
@@ -449,19 +456,35 @@ func (e *Engine) attemptContext(id RunID) (context.Context, func()) {
 		e.mu.Lock()
 		delete(e.attemptCancel, id)
 		e.mu.Unlock()
-		cancel()
+		cancel(nil)
 	}
 }
 
-// preemptAttempt cancels the Run's in-flight attempt context, if any. The
+// preemptAttempt cancels the Run's in-flight attempt context, if any,
+// attaching a *PreemptedError cause so the handler (via context.Cause)
+// can distinguish a Run cancellation from an engine shutdown. The
 // interrupted attempt resolves through normal handler result semantics.
-func (e *Engine) preemptAttempt(id RunID) {
+// The recorded cause is the engine-side evidence consumed by the next
+// resolution when attributing a preemption-yield (see runForward).
+func (e *Engine) preemptAttempt(id RunID, cause string) {
 	e.mu.Lock()
 	cancel := e.attemptCancel[id]
+	if cancel != nil {
+		e.preempted[id] = cause
+	}
 	e.mu.Unlock()
 	if cancel != nil {
-		cancel()
+		cancel(&PreemptedError{Cause: cause})
 	}
+}
+
+// takePreempted consumes the Run's recorded preemption evidence.
+func (e *Engine) takePreempted(id RunID) (string, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	cause, ok := e.preempted[id]
+	delete(e.preempted, id)
+	return cause, ok
 }
 
 // processRun advances one Run until it becomes terminal, invalid, must wait
@@ -653,6 +676,7 @@ func (e *Engine) applyCancel(rec *RunRecord) bool {
 // seam; rec must already carry the committed outcome and final
 // UpdatedAt.
 func (e *Engine) completeRun(rec *RunRecord) {
+	e.takePreempted(rec.RunID) // drop stale evidence from a cancel racing terminality
 	e.logger.Info("durable: run complete",
 		"pipeline", string(rec.PipelineID), "resource", string(rec.ResourceID),
 		"run", string(rec.RunID), "outcome", rec.Outcome.String(),
@@ -896,6 +920,7 @@ func (e *Engine) runForward(rec *RunRecord, def *Definition, stepID StepID) (don
 	inv.awaitedRunID = awaited
 	opStart := e.clock.Now()
 	state, panicked, err := e.invokeForward(sc, inv)
+	preemptCause, wasPreempted := e.takePreempted(rec.RunID)
 
 	if v := inv.takeViolation(); v != nil {
 		e.markInvalid(rec, stepID, v.Error())
@@ -942,6 +967,25 @@ func (e *Engine) runForward(rec *RunRecord, def *Definition, stepID StepID) (don
 			At:      now,
 			Kind:    pe.failureKind(),
 			Reason:  sanitizeText(pe.failureReason())}
+		// A Fail that wraps *PreemptedError declares a preemption-yield.
+		// Attribute it as cancellation only on engine-side evidence — the
+		// engine preempted this attempt, or the cancel request is already
+		// visible — never on the error value alone, which a handler could
+		// fabricate without any cancel pending.
+		if yielded, ok := errors.AsType[*PreemptedError](pe.err); ok && (wasPreempted || rec.Cancel != nil) {
+			cause := preemptCause
+			if cause == "" {
+				cause = yielded.Cause
+			}
+			if cause == "" && rec.Cancel != nil {
+				cause = rec.Cancel.Cause
+			}
+			if cause == "" {
+				cause = "canceled"
+			}
+			rec.RootFailure.Kind = FailureKindCanceled
+			rec.RootFailure.Message = sanitizeText(cause)
+		}
 		rec.Phase = PhaseUnwind
 		clearLastError(rec)
 		if !e.apply(rec, Transition{Cursor: idleCursor(rec), Steps: []StepWrite{{StepID: stepID, Record: *sr}}, RootFailure: rec.RootFailure}) {
@@ -990,6 +1034,7 @@ func (e *Engine) runUnwind(rec *RunRecord, def *Definition, stepID StepID) (done
 		failure.Root = *rec.RootFailure
 	}
 	panicked, err := e.invokeUnwind(sc, inv, failure)
+	e.takePreempted(rec.RunID) // clear evidence; yields attribute only forward
 
 	if v := inv.takeViolation(); v != nil {
 		e.markInvalid(rec, stepID, v.Error())

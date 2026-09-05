@@ -114,7 +114,9 @@ func BenchmarkAwaitFanIn(b *testing.B) {
 		}
 		var releasedLast time.Time
 		for c, id := range st.AwaitingRunIDs {
-			quiesceReads(v.reads)
+			if !quiesceReads(v.reads) {
+				b.Fatalf("store reads never went quiet before child %d: a gate run is stuck", c)
+			}
 			close(gate(durable.ResourceID(fmt.Sprintf("fanin-%d-%d", i, c))))
 			if c == len(st.AwaitingRunIDs)-1 {
 				releasedLast = time.Now()
@@ -131,6 +133,7 @@ func BenchmarkAwaitFanIn(b *testing.B) {
 			b.Fatalf("parent Wait = %+v, %v", res, err)
 		}
 		lastWake = time.Since(releasedLast)
+		gates.Clear() // every child of this iteration is terminal
 	}
 	b.StopTimer()
 	n := float64(children+1) * float64(b.N) // children + parent
@@ -140,10 +143,11 @@ func BenchmarkAwaitFanIn(b *testing.B) {
 	b.ReportMetric(ms(lastWake), "wake-max-ms")
 }
 
-// quiesceReads returns once the store read counter has been unchanged for
-// a few milliseconds: any gate run in flight has finished. It bounds
-// itself so a stuck engine fails the scenario instead of hanging it.
-func quiesceReads(reads *atomic.Int64) {
+// quiesceReads reports whether the store read counter went unchanged for
+// a few milliseconds within a bounded wait — any gate run in flight has
+// finished — so a stuck engine fails the scenario instead of hanging or
+// skewing it.
+func quiesceReads(reads *atomic.Int64) bool {
 	const quiet = 5 * time.Millisecond
 	deadline := time.Now().Add(10 * time.Second)
 	last, since := reads.Load(), time.Now()
@@ -154,7 +158,8 @@ func quiesceReads(reads *atomic.Int64) {
 			continue
 		}
 		if time.Since(since) >= quiet {
-			return
+			return true
 		}
 	}
+	return false
 }

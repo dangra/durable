@@ -917,7 +917,14 @@ func (e *Engine) awaitGate(rec *storedriver.RunRecord) bool {
 			e.wg.Go(func() {
 				select {
 				case <-timer:
-					e.disp.Dispatch(id, 0)
+					// The timer and stop can be ready together; poke only
+					// if this park's timer is still the armed one.
+					e.mu.Lock()
+					live := e.awaitTimers[id] == stop
+					e.mu.Unlock()
+					if live {
+						e.disp.Dispatch(id, 0)
+					}
 				case <-stop:
 				case <-e.dispCtx.Done():
 				}

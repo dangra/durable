@@ -55,8 +55,29 @@ func startLoggingEngine(t *testing.T, def *durable.Definition) (*lockedBuffer, *
 	return buf, pipe
 }
 
-func mustLog(t *testing.T, logs string, wants ...string) {
+// mustLog waits for every wanted line to appear in buf, then reports the
+// ones that never did. Waiting is essential, not tolerance: the engine
+// logs a run's completion after committing the terminal outcome that
+// Run.Wait observes, so a caller returning from Wait can read the buffer
+// before the "run complete" line lands.
+func mustLog(t *testing.T, buf *lockedBuffer, wants ...string) {
 	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	var logs string
+	for {
+		logs = buf.String()
+		missing := false
+		for _, w := range wants {
+			if !strings.Contains(logs, w) {
+				missing = true
+				break
+			}
+		}
+		if !missing || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
 	for _, w := range wants {
 		if !strings.Contains(logs, w) {
 			t.Errorf("logs missing %q\nlogs:\n%s", w, logs)
@@ -105,9 +126,8 @@ func TestLoggingLifecycle(t *testing.T) {
 		t.Fatalf("outcome = %v, want failure", res.Outcome)
 	}
 
-	logs := buf.String()
 	id := string(run.ID())
-	mustLog(t, logs,
+	mustLog(t, buf,
 		`level=DEBUG msg="durable: run scheduled" pipeline=logging resource=res-1 run=`+id,
 		`level=DEBUG msg="durable: operation failed; will retry" pipeline=logging resource=res-1 run=`+id+` step=flaky/v1 phase=forward attempt=1 error="transient boom" next_attempt_at=`,
 		`level=DEBUG msg="durable: operation succeeded" pipeline=logging resource=res-1 run=`+id+` step=flaky/v1 phase=forward attempt=2`,
@@ -147,9 +167,8 @@ func TestLoggingCancel(t *testing.T) {
 		t.Fatalf("outcome = %v, want failure", res.Outcome)
 	}
 
-	logs := buf.String()
 	id := string(run.ID())
-	mustLog(t, logs,
+	mustLog(t, buf,
 		`level=DEBUG msg="durable: run scheduled" pipeline=logging-cancel resource=res-1 run=`+id+` start_at=`,
 		`level=DEBUG msg="durable: cancel requested" run=`+id+` cause="operator request"`,
 		`level=INFO msg="durable: cancellation accepted; unwinding" pipeline=logging-cancel resource=res-1 run=`+id+` cause="operator request"`,

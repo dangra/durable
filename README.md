@@ -23,8 +23,10 @@ middleware layer. Wiring code imports `engine`, which runs pipelines:
 opening a store, binding the generated definitions, scheduling and
 waiting on runs. Generated code additionally imports `pipelinedef`, the
 type-erased definition it builds; the shared vocabulary lives in
-`kernel` and is aliased into `durable`. Store implementers use
-`storedriver`, telemetry adapters `observe`.
+`kernel` and is aliased into `durable`. Stores are opened by URI through
+`store` with a blank import of the driver (`store/bbolt` persistent,
+`store/mem` for ephemeral runs); implementers use `store/driver`,
+telemetry adapters `observe`.
 
 **Requires Go 1.27+** (the generated `State` API uses generic methods).
 
@@ -75,8 +77,8 @@ func (h *createMachine) Run(
 Wire it up — this side of an application imports `engine`, handler files never do:
 
 ```go
-store, _ := bboltstore.Open("machines.db")
-eng := engine.New(store)
+st, _ := store.Open("bbolt:///var/lib/app/machines.db") // import _ ".../store/bbolt"
+eng := engine.New(st)
 
 provision, _ := machinespb.NewProvisionMachine(
     validate{}, &selectHost{}, &reserveCapacity{}, &createMachine{},

@@ -10,15 +10,15 @@ import (
 	"time"
 
 	"github.com/dangra/durable"
-	"github.com/dangra/durable/durabletest"
 	"github.com/dangra/durable/engine"
 	"github.com/dangra/durable/pipelinedef"
-	"github.com/dangra/durable/storedriver"
+	"github.com/dangra/durable/store/driver"
+	"github.com/dangra/durable/store/mem"
 	"google.golang.org/protobuf/proto"
 )
 
 func TestRecoveryResumesAcrossEngines(t *testing.T) {
-	store := durabletest.NewMemStore()
+	store := mem.New()
 	var attempts atomic.Uint64
 
 	makeDef := func(succeed bool) *pipelinedef.Definition {
@@ -80,9 +80,9 @@ func TestRecoveryResumesAcrossEngines(t *testing.T) {
 }
 
 func TestRetiredStepIsBypassed(t *testing.T) {
-	store := durabletest.NewMemStore()
-	runID := seedRun(t, store, "evolving", map[durable.StepID]*storedriver.StepRecord{
-		"a/v1": {ForwardStatus: storedriver.OpSucceeded},
+	store := mem.New()
+	runID := seedRun(t, store, "evolving", map[durable.StepID]*driver.StepRecord{
+		"a/v1": {ForwardStatus: driver.OpSucceeded},
 	})
 
 	var bRan, cRan atomic.Bool
@@ -123,10 +123,10 @@ func TestRetiredStepIsBypassed(t *testing.T) {
 }
 
 func TestRetiredUnresolvedStepContinues(t *testing.T) {
-	store := durabletest.NewMemStore()
-	runID := seedRun(t, store, "evolving", map[durable.StepID]*storedriver.StepRecord{
-		"a/v1": {ForwardStatus: storedriver.OpSucceeded},
-		"b/v1": {ForwardStatus: storedriver.OpUnresolved, ForwardAttempts: 2},
+	store := mem.New()
+	runID := seedRun(t, store, "evolving", map[durable.StepID]*driver.StepRecord{
+		"a/v1": {ForwardStatus: driver.OpSucceeded},
+		"b/v1": {ForwardStatus: driver.OpUnresolved, ForwardAttempts: 2},
 	})
 
 	var bAttempt atomic.Uint64
@@ -157,10 +157,10 @@ func TestRetiredUnresolvedStepContinues(t *testing.T) {
 }
 
 func TestUnresolvedStepRemovedIsInvalid(t *testing.T) {
-	store := durabletest.NewMemStore()
-	runID := seedRun(t, store, "evolving", map[durable.StepID]*storedriver.StepRecord{
-		"a/v1": {ForwardStatus: storedriver.OpSucceeded},
-		"b/v1": {ForwardStatus: storedriver.OpUnresolved, ForwardAttempts: 1},
+	store := mem.New()
+	runID := seedRun(t, store, "evolving", map[durable.StepID]*driver.StepRecord{
+		"a/v1": {ForwardStatus: driver.OpSucceeded},
+		"b/v1": {ForwardStatus: driver.OpUnresolved, ForwardAttempts: 1},
 	})
 
 	def := pipelinedef.New(pipelinedef.Config{
@@ -188,7 +188,7 @@ func TestUnresolvedStepRemovedIsInvalid(t *testing.T) {
 }
 
 func TestInvalidReducerRepairedByRedeploy(t *testing.T) {
-	store := durabletest.NewMemStore()
+	store := mem.New()
 
 	makeDef := func(broken bool) *pipelinedef.Definition {
 		return pipelinedef.New(pipelinedef.Config{
@@ -254,7 +254,7 @@ func TestNilStateFromStateProducingHandlerIsInvalid(t *testing.T) {
 			},
 		},
 	})
-	_, pipes := startEngine(t, durabletest.NewMemStore(), def)
+	_, pipes := startEngine(t, mem.New(), def)
 	run, _, _ := pipes[0].Schedule(context.Background(), "r", nil)
 	_, err := run.Wait(context.Background())
 	if _, ok := errors.AsType[*engine.InvalidRunError](err); !ok {

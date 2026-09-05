@@ -8,10 +8,10 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/dangra/durable"
-	"github.com/dangra/durable/durabletest"
 	"github.com/dangra/durable/engine"
 	"github.com/dangra/durable/observe"
 	"github.com/dangra/durable/pipelinedef"
+	"github.com/dangra/durable/store/mem"
 )
 
 type tenantKey struct{}
@@ -39,7 +39,7 @@ func TestScheduleAnnotator(t *testing.T) {
 			},
 		}},
 	})
-	e := engine.New(durabletest.NewMemStore(), fastRetry,
+	e := engine.New(mem.New(), fastRetry,
 		engine.WithLogger(discardTestLogger()), engine.WithObserver(obs),
 		engine.WithScheduleAnnotator(func(ctx context.Context) map[string]string {
 			tenant, _ := ctx.Value(tenantKey{}).(string)
@@ -114,7 +114,7 @@ func TestScheduleAnnotatorInvalidUTF8(t *testing.T) {
 			},
 		}},
 	})
-	e := engine.New(durabletest.NewMemStore(), fastRetry,
+	e := engine.New(mem.New(), fastRetry,
 		engine.WithLogger(discardTestLogger()),
 		engine.WithScheduleAnnotator(func(context.Context) map[string]string {
 			return map[string]string{"bad": "\xff\xfe"}

@@ -11,9 +11,9 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/dangra/durable"
-	"github.com/dangra/durable/durabletest"
 	"github.com/dangra/durable/engine"
 	"github.com/dangra/durable/pipelinedef"
+	"github.com/dangra/durable/store/mem"
 )
 
 // TestPreemptionCarriesCause pins the ctx cause contract: an attempt
@@ -41,7 +41,7 @@ func TestPreemptionCarriesCause(t *testing.T) {
 			return ctx.Err()
 		})},
 	})
-	e := engine.New(durabletest.NewMemStore(), fastRetry,
+	e := engine.New(mem.New(), fastRetry,
 		engine.WithLogger(discardTestLogger()))
 	pipe, err := e.Bind(def)
 	if err != nil {
@@ -104,7 +104,7 @@ func TestStopCarriesCause(t *testing.T) {
 			}
 		})},
 	})
-	store := durabletest.NewMemStore()
+	store := mem.New()
 	e1 := engine.New(store, fastRetry, engine.WithLogger(discardTestLogger()))
 	pipe1, err := e1.Bind(def)
 	if err != nil {
@@ -192,7 +192,7 @@ func TestFailFastOnCancel(t *testing.T) {
 			}),
 		},
 	})
-	e := engine.New(durabletest.NewMemStore(), fastRetry,
+	e := engine.New(mem.New(), fastRetry,
 		engine.WithLogger(discardTestLogger()),
 		engine.WithMiddleware(durable.FailFastOnCancel()))
 	pipe, err := e.Bind(def)
@@ -249,7 +249,7 @@ func TestFailFastShortCircuit(t *testing.T) {
 			return errors.New("transient")
 		})},
 	})
-	e := engine.New(durabletest.NewMemStore(), fastRetry,
+	e := engine.New(mem.New(), fastRetry,
 		engine.WithLogger(discardTestLogger()),
 		engine.WithMiddleware(durable.FailFastOnCancel()))
 	pipe, err := e.Bind(def)
@@ -307,7 +307,7 @@ func TestFailFastExcept(t *testing.T) {
 			return ctx.Err()
 		})},
 	})
-	e := engine.New(durabletest.NewMemStore(), fastRetry,
+	e := engine.New(mem.New(), fastRetry,
 		engine.WithLogger(discardTestLogger()),
 		engine.WithMiddleware(durable.FailFastOnCancel(durable.FailFastExcept(
 			// A generated reference and a bare StepID both satisfy
@@ -358,7 +358,7 @@ func TestFabricatedPreemptionNotCanceled(t *testing.T) {
 			return durable.Fail(fmt.Errorf("pretend: %w", &durable.PreemptedError{Cause: "fake"}))
 		})},
 	})
-	e := engine.New(durabletest.NewMemStore(), fastRetry,
+	e := engine.New(mem.New(), fastRetry,
 		engine.WithLogger(discardTestLogger()))
 	pipe, err := e.Bind(def)
 	if err != nil {
@@ -401,7 +401,7 @@ func TestFailFastShutdownUntouched(t *testing.T) {
 			return ctx.Err()
 		})
 	}
-	store := durabletest.NewMemStore()
+	store := mem.New()
 	e1 := engine.New(store, fastRetry, engine.WithLogger(discardTestLogger()),
 		engine.WithMiddleware(durable.FailFastOnCancel()))
 	pipe1, err := e1.Bind(pipelinedef.New(pipelinedef.Config{

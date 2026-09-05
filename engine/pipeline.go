@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"github.com/dangra/durable"
 	"github.com/dangra/durable/observe"
-	"github.com/dangra/durable/storedriver"
+	"github.com/dangra/durable/store/driver"
 	"unicode/utf8"
 
 	"google.golang.org/protobuf/proto"
@@ -74,7 +74,7 @@ func (p *Pipeline) Schedule(ctx context.Context, resource durable.ResourceID, in
 	}
 
 	now := e.clock.Now()
-	rec := &storedriver.RunRecord{
+	rec := &driver.RunRecord{
 		RunID:       newRunID(now),
 		PipelineID:  p.def.ID(),
 		ResourceID:  resource,

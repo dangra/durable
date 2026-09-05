@@ -1,4 +1,4 @@
-package bboltstore
+package bbolt
 
 import (
 	"context"

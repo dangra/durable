@@ -11,9 +11,9 @@ import (
 	"testing"
 
 	"github.com/dangra/durable"
-	"github.com/dangra/durable/durabletest"
 	"github.com/dangra/durable/engine"
 	"github.com/dangra/durable/pipelinedef"
+	"github.com/dangra/durable/store/mem"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -36,7 +36,7 @@ func TestMiddlewareOrderingAndPhases(t *testing.T) {
 		}
 	}
 
-	store := durabletest.NewMemStore()
+	store := mem.New()
 	e := engine.New(store, fastRetry, engine.WithMiddleware(mw("outer"), mw("inner")))
 	def := pipelinedef.New(pipelinedef.Config{
 		ID: "mw",
@@ -114,7 +114,7 @@ func TestMiddlewareCanEscalateToFail(t *testing.T) {
 			}),
 		},
 	})
-	e := engine.New(durabletest.NewMemStore(), fastRetry, engine.WithMiddleware(escalate))
+	e := engine.New(mem.New(), fastRetry, engine.WithMiddleware(escalate))
 	p, _ := e.Bind(def)
 	if err := e.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -150,7 +150,7 @@ func TestMiddlewareContextReachesHandlers(t *testing.T) {
 			}),
 		},
 	})
-	e := engine.New(durabletest.NewMemStore(), fastRetry, engine.WithMiddleware(inject))
+	e := engine.New(mem.New(), fastRetry, engine.WithMiddleware(inject))
 	p, _ := e.Bind(def)
 	if err := e.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)

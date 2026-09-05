@@ -11,10 +11,10 @@ import (
 	"unicode/utf8"
 
 	"github.com/dangra/durable"
-	"github.com/dangra/durable/bboltstore"
-	"github.com/dangra/durable/durabletest"
 	"github.com/dangra/durable/engine"
 	"github.com/dangra/durable/pipelinedef"
+	"github.com/dangra/durable/store/bbolt"
+	"github.com/dangra/durable/store/mem"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -37,7 +37,7 @@ func failingRun(t *testing.T, id durable.PipelineID, fail error) engine.Result {
 			}),
 		},
 	})
-	_, pipes := startEngine(t, durabletest.NewMemStore(), def)
+	_, pipes := startEngine(t, mem.New(), def)
 	run, _, err := pipes[0].Schedule(context.Background(), "r", nil)
 	if err != nil {
 		t.Fatalf("Schedule: %v", err)
@@ -98,7 +98,7 @@ func TestUnwindFailureAttribution(t *testing.T) {
 			}),
 		},
 	})
-	_, pipes := startEngine(t, durabletest.NewMemStore(), def)
+	_, pipes := startEngine(t, mem.New(), def)
 	run, _, _ := pipes[0].Schedule(context.Background(), "r", nil)
 	res, err := run.Wait(context.Background())
 	if err != nil || !res.Failed() {
@@ -133,7 +133,7 @@ func TestInvalidUTF8ErrorsDoNotWedge(t *testing.T) {
 		},
 	})
 	// The bbolt store is the one that actually marshals to proto.
-	store, err := bboltstore.Open(filepath.Join(t.TempDir(), "utf8.db"))
+	store, err := bbolt.Open(filepath.Join(t.TempDir(), "utf8.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

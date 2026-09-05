@@ -14,7 +14,7 @@ import (
 	"github.com/dangra/durable"
 	"github.com/dangra/durable/engine"
 	"github.com/dangra/durable/pipelinedef"
-	"github.com/dangra/durable/storedriver"
+	"github.com/dangra/durable/store/driver"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
@@ -44,7 +44,7 @@ func stateless(id durable.StepID, run func(context.Context, durable.Invocation) 
 	}
 }
 
-func startEngine(t *testing.T, store storedriver.Store, defs ...*pipelinedef.Definition) (*engine.Engine, []*engine.Pipeline) {
+func startEngine(t *testing.T, store driver.Store, defs ...*pipelinedef.Definition) (*engine.Engine, []*engine.Pipeline) {
 	t.Helper()
 	e := engine.New(store, fastRetry, engine.WithRecoveryBackoff(0))
 	var pipes []*engine.Pipeline
@@ -68,9 +68,9 @@ func startEngine(t *testing.T, store storedriver.Store, defs ...*pipelinedef.Def
 
 // seedRun persists a nonterminal record with pre-existing execution facts,
 // simulating a Run started under an earlier deployment.
-func seedRun(t *testing.T, store storedriver.Store, pipeline durable.PipelineID, steps map[durable.StepID]*storedriver.StepRecord) durable.RunID {
+func seedRun(t *testing.T, store driver.Store, pipeline durable.PipelineID, steps map[durable.StepID]*driver.StepRecord) durable.RunID {
 	t.Helper()
-	rec := &storedriver.RunRecord{
+	rec := &driver.RunRecord{
 		RunID:      durable.RunID("seeded-" + t.Name()),
 		PipelineID: pipeline,
 		ResourceID: "seed-resource",

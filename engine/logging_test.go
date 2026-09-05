@@ -13,9 +13,9 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/dangra/durable"
-	"github.com/dangra/durable/durabletest"
 	"github.com/dangra/durable/engine"
 	"github.com/dangra/durable/pipelinedef"
+	"github.com/dangra/durable/store/mem"
 )
 
 // lockedBuffer serializes writes from concurrent engine goroutines.
@@ -40,7 +40,7 @@ func startLoggingEngine(t *testing.T, def *pipelinedef.Definition) (*lockedBuffe
 	t.Helper()
 	buf := &lockedBuffer{}
 	logger := slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	e := engine.New(durabletest.NewMemStore(),
+	e := engine.New(mem.New(),
 		fastRetry, engine.WithRecoveryBackoff(0), engine.WithLogger(logger))
 	pipe, err := e.Bind(def)
 	if err != nil {

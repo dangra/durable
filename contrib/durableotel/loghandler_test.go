@@ -17,9 +17,9 @@ import (
 
 	"github.com/dangra/durable"
 	"github.com/dangra/durable/contrib/durableotel"
-	"github.com/dangra/durable/durabletest"
 	"github.com/dangra/durable/engine"
 	"github.com/dangra/durable/pipelinedef"
+	"github.com/dangra/durable/store/mem"
 )
 
 // logLines decodes one JSON object per line from buf.
@@ -136,7 +136,7 @@ func TestLogCorrelationEndToEnd(t *testing.T) {
 			},
 		}},
 	})
-	eng := engine.New(durabletest.NewMemStore(), fastRetry,
+	eng := engine.New(mem.New(), fastRetry,
 		engine.WithLogger(logger),
 		engine.WithMiddleware(durableotel.Middleware(durableotel.WithTracerProvider(tp))))
 	pipe, err := eng.Bind(def)

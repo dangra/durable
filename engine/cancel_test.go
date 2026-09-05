@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/dangra/durable"
-	"github.com/dangra/durable/durabletest"
 	"github.com/dangra/durable/pipelinedef"
+	"github.com/dangra/durable/store/mem"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -26,7 +26,7 @@ func TestCancelScheduledRunFreesSlot(t *testing.T) {
 			}),
 		},
 	})
-	_, pipes := startEngine(t, durabletest.NewMemStore(), def)
+	_, pipes := startEngine(t, mem.New(), def)
 	p := pipes[0]
 
 	run, _, err := p.Schedule(context.Background(), "r", nil, durable.StartAfter(time.Hour))
@@ -100,7 +100,7 @@ func TestCancelPreemptsAndUnwinds(t *testing.T) {
 			}),
 		},
 	})
-	_, pipes := startEngine(t, durabletest.NewMemStore(), def)
+	_, pipes := startEngine(t, mem.New(), def)
 	run, _, err := pipes[0].Schedule(context.Background(), "r", nil)
 	if err != nil {
 		t.Fatalf("Schedule: %v", err)
@@ -143,7 +143,7 @@ func TestCancelTerminalRun(t *testing.T) {
 			stateless("s/v1", func(context.Context, durable.Invocation) error { return nil }),
 		},
 	})
-	_, pipes := startEngine(t, durabletest.NewMemStore(), def)
+	_, pipes := startEngine(t, mem.New(), def)
 	run, _, _ := pipes[0].Schedule(context.Background(), "r", nil)
 	if res, err := run.Wait(context.Background()); err != nil || !res.Succeeded() {
 		t.Fatalf("Wait = %+v, %v", res, err)
@@ -168,7 +168,7 @@ func TestOrganicFailureBeatsCancel(t *testing.T) {
 			}),
 		},
 	})
-	_, pipes := startEngine(t, durabletest.NewMemStore(), def)
+	_, pipes := startEngine(t, mem.New(), def)
 	run, _, _ := pipes[0].Schedule(context.Background(), "r", nil)
 	<-blocked
 	if err := run.Cancel(context.Background(), "stop"); err != nil {

@@ -8,9 +8,9 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/dangra/durable"
-	"github.com/dangra/durable/durabletest"
 	"github.com/dangra/durable/engine"
 	"github.com/dangra/durable/pipelinedef"
+	"github.com/dangra/durable/store/mem"
 )
 
 // Bind is the single validator of a definition: every malformed shape is
@@ -38,7 +38,7 @@ func TestBindValidatesTheDefinition(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			e := engine.New(durabletest.NewMemStore(), engine.WithLogger(discardTestLogger()))
+			e := engine.New(mem.New(), engine.WithLogger(discardTestLogger()))
 			_, err := e.Bind(pipelinedef.New(tc.cfg))
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("Bind error = %v; want it to mention %q", err, tc.want)
@@ -46,7 +46,7 @@ func TestBindValidatesTheDefinition(t *testing.T) {
 		})
 	}
 
-	e := engine.New(durabletest.NewMemStore(), engine.WithLogger(discardTestLogger()))
+	e := engine.New(mem.New(), engine.WithLogger(discardTestLogger()))
 	if _, err := e.Bind(nil); err == nil {
 		t.Fatal("Bind(nil) must fail")
 	}

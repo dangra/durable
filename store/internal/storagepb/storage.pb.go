@@ -1060,7 +1060,7 @@ const file_durable_storage_v1_storage_proto_rawDesc = "" +
 	"\tAwaitMode\x12\x1a\n" +
 	"\x16AWAIT_MODE_UNSPECIFIED\x10\x00\x12\x12\n" +
 	"\x0eAWAIT_MODE_ALL\x10\x01\x12\x12\n" +
-	"\x0eAWAIT_MODE_ANY\x10\x02B8Z6github.com/dangra/durable/internal/storagepb;storagepbb\x06proto3"
+	"\x0eAWAIT_MODE_ANY\x10\x02B>Z<github.com/dangra/durable/store/internal/storagepb;storagepbb\x06proto3"
 
 var (
 	file_durable_storage_v1_storage_proto_rawDescOnce sync.Once

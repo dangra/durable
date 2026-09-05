@@ -1,12 +1,12 @@
-// Package storedriver is durable's store SPI — the contract between the
+// Package driver is durable's store SPI — the contract between the
 // engine and a persistence backend, in the spirit of database/sql/driver.
-// Normal users of durable never import it: they configure an engine with
-// an existing implementation (bboltstore, durabletest.NewMemStore) and
-// work with the durable package. Implementers of a new backend implement
-// Store over the record types here; the differential fuzzer against
-// durabletest's MemStore (bboltstore/fuzz_test.go) is the executable
-// form of this contract.
-package storedriver
+// Normal users of durable never import it: they open a store through
+// package store (or a driver package's Open) and hand it to engine.New.
+// Implementers of a new backend implement Store over the record types
+// here, which are built from the kernel vocabulary, and register a URI
+// scheme with store.Register; the differential fuzzer against store/mem
+// (store/bbolt/fuzz_test.go) is the executable form of this contract.
+package driver
 
 import (
 	"context"

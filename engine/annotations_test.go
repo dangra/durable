@@ -10,10 +10,10 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/dangra/durable"
-	"github.com/dangra/durable/durabletest"
 	"github.com/dangra/durable/engine"
 	"github.com/dangra/durable/observe"
 	"github.com/dangra/durable/pipelinedef"
+	"github.com/dangra/durable/store/mem"
 )
 
 // TestTracePropagationPattern is the documented tracing shape end to
@@ -60,7 +60,7 @@ func TestTracePropagationPattern(t *testing.T) {
 		},
 	})
 
-	store := durabletest.NewMemStore()
+	store := mem.New()
 	var scheduled observe.RunEvent
 	var terminal observe.RunTerminalEvent
 	obs := observe.Observer{
@@ -162,7 +162,7 @@ func TestAnnotationsDedupAndValidation(t *testing.T) {
 			}),
 		},
 	})
-	_, pipes := startEngine(t, durabletest.NewMemStore(), def)
+	_, pipes := startEngine(t, mem.New(), def)
 	pipe := pipes[0]
 
 	first, created, err := pipe.Schedule(context.Background(), "res-1", nil,

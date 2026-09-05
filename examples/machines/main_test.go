@@ -7,14 +7,14 @@ import (
 	"time"
 
 	"github.com/dangra/durable"
-	"github.com/dangra/durable/durabletest"
 	"github.com/dangra/durable/engine"
 	"github.com/dangra/durable/examples/machines/machinespb"
+	"github.com/dangra/durable/store/mem"
 )
 
 func startProvision(t *testing.T, c *cloud) *machinespb.ProvisionMachinePipeline {
 	t.Helper()
-	eng := engine.New(durabletest.NewMemStore(), engine.WithRetryPolicy(engine.RetryPolicy{
+	eng := engine.New(mem.New(), engine.WithRetryPolicy(engine.RetryPolicy{
 		Initial:    time.Millisecond,
 		Max:        5 * time.Millisecond,
 		Multiplier: 2,
@@ -142,7 +142,7 @@ func TestFuncAdapters(t *testing.T) {
 		reduceProvisionMachine,
 	)
 
-	eng := engine.New(durabletest.NewMemStore())
+	eng := engine.New(mem.New())
 	provision, err := def.Bind(eng)
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
@@ -172,7 +172,7 @@ func TestExclusionGroup(t *testing.T) {
 	c := newCloud()
 	c.createGate = make(chan struct{})
 
-	eng := engine.New(durabletest.NewMemStore())
+	eng := engine.New(mem.New())
 	provision, err := newProvisionMachine(c).Bind(eng)
 	if err != nil {
 		t.Fatalf("Bind provision: %v", err)

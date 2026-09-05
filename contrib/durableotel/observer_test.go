@@ -11,9 +11,9 @@ import (
 
 	"github.com/dangra/durable"
 	"github.com/dangra/durable/contrib/durableotel"
-	"github.com/dangra/durable/durabletest"
 	"github.com/dangra/durable/engine"
 	"github.com/dangra/durable/observe"
+	"github.com/dangra/durable/store/mem"
 )
 
 func collect(t *testing.T, reader *sdkmetric.ManualReader) map[string]metricdata.Metrics {
@@ -268,7 +268,7 @@ func TestRegisterStats(t *testing.T) {
 	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
 	defer mp.Shutdown(t.Context())
 
-	eng := engine.New(durabletest.NewMemStore(), fastRetry, quietLogger())
+	eng := engine.New(mem.New(), fastRetry, quietLogger())
 	if err := eng.Start(t.Context()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}

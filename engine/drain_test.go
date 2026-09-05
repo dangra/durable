@@ -8,9 +8,9 @@ import (
 	"time"
 
 	"github.com/dangra/durable"
-	"github.com/dangra/durable/durabletest"
 	"github.com/dangra/durable/engine"
 	"github.com/dangra/durable/pipelinedef"
+	"github.com/dangra/durable/store/mem"
 )
 
 // TestDrainLetsAttemptFinish pins the graceful path: with a drain
@@ -34,7 +34,7 @@ func TestDrainLetsAttemptFinish(t *testing.T) {
 			return nil
 		})},
 	})
-	store := durabletest.NewMemStore()
+	store := mem.New()
 	e := engine.New(store, fastRetry, engine.WithLogger(discardTestLogger()),
 		engine.WithDrainTimeout(30*time.Second))
 	pipe, err := e.Bind(def)
@@ -118,7 +118,7 @@ func TestDrainDeadlinePreempts(t *testing.T) {
 			return ctx.Err()
 		})},
 	})
-	e := engine.New(durabletest.NewMemStore(), fastRetry,
+	e := engine.New(mem.New(), fastRetry,
 		engine.WithLogger(discardTestLogger()),
 		engine.WithDrainTimeout(50*time.Millisecond))
 	pipe, err := e.Bind(def)
@@ -166,7 +166,7 @@ func TestDrainStartsNoNewAttempts(t *testing.T) {
 			return nil
 		})
 	}
-	store := durabletest.NewMemStore()
+	store := mem.New()
 	e := engine.New(store, fastRetry, engine.WithLogger(discardTestLogger()),
 		engine.WithDrainTimeout(30*time.Second))
 	pipe, err := e.Bind(pipelinedef.New(pipelinedef.Config{

@@ -7,7 +7,7 @@ import (
 	"github.com/dangra/durable"
 	"github.com/dangra/durable/observe"
 	"github.com/dangra/durable/pipelinedef"
-	"github.com/dangra/durable/storedriver"
+	"github.com/dangra/durable/store/driver"
 	"log/slog"
 	"math"
 	mrand "math/rand/v2"
@@ -182,10 +182,10 @@ func WithDrainTimeout(d time.Duration) Option {
 	}
 }
 
-// Engine executes Runs against a storedriver.Store. Exactly one Engine may execute
-// against a storedriver.Store at a time in v1.
+// Engine executes Runs against a driver.Store. Exactly one Engine may execute
+// against a driver.Store at a time in v1.
 type Engine struct {
-	store           storedriver.Store
+	store           driver.Store
 	clock           Clock
 	logger          *slog.Logger
 	retry           RetryPolicy
@@ -249,7 +249,7 @@ type Engine struct {
 // New constructs an Engine in the configuring state. Definitions bind
 // and handlers register before Start; after Start, registration freezes and
 // scheduling is accepted.
-func New(store storedriver.Store, opts ...Option) *Engine {
+func New(store driver.Store, opts ...Option) *Engine {
 	e := &Engine{
 		store:         store,
 		clock:         wallClock{},
@@ -266,7 +266,7 @@ func New(store storedriver.Store, opts ...Option) *Engine {
 		o(e)
 	}
 	e.pool = tokenpool.New[string, durable.RunID](e.classCapacity)
-	// A StoreOp subscription observes every storedriver.Store call, so the wrap must
+	// A StoreOp subscription observes every driver.Store call, so the wrap must
 	// cover the engine's own store handle.
 	if e.hasStoreObserver() {
 		e.store = &observedStore{inner: e.store, engine: e}
@@ -366,7 +366,7 @@ func (e *Engine) Start(ctx context.Context) error {
 // the gate so the Run can resolve, holding no token. waited is how long
 // the Run had been parked before an actual token grant. Kicks owed by
 // the pool (declined or cascaded wakes) are dispatched here.
-func (e *Engine) acquireClass(rec *storedriver.RunRecord, class string) (proceed, held bool, waited time.Duration) {
+func (e *Engine) acquireClass(rec *driver.RunRecord, class string) (proceed, held bool, waited time.Duration) {
 	bypass := class == "" || rec.Cancel != nil
 	granted, held, waited, kicks := e.pool.Acquire(class, rec.RunID, bypass, e.clock.Now())
 	for _, id := range kicks {
@@ -492,9 +492,9 @@ func (e *Engine) baseContext() (context.Context, bool) {
 	return e.baseCtx, e.baseCtx != nil
 }
 
-func hasUnresolvedOp(rec *storedriver.RunRecord) bool {
+func hasUnresolvedOp(rec *driver.RunRecord) bool {
 	for _, sr := range rec.Steps {
-		if sr.ForwardStatus == storedriver.OpUnresolved || sr.UnwindStatus == storedriver.OpUnresolved {
+		if sr.ForwardStatus == driver.OpUnresolved || sr.UnwindStatus == driver.OpUnresolved {
 			return true
 		}
 	}
@@ -694,7 +694,7 @@ func (e *Engine) processRun(id durable.RunID) (time.Duration, bool) {
 			oc := durable.OutcomeFailure
 			rec.Outcome = &oc
 			rec.Phase = durable.PhaseDone
-			if !e.apply(rec, storedriver.Transition{Cursor: idleCursor(rec), Outcome: rec.Outcome}) {
+			if !e.apply(rec, driver.Transition{Cursor: idleCursor(rec), Outcome: rec.Outcome}) {
 				return time.Second, true
 			}
 			e.completeRun(rec)
@@ -705,14 +705,14 @@ func (e *Engine) processRun(id durable.RunID) (time.Duration, bool) {
 
 // forwardStarted reports whether the Step's forward operation has ever
 // reserved an attempt for this Run.
-func forwardStarted(rec *storedriver.RunRecord, stepID durable.StepID) bool {
+func forwardStarted(rec *driver.RunRecord, stepID durable.StepID) bool {
 	sr, ok := rec.Steps[stepID]
 	return ok && sr.ForwardAttempts > 0
 }
 
 // applyCancel establishes the cancellation RootFailure and transitions the
 // Run to unwind.
-func (e *Engine) applyCancel(rec *storedriver.RunRecord) bool {
+func (e *Engine) applyCancel(rec *driver.RunRecord) bool {
 	cause := sanitizeText(rec.Cancel.Cause)
 	if cause == "" {
 		cause = "canceled"
@@ -724,7 +724,7 @@ func (e *Engine) applyCancel(rec *storedriver.RunRecord) bool {
 		Kind:    durable.FailureKindCanceled}
 	rec.Phase = durable.PhaseUnwind
 	rec.NextAttemptAt = time.Time{}
-	if !e.apply(rec, storedriver.Transition{Cursor: idleCursor(rec), RootFailure: rec.RootFailure}) {
+	if !e.apply(rec, driver.Transition{Cursor: idleCursor(rec), RootFailure: rec.RootFailure}) {
 		return false
 	}
 	// A canceled Run may have been parked on a class without ever
@@ -745,7 +745,7 @@ func (e *Engine) applyCancel(rec *storedriver.RunRecord) bool {
 // — and releases its waiters. Every terminal path goes through this one
 // seam; rec must already carry the committed outcome and final
 // UpdatedAt.
-func (e *Engine) completeRun(rec *storedriver.RunRecord) {
+func (e *Engine) completeRun(rec *driver.RunRecord) {
 	e.takePreempted(rec.RunID) // drop stale evidence from a cancel racing terminality
 	e.logger.Info("durable: run complete",
 		"pipeline", string(rec.PipelineID), "resource", string(rec.ResourceID),
@@ -762,7 +762,7 @@ func (e *Engine) completeRun(rec *storedriver.RunRecord) {
 // same facts, so a future resolution path cannot serve one and drift on
 // the other. For observe.AttemptFailed, attribution comes off the record — the
 // RootFailure forward, the newest UnwindFailure during unwind.
-func (e *Engine) attemptResolved(rec *storedriver.RunRecord, stepID durable.StepID, phase durable.Phase, attempt uint64, elapsed time.Duration, result observe.AttemptResult, err error, retryIn time.Duration, panicked bool) {
+func (e *Engine) attemptResolved(rec *driver.RunRecord, stepID durable.StepID, phase durable.Phase, attempt uint64, elapsed time.Duration, result observe.AttemptResult, err error, retryIn time.Duration, panicked bool) {
 	switch result {
 	case observe.AttemptSucceeded:
 		if e.debugLog() {
@@ -805,7 +805,7 @@ func (e *Engine) attemptResolved(rec *storedriver.RunRecord, stepID durable.Step
 // rides the same durable write as NextAttemptAt. Text is sanitized: an
 // invalid-UTF-8 error message must not fail the marshal inside the
 // durable transition.
-func recordLastError(rec *storedriver.RunRecord, err error, now time.Time) {
+func recordLastError(rec *driver.RunRecord, err error, now time.Time) {
 	rec.LastError = sanitizeText(err.Error())
 	rec.LastReason = sanitizeText(durable.FailureReason(err))
 	rec.LastErrorAt = now
@@ -813,7 +813,7 @@ func recordLastError(rec *storedriver.RunRecord, err error, now time.Time) {
 
 // clearLastError resets the last-error fields when the current operation
 // resolves.
-func clearLastError(rec *storedriver.RunRecord) {
+func clearLastError(rec *driver.RunRecord) {
 	rec.LastError, rec.LastReason = "", ""
 	rec.LastErrorAt = time.Time{}
 }
@@ -830,7 +830,7 @@ func clearLastError(rec *storedriver.RunRecord) {
 // commit reaches the Run through the join (awaitTargetDone) and a re-run
 // of the gate reads nothing. Terminality and absence are monotonic, so
 // what the join has seen done never needs re-validating.
-func (e *Engine) awaitGate(rec *storedriver.RunRecord) bool {
+func (e *Engine) awaitGate(rec *driver.RunRecord) bool {
 	park := rec.Awaiting
 	if park == nil {
 		return false
@@ -969,7 +969,7 @@ func (e *Engine) unpark(id durable.RunID) (since time.Time, ok bool) {
 // wake resolves a Run's park: the registration is dropped, WaiterWoken
 // reports the full first-park-to-resolution duration, and the park is
 // settled into the operation's memory.
-func (e *Engine) wake(rec *storedriver.RunRecord, done []durable.RunID, expired bool) {
+func (e *Engine) wake(rec *driver.RunRecord, done []durable.RunID, expired bool) {
 	if since, ok := e.unpark(rec.RunID); ok {
 		e.emitWaiterWoken(observe.WakeEvent{
 			PipelineID: rec.PipelineID, ResourceID: rec.ResourceID, RunID: rec.RunID,
@@ -998,7 +998,7 @@ func (e *Engine) targetDone(target durable.RunID) (bool, error) {
 // attempt reservation — persists it, and every later cursor write carries
 // it, so it outlives ordinary-error retries and restarts until the
 // operation resolves or parks again.
-func settleAwait(rec *storedriver.RunRecord, done []durable.RunID, expired bool) {
+func settleAwait(rec *driver.RunRecord, done []durable.RunID, expired bool) {
 	rec.Awaited = &durable.Wake{Targets: rec.Awaiting.Targets, Done: done, Expired: expired}
 	rec.Awaiting = nil
 }
@@ -1007,7 +1007,7 @@ func settleAwait(rec *storedriver.RunRecord, done []durable.RunID, expired bool)
 // the park is durably noted on the cursor, and the next reconciliation
 // parks through awaitGate (or proceeds immediately if the park already
 // resolves per its mode).
-func (e *Engine) parkAwait(rec *storedriver.RunRecord, stepID durable.StepID, attempts uint64, park *durable.Await, timeout time.Duration, elapsed time.Duration) (bool, time.Duration, bool) {
+func (e *Engine) parkAwait(rec *driver.RunRecord, stepID durable.StepID, attempts uint64, park *durable.Await, timeout time.Duration, elapsed time.Duration) (bool, time.Duration, bool) {
 	if len(park.Targets) == 0 {
 		e.markInvalid(rec, stepID, "await with no targets")
 		return false, 0, false
@@ -1023,7 +1023,7 @@ func (e *Engine) parkAwait(rec *storedriver.RunRecord, stepID durable.StepID, at
 	}
 	// A new park supersedes the memory of the previous one.
 	rec.Awaiting, rec.Awaited = park, nil
-	if !e.apply(rec, storedriver.Transition{Cursor: activeCursor(rec, stepID, attempts)}) {
+	if !e.apply(rec, driver.Transition{Cursor: activeCursor(rec, stepID, attempts)}) {
 		return false, time.Second, true
 	}
 	// Detect cycles after persisting the park: with every parker checking
@@ -1083,7 +1083,7 @@ func (e *Engine) awaitCycle(self durable.RunID, targets []durable.RunID) (bool, 
 }
 
 // retryGate returns a wait when the Run's next attempt is not yet eligible.
-func (e *Engine) retryGate(rec *storedriver.RunRecord) (time.Duration, bool) {
+func (e *Engine) retryGate(rec *driver.RunRecord) (time.Duration, bool) {
 	if rec.NextAttemptAt.IsZero() {
 		return 0, false
 	}
@@ -1096,15 +1096,15 @@ func (e *Engine) retryGate(rec *storedriver.RunRecord) (time.Duration, bool) {
 
 // runForward reserves an attempt and executes one forward operation.
 // done=true means the loop should reconcile again immediately.
-func (e *Engine) runForward(rec *storedriver.RunRecord, def *boundDef, stepID durable.StepID) (done bool, delay time.Duration, again bool) {
+func (e *Engine) runForward(rec *driver.RunRecord, def *boundDef, stepID durable.StepID) (done bool, delay time.Duration, again bool) {
 	sc := def.step(stepID)
 	sr := rec.Step(stepID)
 
 	// Durably reserve the attempt before invoking application code.
-	sr.ForwardStatus = storedriver.OpUnresolved
+	sr.ForwardStatus = driver.OpUnresolved
 	sr.ForwardAttempts++
 	rec.NextAttemptAt = time.Time{}
-	if !e.apply(rec, storedriver.Transition{Cursor: activeCursor(rec, stepID, sr.ForwardAttempts)}) {
+	if !e.apply(rec, driver.Transition{Cursor: activeCursor(rec, stepID, sr.ForwardAttempts)}) {
 		return false, time.Second, true
 	}
 
@@ -1142,18 +1142,18 @@ func (e *Engine) runForward(rec *storedriver.RunRecord, def *boundDef, stepID du
 			stateBytes = b
 		}
 		// State commit and forward success are one durable transition.
-		sr.ForwardStatus = storedriver.OpSucceeded
+		sr.ForwardStatus = driver.OpSucceeded
 		sr.State = stateBytes
 		rec.Awaited = nil
 		clearLastError(rec)
-		if !e.apply(rec, storedriver.Transition{Cursor: idleCursor(rec), Steps: []storedriver.StepWrite{{StepID: stepID, Record: *sr}}}) {
+		if !e.apply(rec, driver.Transition{Cursor: idleCursor(rec), Steps: []driver.StepWrite{{StepID: stepID, Record: *sr}}}) {
 			return false, time.Second, true
 		}
 		e.attemptResolved(rec, stepID, durable.PhaseForward, sr.ForwardAttempts, now.Sub(opStart), observe.AttemptSucceeded, nil, 0, false)
 		return true, 0, false
 
 	case permanent:
-		sr.ForwardStatus = storedriver.OpFailed
+		sr.ForwardStatus = driver.OpFailed
 		rec.RootFailure = &durable.RootFailure{
 			StepID:  stepID,
 			Phase:   durable.PhaseForward,
@@ -1184,7 +1184,7 @@ func (e *Engine) runForward(rec *storedriver.RunRecord, def *boundDef, stepID du
 		rec.Phase = durable.PhaseUnwind
 		rec.Awaited = nil
 		clearLastError(rec)
-		if !e.apply(rec, storedriver.Transition{Cursor: idleCursor(rec), Steps: []storedriver.StepWrite{{StepID: stepID, Record: *sr}}, RootFailure: rec.RootFailure}) {
+		if !e.apply(rec, driver.Transition{Cursor: idleCursor(rec), Steps: []driver.StepWrite{{StepID: stepID, Record: *sr}}, RootFailure: rec.RootFailure}) {
 			return false, time.Second, true
 		}
 		e.attemptResolved(rec, stepID, durable.PhaseForward, sr.ForwardAttempts, now.Sub(opStart), observe.AttemptFailed, cause, 0, false)
@@ -1198,7 +1198,7 @@ func (e *Engine) runForward(rec *storedriver.RunRecord, def *boundDef, stepID du
 		d := e.backoff(sr.ForwardAttempts)
 		rec.NextAttemptAt = now.Add(d)
 		recordLastError(rec, err, now)
-		if !e.apply(rec, storedriver.Transition{Cursor: activeCursor(rec, stepID, sr.ForwardAttempts)}) {
+		if !e.apply(rec, driver.Transition{Cursor: activeCursor(rec, stepID, sr.ForwardAttempts)}) {
 			return false, time.Second, true
 		}
 		e.attemptResolved(rec, stepID, durable.PhaseForward, sr.ForwardAttempts, now.Sub(opStart), observe.AttemptRetrying, err, d, panicked)
@@ -1207,14 +1207,14 @@ func (e *Engine) runForward(rec *storedriver.RunRecord, def *boundDef, stepID du
 }
 
 // runUnwind reserves an attempt and executes one unwind operation.
-func (e *Engine) runUnwind(rec *storedriver.RunRecord, def *boundDef, stepID durable.StepID) (done bool, delay time.Duration, again bool) {
+func (e *Engine) runUnwind(rec *driver.RunRecord, def *boundDef, stepID durable.StepID) (done bool, delay time.Duration, again bool) {
 	sc := def.step(stepID)
 	sr := rec.Step(stepID)
 
-	sr.UnwindStatus = storedriver.OpUnresolved
+	sr.UnwindStatus = driver.OpUnresolved
 	sr.UnwindAttempts++
 	rec.NextAttemptAt = time.Time{}
-	if !e.apply(rec, storedriver.Transition{Cursor: activeCursor(rec, stepID, sr.UnwindAttempts)}) {
+	if !e.apply(rec, driver.Transition{Cursor: activeCursor(rec, stepID, sr.UnwindAttempts)}) {
 		return false, time.Second, true
 	}
 
@@ -1244,17 +1244,17 @@ func (e *Engine) runUnwind(rec *storedriver.RunRecord, def *boundDef, stepID dur
 	kind, reason, _ := durable.FailureInfo(err)
 	switch {
 	case err == nil:
-		sr.UnwindStatus = storedriver.OpSucceeded
+		sr.UnwindStatus = driver.OpSucceeded
 		rec.Awaited = nil
 		clearLastError(rec)
-		if !e.apply(rec, storedriver.Transition{Cursor: idleCursor(rec), Steps: []storedriver.StepWrite{{StepID: stepID, Record: *sr}}}) {
+		if !e.apply(rec, driver.Transition{Cursor: idleCursor(rec), Steps: []driver.StepWrite{{StepID: stepID, Record: *sr}}}) {
 			return false, time.Second, true
 		}
 		e.attemptResolved(rec, stepID, durable.PhaseUnwind, sr.UnwindAttempts, now.Sub(opStart), observe.AttemptSucceeded, nil, 0, false)
 		return true, 0, false
 
 	case permanent:
-		sr.UnwindStatus = storedriver.OpFailed
+		sr.UnwindStatus = driver.OpFailed
 		rec.UnwindFailures = append(rec.UnwindFailures, durable.UnwindFailure{
 			StepID:  stepID,
 			Phase:   durable.PhaseUnwind,
@@ -1266,7 +1266,7 @@ func (e *Engine) runUnwind(rec *storedriver.RunRecord, def *boundDef, stepID dur
 		rec.Awaited = nil
 		clearLastError(rec)
 		uf := rec.UnwindFailures[len(rec.UnwindFailures)-1]
-		if !e.apply(rec, storedriver.Transition{Cursor: idleCursor(rec), Steps: []storedriver.StepWrite{{StepID: stepID, Record: *sr}}, UnwindFailure: &uf}) {
+		if !e.apply(rec, driver.Transition{Cursor: idleCursor(rec), Steps: []driver.StepWrite{{StepID: stepID, Record: *sr}}, UnwindFailure: &uf}) {
 			return false, time.Second, true
 		}
 		e.attemptResolved(rec, stepID, durable.PhaseUnwind, sr.UnwindAttempts, now.Sub(opStart), observe.AttemptFailed, cause, 0, false)
@@ -1276,7 +1276,7 @@ func (e *Engine) runUnwind(rec *storedriver.RunRecord, def *boundDef, stepID dur
 		d := e.backoff(sr.UnwindAttempts)
 		rec.NextAttemptAt = now.Add(d)
 		recordLastError(rec, err, now)
-		if !e.apply(rec, storedriver.Transition{Cursor: activeCursor(rec, stepID, sr.UnwindAttempts)}) {
+		if !e.apply(rec, driver.Transition{Cursor: activeCursor(rec, stepID, sr.UnwindAttempts)}) {
 			return false, time.Second, true
 		}
 		e.attemptResolved(rec, stepID, durable.PhaseUnwind, sr.UnwindAttempts, now.Sub(opStart), observe.AttemptRetrying, err, d, panicked)
@@ -1286,7 +1286,7 @@ func (e *Engine) runUnwind(rec *storedriver.RunRecord, def *boundDef, stepID dur
 
 // reduceAndComplete runs the Reducer (if any) and commits terminal success.
 // It returns false when the Run became invalid or the store failed.
-func (e *Engine) reduceAndComplete(rec *storedriver.RunRecord, def *boundDef) bool {
+func (e *Engine) reduceAndComplete(rec *driver.RunRecord, def *boundDef) bool {
 	if def.cfg.Reduce != nil {
 		view := &reduceView{
 			input:    rec.Input,
@@ -1316,14 +1316,14 @@ func (e *Engine) reduceAndComplete(rec *storedriver.RunRecord, def *boundDef) bo
 	oc := durable.OutcomeSuccess
 	rec.Outcome = &oc
 	rec.Phase = durable.PhaseDone
-	if !e.apply(rec, storedriver.Transition{Cursor: idleCursor(rec), Output: rec.Output, Outcome: rec.Outcome}) {
+	if !e.apply(rec, driver.Transition{Cursor: idleCursor(rec), Output: rec.Output, Outcome: rec.Outcome}) {
 		return false
 	}
 	e.completeRun(rec)
 	return true
 }
 
-func (e *Engine) invocation(rec *storedriver.RunRecord, def *boundDef, stepID durable.StepID, attempt uint64, phase durable.Phase) *attemptInvocation {
+func (e *Engine) invocation(rec *driver.RunRecord, def *boundDef, stepID durable.StepID, attempt uint64, phase durable.Phase) *attemptInvocation {
 	return &attemptInvocation{
 		pipelineID:      rec.PipelineID,
 		resourceID:      rec.ResourceID,
@@ -1346,10 +1346,10 @@ func (e *Engine) debugLog() bool {
 	return e.logger.Enabled(context.Background(), slog.LevelDebug)
 }
 
-func committedStates(rec *storedriver.RunRecord) map[durable.StepID][]byte {
+func committedStates(rec *driver.RunRecord) map[durable.StepID][]byte {
 	states := make(map[durable.StepID][]byte)
 	for id, sr := range rec.Steps {
-		if sr.ForwardStatus == storedriver.OpSucceeded && sr.State != nil {
+		if sr.ForwardStatus == driver.OpSucceeded && sr.State != nil {
 			states[id] = sr.State
 		}
 	}
@@ -1402,10 +1402,10 @@ func (e *Engine) invokeReduce(def *boundDef, view *reduceView) (out proto.Messag
 	return def.cfg.Reduce(view), nil
 }
 
-// activeCursor builds the storedriver.Cursor for a Run whose operation on stepID is
+// activeCursor builds the driver.Cursor for a Run whose operation on stepID is
 // in flight; idleCursor for a Run with none.
-func activeCursor(rec *storedriver.RunRecord, stepID durable.StepID, attempts uint64) storedriver.Cursor {
-	return storedriver.Cursor{
+func activeCursor(rec *driver.RunRecord, stepID durable.StepID, attempts uint64) driver.Cursor {
+	return driver.Cursor{
 		Phase:         rec.Phase,
 		StepID:        stepID,
 		Attempts:      attempts,
@@ -1418,20 +1418,20 @@ func activeCursor(rec *storedriver.RunRecord, stepID durable.StepID, attempts ui
 	}
 }
 
-func idleCursor(rec *storedriver.RunRecord) storedriver.Cursor { return activeCursor(rec, "", 0) }
+func idleCursor(rec *driver.RunRecord) driver.Cursor { return activeCursor(rec, "", 0) }
 
 // apply performs one atomic durable transition. Any unresolved operation
 // in rec covered by neither the cursor nor an explicit step write (an
 // unwind operation displaced by topology change) is flushed as a step row
 // so its attempt count survives.
-func (e *Engine) apply(rec *storedriver.RunRecord, t storedriver.Transition) bool {
+func (e *Engine) apply(rec *driver.RunRecord, t driver.Transition) bool {
 	rec.UpdatedAt = e.clock.Now()
 	t.Cursor.UpdatedAt = rec.UpdatedAt
 	for id, sr := range rec.Steps {
 		if id == t.Cursor.StepID {
 			continue
 		}
-		if sr.ForwardStatus != storedriver.OpUnresolved && sr.UnwindStatus != storedriver.OpUnresolved {
+		if sr.ForwardStatus != driver.OpUnresolved && sr.UnwindStatus != driver.OpUnresolved {
 			continue
 		}
 		covered := false
@@ -1442,7 +1442,7 @@ func (e *Engine) apply(rec *storedriver.RunRecord, t storedriver.Transition) boo
 			}
 		}
 		if !covered {
-			t.Steps = append(t.Steps, storedriver.StepWrite{StepID: id, Record: *sr})
+			t.Steps = append(t.Steps, driver.StepWrite{StepID: id, Record: *sr})
 		}
 	}
 	if err := e.store.ApplyTransition(e.baseCtx, rec.RunID, t); err != nil {
@@ -1472,7 +1472,7 @@ func (e *Engine) backoff(attempts uint64) time.Duration {
 // the Run. Invalidity is deployment-relative and derived, not persisted:
 // the Run is logged, surfaced through Status and Wait, and ignored for
 // execution until a corrected deployment reconciles it.
-func (e *Engine) markInvalid(rec *storedriver.RunRecord, stepID durable.StepID, reason string) {
+func (e *Engine) markInvalid(rec *driver.RunRecord, stepID durable.StepID, reason string) {
 	ie := &InvalidRunError{RunID: rec.RunID, PipelineID: rec.PipelineID, Reason: reason}
 	e.mu.Lock()
 	// Idempotent per (run, reason): re-dispatches of an already-invalid
@@ -1505,7 +1505,7 @@ func (e *Engine) invalidFor(id durable.RunID) *InvalidRunError {
 	return e.invalid[id]
 }
 
-func factsOf(rec *storedriver.RunRecord) ledger.Facts {
+func factsOf(rec *driver.RunRecord) ledger.Facts {
 	f := ledger.Facts{
 		Forward: make(map[string]ledger.OpState, len(rec.Steps)),
 		Unwind:  make(map[string]ledger.OpState, len(rec.Steps)),
@@ -1517,13 +1517,13 @@ func factsOf(rec *storedriver.RunRecord) ledger.Facts {
 	return f
 }
 
-func opState(s storedriver.OpStatus) ledger.OpState {
+func opState(s driver.OpStatus) ledger.OpState {
 	switch s {
-	case storedriver.OpUnresolved:
+	case driver.OpUnresolved:
 		return ledger.OpUnresolved
-	case storedriver.OpSucceeded:
+	case driver.OpSucceeded:
 		return ledger.OpSucceeded
-	case storedriver.OpFailed:
+	case driver.OpFailed:
 		return ledger.OpFailed
 	default:
 		return ledger.OpNone

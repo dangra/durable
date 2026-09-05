@@ -122,8 +122,8 @@ jobs:
           go test -fuzz=FuzzOps -fuzztime=10s ./internal/tokenpool/
           go test -fuzz=FuzzOps -fuzztime=10s ./internal/watchset/
           go test -fuzz=FuzzOps -fuzztime=10s ./internal/joinset/
-          go test -fuzz=FuzzRoundTrip -fuzztime=10s ./internal/storagepb/
-          go test -run xxx -fuzz=FuzzStoreContract -fuzztime=10s ./bboltstore/
+          go test -fuzz=FuzzRoundTrip -fuzztime=10s ./store/internal/storagepb/
+          go test -run xxx -fuzz=FuzzStoreContract -fuzztime=10s ./store/bbolt/
 
   staticcheck:
     name: Staticcheck

@@ -88,8 +88,8 @@ it. The generated package gives you typed handler interfaces, a
 constructor, and a pipeline handle:
 
 ```go
-store, _ := bboltstore.Open("deploys.db")
-eng := engine.New(store)
+st, _ := store.Open("bbolt:///var/lib/deployd/deploys.db") // import _ ".../store/bbolt"
+eng := engine.New(st)
 
 deploy, err := deploypb.NewDeployService(
     &provisionEnv{}, &runMigrations{}, &shiftTraffic{},

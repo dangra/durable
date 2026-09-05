@@ -41,7 +41,9 @@ an in-tree module.
 3. **Tag**: run the *Tag release* workflow (Actions → Tag release → Run
    workflow) with `version = v0.4.0`. At `master` HEAD it checks that
    `VERSION` and the require lines equal the version, that no tag exists
-   yet, and that every CI check on the commit is green; then it creates
+   yet, and that every CI check on the commit is green — waiting, up to
+   twenty minutes, for the run a squash merge starts on the merge
+   commit, so you can press the button right after merging; then it creates
    annotated tags for the core and every contrib module, pushes them
    atomically, publishes the GitHub release with generated notes and a
    module list, and finally fetches every tagged module at the version
@@ -50,8 +52,9 @@ an in-tree module.
    check and creates nothing.
 
 Pre-releases (`v0.4.0-rc.1`) work the same way and are marked as such
-on GitHub. Rehearse the whole procedure with one before a first real
-cut.
+on GitHub. `v0.4.0-rc.1` was the first cut made with this procedure,
+as a rehearsal: prepare, merge, a `dry_run`, then the real run, whose
+consumer check passed.
 
 ## When the consumer check fails
 

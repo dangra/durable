@@ -427,7 +427,7 @@ func (e *Engine) sweepRetention() {
 // leaves unresolved Runs nonterminal. Shutdown does not create Pipeline
 // failure; a future Engine resumes the Runs.
 //
-// With WithDrainTimeout, Stop first drains: no new attempts start while
+// WithDrainTimeout makes Stop drain first: no new attempts start while
 // in-flight ones finish with live contexts and commit their results;
 // only at the deadline (or when ctx expires) are stragglers preempted.
 func (e *Engine) Stop(ctx context.Context) error {

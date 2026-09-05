@@ -12,6 +12,42 @@
 // forward and unwind frontiers. See the spec/ directory for the full
 // specification.
 //
+// # The API in five groups
+//
+// Alphabetical godoc flattens this package; it reads better in its five
+// working groups:
+//
+// Declaring pipelines. Generated code (protoc-gen-durable over
+// durable.v1 proto options) is the primary path; NewDefinition with
+// DefinitionConfig and StepConfig is the hand-rolled equivalent the
+// generated code itself uses. StepRef and StateStepRef are the step
+// references generated packages export (StepIdentifier is the interface
+// both satisfy), LookupState and StateSource power typed state reads,
+// and ReduceView is what a Reducer folds.
+//
+// Running an engine. NewEngine over a storedriver implementation, the
+// With* Options, Start, Stop (graceful with WithDrainTimeout), and
+// Stats.
+//
+// Scheduling and watching runs. Pipeline.Schedule with ScheduleOptions
+// (WithAnnotations, StartAt, StartAfter) or an engine-wide
+// ScheduleAnnotator; the Run handle (Wait, Cancel, Status); Result,
+// Status, RunState, Outcome, and the failure records; the identity
+// types; ScheduleConflictError, PipelineMismatchError, InvalidRunError,
+// and the Err* sentinels.
+//
+// Writing handlers. Invocation carries input, prior state, and attempt
+// metadata. The ways out: success, an ordinary error (retried — a
+// returned ctx.Err() included), Fail with FailOptions and
+// kind/reason attribution, or AwaitRun to park on another Run.
+// Middleware wraps every attempt (AwaitTarget and FailureInfo classify
+// results; PreemptedError and ErrEngineStopping name why an attempt ctx
+// died); FailFastOnCancel with FailFastExcept opts preemption-safe
+// pipelines out of cooperative cancellation.
+//
+// Observing. Logging below; observe holds the Observer event surface,
+// contrib/durableotel the packaged OpenTelemetry adapter.
+//
 // # Logging
 //
 // The Engine logs lifecycle events through the log/slog logger given to

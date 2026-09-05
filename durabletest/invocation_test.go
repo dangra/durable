@@ -110,6 +110,33 @@ func TestFakeInvocationCopiesAndMemory(t *testing.T) {
 	}
 }
 
+func TestFakeInvocationOwnsItsConfig(t *testing.T) {
+	cfg := durabletest.InvocationConfig{
+		Input:       wrapperspb.String("in"),
+		State:       map[durable.StepID]proto.Message{nameStep.ID(): wrapperspb.String("alice")},
+		Annotations: map[string]string{"k": "v"},
+		Awaited:     &durable.Wake{Targets: []durable.RunID{"child"}},
+	}
+	inv := durabletest.NewInvocation(cfg)
+	cfg.Input.(*wrapperspb.StringValue).Value = "mutated"
+	cfg.State[nameStep.ID()].(*wrapperspb.StringValue).Value = "mutated"
+	cfg.Annotations["k"] = "mutated"
+	cfg.Awaited.Targets[0] = "mutated"
+
+	if inv.InputMessage().(*wrapperspb.StringValue).GetValue() != "in" {
+		t.Fatal("Input must be copied at construction")
+	}
+	if v, _ := durable.LookupState(inv, nameStep); v.GetValue() != "alice" {
+		t.Fatal("State must be captured at construction")
+	}
+	if inv.Annotations()["k"] != "v" {
+		t.Fatal("Annotations must be copied at construction")
+	}
+	if id, _ := inv.AwaitedRunID(); id != "child" {
+		t.Fatal("Awaited must be copied at construction")
+	}
+}
+
 func TestFakeInvocationLoggerAndViolation(t *testing.T) {
 	var buf bytes.Buffer
 	inv := durabletest.NewInvocation(durabletest.InvocationConfig{

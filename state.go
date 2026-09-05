@@ -8,7 +8,9 @@ import "google.golang.org/protobuf/proto"
 // does durabletest's fake.
 type StateSource interface {
 	// StateBytes returns the committed State of the Step as persisted, or
-	// ok=false when the Run has none for it.
+	// ok=false when the Run has none for it. The bytes are owned by the
+	// source and must not be modified; LookupState only decodes them,
+	// and the decoded message is the caller-owned copy.
 	StateBytes(StepID) ([]byte, bool)
 
 	// ReportViolation records a runtime contract violation observed while

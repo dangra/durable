@@ -2,6 +2,7 @@ package durabletest
 
 import (
 	"log/slog"
+	"maps"
 	"sync"
 
 	"google.golang.org/protobuf/proto"
@@ -56,9 +57,19 @@ var (
 	_ durable.ReduceView = (*Invocation)(nil)
 )
 
-// NewInvocation builds a fake Invocation from cfg. It panics if a State
-// message cannot be marshaled, which indicates a broken test fixture.
+// NewInvocation builds a fake Invocation from cfg. The fake owns copies
+// of Input, State, Annotations, and Awaited, so mutating cfg's values
+// after construction does not change what the handler observes. It
+// panics if a State message cannot be marshaled, which indicates a
+// broken test fixture.
 func NewInvocation(cfg InvocationConfig) *Invocation {
+	if cfg.Input != nil {
+		cfg.Input = proto.Clone(cfg.Input)
+	}
+	if len(cfg.Annotations) > 0 {
+		cfg.Annotations = maps.Clone(cfg.Annotations)
+	}
+	cfg.Awaited = cfg.Awaited.Clone()
 	if cfg.Phase == 0 {
 		cfg.Phase = durable.PhaseForward
 	}

@@ -16,7 +16,7 @@ const Scheme = "mem"
 func init() {
 	store.Register(Scheme, func(u *url.URL) (driver.Store, error) {
 		if u.Host != "" || u.Path != "" || u.Opaque != "" || u.RawQuery != "" {
-			return nil, fmt.Errorf("mem: %q: the URI takes no path or options; use mem:", u)
+			return nil, fmt.Errorf("mem: %q: the URI takes no path or options (want plain mem:)", u)
 		}
 		return New(), nil
 	})

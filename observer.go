@@ -3,6 +3,7 @@ package durable
 import (
 	"context"
 	"fmt"
+	"github.com/dangra/durable/storedriver"
 	"runtime/debug"
 	"time"
 )
@@ -20,7 +21,7 @@ import (
 // crash between a commit and its callback loses the event, and a
 // redispatched at-least-once attempt can fire again. Treat counters
 // built from them as operational signal, not accounting — anything that
-// must be exact reads the Store.
+// must be exact reads the storedriver.Store.
 type Observer struct {
 	// RunScheduled fires when Schedule accepts a new Run (created=true).
 	RunScheduled func(RunEvent)
@@ -45,8 +46,8 @@ type Observer struct {
 	ClassWait func(ClassWaitEvent)
 	// RunsReaped fires after each retention sweep that deleted anything.
 	RunsReaped func(count int)
-	// StoreOp fires after every Store call, reads included. Installing
-	// it wraps the Store at NewEngine time.
+	// StoreOp fires after every storedriver.Store call, reads included. Installing
+	// it wraps the storedriver.Store at NewEngine time.
 	StoreOp func(StoreOpEvent)
 }
 
@@ -169,9 +170,9 @@ type ClassWaitEvent struct {
 	Duration   time.Duration
 }
 
-// StoreOpEvent reports one Store call: Op is the method name, and Write
+// StoreOpEvent reports one storedriver.Store call: Op is the method name, and Write
 // marks methods that durably write. Write is declared by the engine's
-// store decorator method-by-method, so a Store method added later cannot
+// store decorator method-by-method, so a storedriver.Store method added later cannot
 // reach observers unclassified — the decorator will not compile without
 // an implementation stating it.
 type StoreOpEvent struct {
@@ -227,7 +228,7 @@ func (e *Engine) emitRunUnwinding(ev RunFailureEvent) {
 	}
 }
 
-func (e *Engine) emitRunTerminal(rec *RunRecord) {
+func (e *Engine) emitRunTerminal(rec *storedriver.RunRecord) {
 	if len(e.observers) == 0 {
 		return
 	}
@@ -279,7 +280,7 @@ func (e *Engine) emitStoreOp(ev StoreOpEvent) {
 }
 
 // hasStoreObserver reports whether any installed observer subscribes to
-// StoreOp, deciding whether NewEngine wraps the Store.
+// StoreOp, deciding whether NewEngine wraps the storedriver.Store.
 func (e *Engine) hasStoreObserver() bool {
 	for i := range e.observers {
 		if e.observers[i].StoreOp != nil {
@@ -289,12 +290,12 @@ func (e *Engine) hasStoreObserver() bool {
 	return false
 }
 
-// observedStore decorates the engine's Store with StoreOp events. Every
-// Store method is implemented explicitly, no embedding: a method added
+// observedStore decorates the engine's storedriver.Store with StoreOp events. Every
+// storedriver.Store method is implemented explicitly, no embedding: a method added
 // to the interface later breaks this build instead of escaping
 // observation.
 type observedStore struct {
-	inner  Store
+	inner  storedriver.Store
 	engine *Engine
 }
 
@@ -302,28 +303,28 @@ func (s *observedStore) op(name string, write bool, start time.Time, err error) 
 	s.engine.emitStoreOp(StoreOpEvent{Op: name, Write: write, Duration: s.engine.clock.Now().Sub(start), Err: err})
 }
 
-func (s *observedStore) CreateRun(ctx context.Context, rec *RunRecord) (*RunRecord, bool, error) {
+func (s *observedStore) CreateRun(ctx context.Context, rec *storedriver.RunRecord) (*storedriver.RunRecord, bool, error) {
 	start := s.engine.clock.Now()
 	existing, created, err := s.inner.CreateRun(ctx, rec)
 	s.op("CreateRun", true, start, err)
 	return existing, created, err
 }
 
-func (s *observedStore) GetRun(ctx context.Context, id RunID) (*RunRecord, error) {
+func (s *observedStore) GetRun(ctx context.Context, id RunID) (*storedriver.RunRecord, error) {
 	start := s.engine.clock.Now()
 	rec, err := s.inner.GetRun(ctx, id)
 	s.op("GetRun", false, start, err)
 	return rec, err
 }
 
-func (s *observedStore) ApplyTransition(ctx context.Context, id RunID, t Transition) error {
+func (s *observedStore) ApplyTransition(ctx context.Context, id RunID, t storedriver.Transition) error {
 	start := s.engine.clock.Now()
 	err := s.inner.ApplyTransition(ctx, id, t)
 	s.op("ApplyTransition", true, start, err)
 	return err
 }
 
-func (s *observedStore) RequestCancel(ctx context.Context, id RunID, req CancelRequest) (bool, error) {
+func (s *observedStore) RequestCancel(ctx context.Context, id RunID, req storedriver.CancelRequest) (bool, error) {
 	start := s.engine.clock.Now()
 	accepted, err := s.inner.RequestCancel(ctx, id, req)
 	s.op("RequestCancel", true, start, err)
@@ -337,14 +338,14 @@ func (s *observedStore) ReapTerminal(ctx context.Context, before time.Time, limi
 	return n, err
 }
 
-func (s *observedStore) ListNonterminal(ctx context.Context) ([]*RunRecord, error) {
+func (s *observedStore) ListNonterminal(ctx context.Context) ([]*storedriver.RunRecord, error) {
 	start := s.engine.clock.Now()
 	recs, err := s.inner.ListNonterminal(ctx)
 	s.op("ListNonterminal", false, start, err)
 	return recs, err
 }
 
-func (s *observedStore) ListRuns(ctx context.Context, pipeline PipelineID, resource ResourceID) ([]*RunRecord, error) {
+func (s *observedStore) ListRuns(ctx context.Context, pipeline PipelineID, resource ResourceID) ([]*storedriver.RunRecord, error) {
 	start := s.engine.clock.Now()
 	recs, err := s.inner.ListRuns(ctx, pipeline, resource)
 	s.op("ListRuns", false, start, err)

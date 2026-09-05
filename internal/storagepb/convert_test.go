@@ -1,6 +1,7 @@
 package storagepb
 
 import (
+	"github.com/dangra/durable/storedriver"
 	"reflect"
 	"testing"
 	"time"
@@ -13,7 +14,7 @@ import (
 func at(sec int64) time.Time { return time.Unix(sec, 123456789).UTC() }
 
 func TestRunMetaRoundTrip(t *testing.T) {
-	rec := &durable.RunRecord{
+	rec := &storedriver.RunRecord{
 		RunID:      "run-1",
 		PipelineID: "provision-machine",
 		ResourceID: "machine-1",
@@ -25,7 +26,7 @@ func TestRunMetaRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MarshalRunMeta: %v", err)
 	}
-	got := &durable.RunRecord{}
+	got := &storedriver.RunRecord{}
 	if err := UnmarshalRunMetaInto(b, got); err != nil {
 		t.Fatalf("UnmarshalRunMetaInto: %v", err)
 	}
@@ -35,7 +36,7 @@ func TestRunMetaRoundTrip(t *testing.T) {
 }
 
 func TestCursorRoundTrip(t *testing.T) {
-	cases := []durable.Cursor{
+	cases := []storedriver.Cursor{
 		{
 			Phase:         durable.PhaseForward,
 			StepID:        "reserve/v1",
@@ -64,11 +65,11 @@ func TestCursorRoundTrip(t *testing.T) {
 }
 
 func TestStepRecordRoundTrip(t *testing.T) {
-	sr := &durable.StepRecord{
-		ForwardStatus:   durable.OpSucceeded,
+	sr := &storedriver.StepRecord{
+		ForwardStatus:   storedriver.OpSucceeded,
 		ForwardAttempts: 3,
 		State:           []byte{1, 2, 3},
-		UnwindStatus:    durable.OpUnresolved,
+		UnwindStatus:    storedriver.OpUnresolved,
 		UnwindAttempts:  2,
 	}
 	b, err := MarshalStepRecord(sr)
@@ -139,7 +140,7 @@ func TestTerminalRoundTrip(t *testing.T) {
 }
 
 func TestCancelRoundTrip(t *testing.T) {
-	c := &durable.CancelRequest{Cause: "operator", At: at(500)}
+	c := &storedriver.CancelRequest{Cause: "operator", At: at(500)}
 	b, err := MarshalCancel(c)
 	if err != nil {
 		t.Fatalf("MarshalCancel: %v", err)

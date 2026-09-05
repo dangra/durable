@@ -2,28 +2,6 @@ package durable
 
 import "time"
 
-// Phase is the execution phase of a Run.
-type Phase uint8
-
-const (
-	PhaseForward Phase = iota + 1
-	PhaseUnwind
-	PhaseDone
-)
-
-func (p Phase) String() string {
-	switch p {
-	case PhaseForward:
-		return "forward"
-	case PhaseUnwind:
-		return "unwind"
-	case PhaseDone:
-		return "done"
-	default:
-		return "unknown"
-	}
-}
-
 // RunState is the scheduler-visible state of a Run, distinct from Phase.
 type RunState uint8
 
@@ -66,25 +44,6 @@ func (s RunState) String() string {
 		return "invalid"
 	case RunStateDone:
 		return "done"
-	default:
-		return "unknown"
-	}
-}
-
-// Outcome is the terminal business outcome of a Run.
-type Outcome uint8
-
-const (
-	OutcomeSuccess Outcome = iota + 1
-	OutcomeFailure
-)
-
-func (o Outcome) String() string {
-	switch o {
-	case OutcomeSuccess:
-		return "success"
-	case OutcomeFailure:
-		return "failure"
 	default:
 		return "unknown"
 	}

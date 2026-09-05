@@ -2,36 +2,6 @@ package durable
 
 import "errors"
 
-// FailureKind attributes a permanent failure. It is purely informational:
-// the engine's scheduling, retry, and unwind behavior never depend on it.
-type FailureKind uint8
-
-const (
-	// FailureKindSystem attributes the failure to infrastructure or
-	// environment: retrying elsewhere or later might have helped, paging
-	// someone is appropriate. It is the zero value and the default.
-	FailureKindSystem FailureKind = iota
-	// FailureKindUser attributes the failure to the request or intent
-	// itself: no amount of infrastructure health would have made it
-	// succeed.
-	FailureKindUser
-	// FailureKindCanceled marks a RootFailure established by Run
-	// cancellation. It is created by the engine; handlers should not
-	// attribute their own failures with it.
-	FailureKindCanceled
-)
-
-func (k FailureKind) String() string {
-	switch k {
-	case FailureKindUser:
-		return "user"
-	case FailureKindCanceled:
-		return "canceled"
-	default:
-		return "system"
-	}
-}
-
 // FailureReasoner may be implemented by any error in a handler's error
 // chain to carry a machine-readable failure reason. Reasons should be
 // short, low-cardinality slugs ("invalid-image", "insufficient-capacity"):

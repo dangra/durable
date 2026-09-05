@@ -1,6 +1,7 @@
 package storagepb
 
 import (
+	"github.com/dangra/durable/storedriver"
 	"strings"
 	"testing"
 	"time"
@@ -32,7 +33,7 @@ func FuzzRoundTrip(f *testing.F) {
 		sameTime := func(x, y time.Time) bool { return x.Equal(y) }
 
 		// Cursor.
-		cur := durable.Cursor{
+		cur := storedriver.Cursor{
 			Phase: phase, StepID: durable.StepID(s1), Attempts: n,
 			AwaitingRunID: durable.RunID(s2),
 			NextAttemptAt: when, LastError: s2, LastReason: s1, LastErrorAt: when,
@@ -55,10 +56,10 @@ func FuzzRoundTrip(f *testing.F) {
 		}
 
 		// StepRecord.
-		sr := &durable.StepRecord{
-			ForwardStatus: durable.OpStatus(a % 4), ForwardAttempts: n,
+		sr := &storedriver.StepRecord{
+			ForwardStatus: storedriver.OpStatus(a % 4), ForwardAttempts: n,
 			State:        append([]byte(nil), blob...),
-			UnwindStatus: durable.OpStatus(b % 4), UnwindAttempts: n / 2,
+			UnwindStatus: storedriver.OpStatus(b % 4), UnwindAttempts: n / 2,
 		}
 		sb, err := MarshalStepRecord(sr)
 		if err != nil {
@@ -116,7 +117,7 @@ func FuzzRoundTrip(f *testing.F) {
 		}
 
 		// Cancel.
-		xb, err := MarshalCancel(&durable.CancelRequest{Cause: s1, At: when})
+		xb, err := MarshalCancel(&storedriver.CancelRequest{Cause: s1, At: when})
 		if err != nil {
 			t.Fatalf("MarshalCancel: %v", err)
 		}
@@ -129,7 +130,7 @@ func FuzzRoundTrip(f *testing.F) {
 		}
 
 		// RunMeta.
-		rec := &durable.RunRecord{
+		rec := &storedriver.RunRecord{
 			RunID: durable.RunID(s1), PipelineID: durable.PipelineID(s2),
 			ResourceID: durable.ResourceID(s1), Group: s2,
 			Input: append([]byte(nil), blob...), CreatedAt: when,
@@ -141,7 +142,7 @@ func FuzzRoundTrip(f *testing.F) {
 		if err != nil {
 			t.Fatalf("MarshalRunMeta: %v", err)
 		}
-		grec := &durable.RunRecord{}
+		grec := &storedriver.RunRecord{}
 		if err := UnmarshalRunMetaInto(mb, grec); err != nil {
 			t.Fatalf("UnmarshalRunMetaInto: %v", err)
 		}
@@ -164,6 +165,6 @@ func FuzzRoundTrip(f *testing.F) {
 		_, _, _ = UnmarshalFailures(blob)
 		_, _, _ = UnmarshalTerminal(blob)
 		_, _ = UnmarshalCancel(blob)
-		_ = UnmarshalRunMetaInto(blob, &durable.RunRecord{})
+		_ = UnmarshalRunMetaInto(blob, &storedriver.RunRecord{})
 	})
 }

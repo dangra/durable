@@ -3,6 +3,8 @@ package durable
 import (
 	"errors"
 	"fmt"
+
+	"github.com/dangra/durable/storedriver"
 )
 
 // ErrEngineNotStarted is returned by Schedule and other execution APIs
@@ -21,7 +23,7 @@ var ErrEngineStopping = errors.New("durable: engine stopping")
 
 // PreemptedError is the context cancellation cause (context.Cause) an
 // attempt context carries when the engine preempts it for a Run
-// cancellation request; Cause is the CancelRequest's cause. Returning
+// cancellation request; Cause is the storedriver.CancelRequest's cause. Returning
 // ctx.Err() remains the cooperative default (the re-executed attempt
 // observes Invocation.CancelRequested). A handler or middleware that
 // instead yields immediately returns a Fail wrapping this error; when
@@ -41,11 +43,11 @@ func (e *PreemptedError) Error() string {
 }
 
 // ErrRunNotFound is returned when no Run exists for a RunID.
-var ErrRunNotFound = errors.New("durable: run not found")
+var ErrRunNotFound = storedriver.ErrRunNotFound
 
 // ErrRunTerminal is returned by Cancel when the Run already has a committed
 // terminal outcome.
-var ErrRunTerminal = errors.New("durable: run already terminal")
+var ErrRunTerminal = storedriver.ErrRunTerminal
 
 // ScheduleConflictError is returned by Schedule when a nonterminal Run
 // already occupies the resource slot: a Run of the same pipeline with

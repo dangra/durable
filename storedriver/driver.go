@@ -1,9 +1,26 @@
-package durable
+// Package storedriver is durable's store SPI — the contract between the
+// engine and a persistence backend, in the spirit of database/sql/driver.
+// Normal users of durable never import it: they configure an engine with
+// an existing implementation (bboltstore, durabletest.NewMemStore) and
+// work with the durable package. Implementers of a new backend implement
+// Store over the record types here; the differential fuzzer against
+// durabletest's MemStore (bboltstore/fuzz_test.go) is the executable
+// form of this contract.
+package storedriver
 
 import (
 	"context"
+	"errors"
 	"time"
 )
+
+// ErrRunNotFound is returned when no Run exists for a RunID. The root
+// durable package aliases it.
+var ErrRunNotFound = errors.New("durable: run not found")
+
+// ErrRunTerminal is returned by cancellation paths when the Run already
+// has a committed terminal outcome. The root durable package aliases it.
+var ErrRunTerminal = errors.New("durable: run already terminal")
 
 // OpStatus is the durable resolution status of one logical operation
 // (a Step's forward execution or its unwind).

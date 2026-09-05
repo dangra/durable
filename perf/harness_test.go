@@ -21,6 +21,7 @@ package perf
 import (
 	"context"
 	"fmt"
+	"github.com/dangra/durable/storedriver"
 	"path/filepath"
 	"sort"
 	"sync"
@@ -250,13 +251,13 @@ func seedPopulation(b *testing.B, v *env, nonterminal, terminal int) []durable.R
 			kind = "t"
 		}
 		id := durable.RunID(fmt.Sprintf("seed-%s-%06d", kind, i))
-		rec := &durable.RunRecord{
+		rec := &storedriver.RunRecord{
 			RunID:      id,
 			PipelineID: "recover",
 			ResourceID: durable.ResourceID(fmt.Sprintf("seed-%s-%d", kind, i)),
 			Input:      fatInputBytes,
 			Phase:      durable.PhaseForward,
-			Steps:      map[durable.StepID]*durable.StepRecord{},
+			Steps:      map[durable.StepID]*storedriver.StepRecord{},
 			CreatedAt:  time.Now(),
 		}
 		steps := numSteps - 1 // parked before the last step
@@ -264,8 +265,8 @@ func seedPopulation(b *testing.B, v *env, nonterminal, terminal int) []durable.R
 			steps = numSteps
 		}
 		for s := 0; s < steps; s++ {
-			rec.Steps[durable.StepID(fmt.Sprintf("recover-step-%d/v1", s))] = &durable.StepRecord{
-				ForwardStatus: durable.OpSucceeded, ForwardAttempts: 1, State: state,
+			rec.Steps[durable.StepID(fmt.Sprintf("recover-step-%d/v1", s))] = &storedriver.StepRecord{
+				ForwardStatus: storedriver.OpSucceeded, ForwardAttempts: 1, State: state,
 			}
 		}
 		if _, created, err := v.store.CreateRun(context.Background(), rec); err != nil || !created {
@@ -273,8 +274,8 @@ func seedPopulation(b *testing.B, v *env, nonterminal, terminal int) []durable.R
 			return
 		}
 		if term {
-			err := v.store.ApplyTransition(context.Background(), id, durable.Transition{
-				Cursor:  durable.Cursor{Phase: durable.PhaseDone, UpdatedAt: time.Now()},
+			err := v.store.ApplyTransition(context.Background(), id, storedriver.Transition{
+				Cursor:  storedriver.Cursor{Phase: durable.PhaseDone, UpdatedAt: time.Now()},
 				Outcome: &oc,
 			})
 			if err != nil {

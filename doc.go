@@ -47,4 +47,24 @@
 // shape (Middleware to extract, WithTraceContext to inject), and
 // examples/tracing-otel demonstrates it over a generated
 // order-fulfillment pipeline.
+//
+// # Package map
+//
+// This package is the whole user API: declaring pipelines (generated
+// code plus NewDefinition for hand-rolled ones), running an engine, and
+// writing handlers. The rest of the module serves narrower audiences:
+//
+//   - storedriver holds the store SPI — the Store interface and the
+//     durable record types — for implementers of persistence backends,
+//     in the spirit of database/sql/driver. Users pick an existing
+//     implementation and never import it.
+//   - bboltstore is the production bbolt-backed Store.
+//   - durabletest provides the in-memory Store and fake Clock for
+//     tests.
+//   - durablepb and cmd/protoc-gen-durable are the protobuf options and
+//     the code generator behind the generated typed API.
+//   - contrib/durableotel (separate module) is the OpenTelemetry
+//     integration.
+//
+// docs/tour.md walks the features; spec/ holds the normative rules.
 package durable

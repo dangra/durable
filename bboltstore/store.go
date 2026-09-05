@@ -1,4 +1,4 @@
-// Package bboltstore implements durable.Store on a local bbolt database.
+// Package bboltstore implements storedriver.Store on a local bbolt database.
 //
 // bbolt's file lock provides the exclusive single-engine ownership the
 // durable v1 model requires: a second process opening the same database
@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/dangra/durable/storedriver"
 	"sort"
 	"sync/atomic"
 	"time"
@@ -38,7 +39,7 @@ var (
 	slotsBucket    = []byte("slots")
 )
 
-// Store is a durable.Store backed by a bbolt database file.
+// Store is a storedriver.Store backed by a bbolt database file.
 type Store struct {
 	db *bolt.DB
 	// pending counts in-flight ApplyTransition calls for adaptive group
@@ -81,7 +82,7 @@ func Open(path string) (*Store, error) {
 // slotKey joins the slot pair with NUL, which the Store contract
 // guarantees appears in no identifier — otherwise distinct
 // (group, resource) pairs could alias one key.
-func slotKey(rec *durable.RunRecord) []byte {
+func slotKey(rec *storedriver.RunRecord) []byte {
 	return []byte(rec.SlotGroup() + "\x00" + string(rec.ResourceID))
 }
 
@@ -102,8 +103,8 @@ func (s *Store) groupCommit() (commit func(func(*bolt.Tx) error) error, done fun
 	return commit, func() { s.pending.Add(-1) }
 }
 
-func (s *Store) CreateRun(_ context.Context, rec *durable.RunRecord) (*durable.RunRecord, bool, error) {
-	var existing *durable.RunRecord
+func (s *Store) CreateRun(_ context.Context, rec *storedriver.RunRecord) (*storedriver.RunRecord, bool, error) {
+	var existing *storedriver.RunRecord
 	created := false
 	commit, done := s.groupCommit()
 	defer done()
@@ -131,7 +132,7 @@ func (s *Store) CreateRun(_ context.Context, rec *durable.RunRecord) (*durable.R
 
 // putRun persists every present component of rec; used at creation (and
 // for seeded records carrying pre-existing facts).
-func putRun(tx *bolt.Tx, rec *durable.RunRecord) error {
+func putRun(tx *bolt.Tx, rec *storedriver.RunRecord) error {
 	meta, err := storagepb.MarshalRunMeta(rec)
 	if err != nil {
 		return err
@@ -139,7 +140,7 @@ func putRun(tx *bolt.Tx, rec *durable.RunRecord) error {
 	if err := tx.Bucket(metaBucket).Put([]byte(rec.RunID), meta); err != nil {
 		return err
 	}
-	cursor, err := storagepb.MarshalCursor(durable.Cursor{
+	cursor, err := storagepb.MarshalCursor(storedriver.Cursor{
 		Phase:         rec.Phase,
 		NextAttemptAt: rec.NextAttemptAt,
 		LastError:     rec.LastError,
@@ -184,7 +185,7 @@ func putRun(tx *bolt.Tx, rec *durable.RunRecord) error {
 	return nil
 }
 
-func (s *Store) ApplyTransition(_ context.Context, id durable.RunID, t durable.Transition) error {
+func (s *Store) ApplyTransition(_ context.Context, id durable.RunID, t storedriver.Transition) error {
 	commit, done := s.groupCommit()
 	defer done()
 	return commit(func(tx *bolt.Tx) error {
@@ -238,7 +239,7 @@ func (s *Store) ApplyTransition(_ context.Context, id durable.RunID, t durable.T
 				return err
 			}
 			// Terminality releases the resource slot.
-			rec := &durable.RunRecord{}
+			rec := &storedriver.RunRecord{}
 			if err := storagepb.UnmarshalRunMetaInto(metaBytes, rec); err != nil {
 				return err
 			}
@@ -262,12 +263,12 @@ func readFailures(tx *bolt.Tx, id durable.RunID) (*durable.RootFailure, []durabl
 // getRun assembles the read model from the run's components: meta, step
 // rows, failures, terminal — with the cursor's in-flight operation
 // overlaid as an unresolved step entry.
-func getRun(tx *bolt.Tx, id durable.RunID) (*durable.RunRecord, error) {
+func getRun(tx *bolt.Tx, id durable.RunID) (*storedriver.RunRecord, error) {
 	metaBytes := tx.Bucket(metaBucket).Get([]byte(id))
 	if metaBytes == nil {
 		return nil, durable.ErrRunNotFound
 	}
-	rec := &durable.RunRecord{}
+	rec := &storedriver.RunRecord{}
 	if err := storagepb.UnmarshalRunMetaInto(metaBytes, rec); err != nil {
 		return nil, err
 	}
@@ -297,11 +298,11 @@ func getRun(tx *bolt.Tx, id durable.RunID) (*durable.RunRecord, error) {
 	rec.UpdatedAt = cur.UpdatedAt
 	if cur.StepID != "" {
 		sr := rec.Step(cur.StepID)
-		if cur.Phase == durable.PhaseUnwind && sr.ForwardStatus == durable.OpSucceeded {
-			sr.UnwindStatus = durable.OpUnresolved
+		if cur.Phase == durable.PhaseUnwind && sr.ForwardStatus == storedriver.OpSucceeded {
+			sr.UnwindStatus = storedriver.OpUnresolved
 			sr.UnwindAttempts = cur.Attempts
 		} else {
-			sr.ForwardStatus = durable.OpUnresolved
+			sr.ForwardStatus = storedriver.OpUnresolved
 			sr.ForwardAttempts = cur.Attempts
 		}
 	}
@@ -331,8 +332,8 @@ func getRun(tx *bolt.Tx, id durable.RunID) (*durable.RunRecord, error) {
 	return rec, nil
 }
 
-func (s *Store) GetRun(_ context.Context, id durable.RunID) (*durable.RunRecord, error) {
-	var rec *durable.RunRecord
+func (s *Store) GetRun(_ context.Context, id durable.RunID) (*storedriver.RunRecord, error) {
+	var rec *storedriver.RunRecord
 	err := s.db.View(func(tx *bolt.Tx) error {
 		var err error
 		rec, err = getRun(tx, id)
@@ -389,7 +390,7 @@ func (s *Store) ReapTerminal(_ context.Context, before time.Time, limit int) (in
 	return deleted, nil
 }
 
-func (s *Store) RequestCancel(_ context.Context, id durable.RunID, req durable.CancelRequest) (bool, error) {
+func (s *Store) RequestCancel(_ context.Context, id durable.RunID, req storedriver.CancelRequest) (bool, error) {
 	accepted := false
 	err := s.db.Update(func(tx *bolt.Tx) error {
 		switch {
@@ -413,8 +414,8 @@ func (s *Store) RequestCancel(_ context.Context, id durable.RunID, req durable.C
 	return accepted, err
 }
 
-func (s *Store) ListNonterminal(_ context.Context) ([]*durable.RunRecord, error) {
-	var out []*durable.RunRecord
+func (s *Store) ListNonterminal(_ context.Context) ([]*storedriver.RunRecord, error) {
+	var out []*storedriver.RunRecord
 	err := s.db.View(func(tx *bolt.Tx) error {
 		return tx.Bucket(metaBucket).ForEach(func(k, _ []byte) error {
 			if tx.Bucket(terminalBucket).Get(k) != nil {
@@ -431,11 +432,11 @@ func (s *Store) ListNonterminal(_ context.Context) ([]*durable.RunRecord, error)
 	return out, err
 }
 
-func (s *Store) ListRuns(_ context.Context, pipeline durable.PipelineID, resource durable.ResourceID) ([]*durable.RunRecord, error) {
-	var out []*durable.RunRecord
+func (s *Store) ListRuns(_ context.Context, pipeline durable.PipelineID, resource durable.ResourceID) ([]*storedriver.RunRecord, error) {
+	var out []*storedriver.RunRecord
 	err := s.db.View(func(tx *bolt.Tx) error {
 		return tx.Bucket(metaBucket).ForEach(func(k, v []byte) error {
-			probe := &durable.RunRecord{}
+			probe := &storedriver.RunRecord{}
 			if err := storagepb.UnmarshalRunMetaInto(v, probe); err != nil {
 				return err
 			}

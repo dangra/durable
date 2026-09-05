@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/dangra/durable/storedriver"
 	"hash/fnv"
 	"path/filepath"
 	"testing"
@@ -112,10 +113,10 @@ func waiterPipeline(target func(durable.ResourceID) durable.RunID) *durable.Defi
 func TestCrashRestartConvergence(t *testing.T) {
 	stores := []struct {
 		name string
-		open func(t *testing.T) durable.Store
+		open func(t *testing.T) storedriver.Store
 	}{
-		{"memstore", func(t *testing.T) durable.Store { return durabletest.NewMemStore() }},
-		{"bbolt", func(t *testing.T) durable.Store {
+		{"memstore", func(t *testing.T) storedriver.Store { return durabletest.NewMemStore() }},
+		{"bbolt", func(t *testing.T) storedriver.Store {
 			s, err := bboltstore.Open(filepath.Join(t.TempDir(), "crash.db"))
 			if err != nil {
 				t.Fatal(err)
@@ -137,7 +138,7 @@ func TestCrashRestartConvergence(t *testing.T) {
 	}
 }
 
-func runCrashScenario(t *testing.T, seed uint64, store durable.Store) {
+func runCrashScenario(t *testing.T, seed uint64, store storedriver.Store) {
 	ctx := context.Background()
 	def := crashPipeline(seed)
 	targetOf := map[durable.ResourceID]durable.RunID{}
@@ -279,21 +280,21 @@ func runCrashScenario(t *testing.T, seed uint64, store durable.Store) {
 			case rec.Outcome == nil:
 				t.Fatalf("run %s nonterminal after Wait returned", id)
 			case *rec.Outcome == durable.OutcomeSuccess:
-				if sr.ForwardStatus != durable.OpSucceeded {
+				if sr.ForwardStatus != storedriver.OpSucceeded {
 					t.Fatalf("run %s step %s: success run with unresolved step %+v", id, stepID, sr)
 				}
-				if sr.UnwindStatus != durable.OpNone {
+				if sr.UnwindStatus != storedriver.OpNone {
 					t.Fatalf("run %s step %s: success run has unwind facts %+v", id, stepID, sr)
 				}
 			default: // failure: unwind completeness
-				if sr.ForwardStatus == durable.OpSucceeded && unwindable && sr.UnwindStatus != durable.OpSucceeded {
+				if sr.ForwardStatus == storedriver.OpSucceeded && unwindable && sr.UnwindStatus != storedriver.OpSucceeded {
 					t.Fatalf("run %s step %s: succeeded unwindable step not unwound: %+v", id, stepID, sr)
 				}
 			}
 			// At-least-once sanity: a resolved forward op consumed at
 			// least the scripted transient attempts (crashes may add
 			// more, never fewer logical attempts than failures scripted).
-			if sr.ForwardStatus == durable.OpSucceeded && sr.ForwardAttempts < script.failUntil+1 {
+			if sr.ForwardStatus == storedriver.OpSucceeded && sr.ForwardAttempts < script.failUntil+1 {
 				t.Fatalf("run %s step %s: succeeded after %d attempts, script demands > %d",
 					id, stepID, sr.ForwardAttempts, script.failUntil)
 			}

@@ -162,8 +162,8 @@ func (p *Pipeline) GetActiveRun(ctx context.Context, resource durable.ResourceID
 	return Run{}, false, nil
 }
 
-// GetActiveRuns returns handles for this pipeline's nonterminal Runs.
-func (p *Pipeline) GetActiveRuns(ctx context.Context) ([]Run, error) {
+// ListActiveRuns returns handles for this pipeline's nonterminal Runs.
+func (p *Pipeline) ListActiveRuns(ctx context.Context) ([]Run, error) {
 	recs, err := p.engine.store.ListNonterminal(ctx)
 	if err != nil {
 		return nil, err

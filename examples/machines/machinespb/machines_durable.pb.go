@@ -398,9 +398,9 @@ func (p *ProvisionMachinePipeline) GetActiveRun(ctx context.Context, resource du
 	return ProvisionMachineRun{run: run}, true, nil
 }
 
-// GetActiveRuns returns handles for this pipeline's nonterminal runs.
-func (p *ProvisionMachinePipeline) GetActiveRuns(ctx context.Context) ([]ProvisionMachineRun, error) {
-	runs, err := p.pipeline.GetActiveRuns(ctx)
+// ListActiveRuns returns handles for this pipeline's nonterminal runs.
+func (p *ProvisionMachinePipeline) ListActiveRuns(ctx context.Context) ([]ProvisionMachineRun, error) {
+	runs, err := p.pipeline.ListActiveRuns(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -617,9 +617,9 @@ func (p *DecommissionMachinePipeline) GetActiveRun(ctx context.Context, resource
 	return run, ok, err
 }
 
-// GetActiveRuns returns handles for this pipeline's nonterminal runs.
-func (p *DecommissionMachinePipeline) GetActiveRuns(ctx context.Context) ([]engine.Run, error) {
-	runs, err := p.pipeline.GetActiveRuns(ctx)
+// ListActiveRuns returns handles for this pipeline's nonterminal runs.
+func (p *DecommissionMachinePipeline) ListActiveRuns(ctx context.Context) ([]engine.Run, error) {
+	runs, err := p.pipeline.ListActiveRuns(ctx)
 	return runs, err
 }
 

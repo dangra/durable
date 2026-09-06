@@ -346,9 +346,9 @@ func (p *DeployServicePipeline) GetActiveRun(ctx context.Context, resource durab
 	return DeployServiceRun{run: run}, true, nil
 }
 
-// GetActiveRuns returns handles for this pipeline's nonterminal runs.
-func (p *DeployServicePipeline) GetActiveRuns(ctx context.Context) ([]DeployServiceRun, error) {
-	runs, err := p.pipeline.GetActiveRuns(ctx)
+// ListActiveRuns returns handles for this pipeline's nonterminal runs.
+func (p *DeployServicePipeline) ListActiveRuns(ctx context.Context) ([]DeployServiceRun, error) {
+	runs, err := p.pipeline.ListActiveRuns(ctx)
 	if err != nil {
 		return nil, err
 	}

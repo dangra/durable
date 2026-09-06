@@ -610,9 +610,9 @@ func emitBoundPipeline(g *protogen.GeneratedFile, pl *pipelineDecl) {
 	g.P("}")
 	g.P()
 
-	g.P("// GetActiveRuns returns handles for this pipeline's nonterminal runs.")
-	g.P("func (p *", name, "Pipeline) GetActiveRuns(ctx ", ctx, ") ([]", runType, ", error) {")
-	g.P("runs, err := p.pipeline.GetActiveRuns(ctx)")
+	g.P("// ListActiveRuns returns handles for this pipeline's nonterminal runs.")
+	g.P("func (p *", name, "Pipeline) ListActiveRuns(ctx ", ctx, ") ([]", runType, ", error) {")
+	g.P("runs, err := p.pipeline.ListActiveRuns(ctx)")
 	emitRunSliceWrap(g, pl, runType, wrap)
 	g.P("}")
 	g.P()

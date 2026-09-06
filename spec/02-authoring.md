@@ -617,7 +617,7 @@ A bound Pipeline exposes:
 Schedule
 GetRun
 GetActiveRun
-GetActiveRuns
+ListActiveRuns
 GetRuns
 ```
 

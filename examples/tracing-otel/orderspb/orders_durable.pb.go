@@ -342,9 +342,9 @@ func (p *FulfillOrderPipeline) GetActiveRun(ctx context.Context, resource durabl
 	return FulfillOrderRun{run: run}, true, nil
 }
 
-// GetActiveRuns returns handles for this pipeline's nonterminal runs.
-func (p *FulfillOrderPipeline) GetActiveRuns(ctx context.Context) ([]FulfillOrderRun, error) {
-	runs, err := p.pipeline.GetActiveRuns(ctx)
+// ListActiveRuns returns handles for this pipeline's nonterminal runs.
+func (p *FulfillOrderPipeline) ListActiveRuns(ctx context.Context) ([]FulfillOrderRun, error) {
+	runs, err := p.pipeline.ListActiveRuns(ctx)
 	if err != nil {
 		return nil, err
 	}

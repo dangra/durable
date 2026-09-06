@@ -557,7 +557,7 @@ func TestAwaitAllWakesOnceEveryTargetIsDone(t *testing.T) {
 			t.Errorf("Wake = %+v; want all 3 targets done", w)
 		}
 	}
-	children, _ := childPipe.GetActiveRuns(context.Background())
+	children, _ := childPipe.ListActiveRuns(context.Background())
 	if len(children) != 0 {
 		t.Errorf("active children after completion = %d", len(children))
 	}

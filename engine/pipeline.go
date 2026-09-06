@@ -131,9 +131,10 @@ func (p *Pipeline) Schedule(ctx context.Context, resource durable.ResourceID, in
 	return Run{}, false, &durable.ScheduleConflictError{RunID: existing.RunID, PipelineID: existing.PipelineID}
 }
 
-// Run returns a handle to an existing Run, verifying it belongs to this
-// pipeline. A mismatch returns *PipelineMismatchError.
-func (p *Pipeline) Run(ctx context.Context, id durable.RunID) (Run, error) {
+// GetRun returns a handle to an existing Run, verifying it belongs to this
+// pipeline. A missing Run returns durable.ErrRunNotFound; a mismatch
+// *PipelineMismatchError.
+func (p *Pipeline) GetRun(ctx context.Context, id durable.RunID) (Run, error) {
 	rec, err := p.engine.store.GetRun(ctx, id)
 	if err != nil {
 		return Run{}, err
@@ -144,11 +145,11 @@ func (p *Pipeline) Run(ctx context.Context, id durable.RunID) (Run, error) {
 	return Run{id: id, engine: p.engine}, nil
 }
 
-// ActiveRun returns a handle to this pipeline's nonterminal Run for a
+// GetActiveRun returns a handle to this pipeline's nonterminal Run for a
 // resource, if one exists. It is a read-only observation for wait/inspect
 // flows (callers that know the resource but cannot reproduce the exact
 // Input); claiming the slot atomically remains Schedule's job.
-func (p *Pipeline) ActiveRun(ctx context.Context, resource durable.ResourceID) (Run, bool, error) {
+func (p *Pipeline) GetActiveRun(ctx context.Context, resource durable.ResourceID) (Run, bool, error) {
 	recs, err := p.engine.store.ListRuns(ctx, p.def.ID(), resource)
 	if err != nil {
 		return Run{}, false, err
@@ -161,8 +162,8 @@ func (p *Pipeline) ActiveRun(ctx context.Context, resource durable.ResourceID) (
 	return Run{}, false, nil
 }
 
-// Active returns handles for this pipeline's nonterminal Runs.
-func (p *Pipeline) Active(ctx context.Context) ([]Run, error) {
+// GetActiveRuns returns handles for this pipeline's nonterminal Runs.
+func (p *Pipeline) GetActiveRuns(ctx context.Context) ([]Run, error) {
 	recs, err := p.engine.store.ListNonterminal(ctx)
 	if err != nil {
 		return nil, err
@@ -176,9 +177,9 @@ func (p *Pipeline) Active(ctx context.Context) ([]Run, error) {
 	return runs, nil
 }
 
-// Runs returns handles for all Runs of this pipeline against a resource,
-// oldest first.
-func (p *Pipeline) Runs(ctx context.Context, resource durable.ResourceID) ([]Run, error) {
+// GetRuns returns handles for all Runs of this pipeline against a resource,
+// terminal and nonterminal, oldest first.
+func (p *Pipeline) GetRuns(ctx context.Context, resource durable.ResourceID) ([]Run, error) {
 	recs, err := p.engine.store.ListRuns(ctx, p.def.ID(), resource)
 	if err != nil {
 		return nil, err

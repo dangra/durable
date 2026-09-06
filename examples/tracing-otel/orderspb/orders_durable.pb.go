@@ -322,29 +322,29 @@ func (p *FulfillOrderPipeline) Schedule(ctx context.Context, resource durable.Re
 	return FulfillOrderRun{run: run}, created, nil
 }
 
-// Run returns a handle to an existing run of this pipeline.
-func (p *FulfillOrderPipeline) Run(ctx context.Context, id durable.RunID) (FulfillOrderRun, error) {
-	run, err := p.pipeline.Run(ctx, id)
+// GetRun returns a handle to an existing run of this pipeline.
+func (p *FulfillOrderPipeline) GetRun(ctx context.Context, id durable.RunID) (FulfillOrderRun, error) {
+	run, err := p.pipeline.GetRun(ctx, id)
 	if err != nil {
 		return FulfillOrderRun{}, err
 	}
 	return FulfillOrderRun{run: run}, nil
 }
 
-// ActiveRun returns a handle to this pipeline's nonterminal run for a
+// GetActiveRun returns a handle to this pipeline's nonterminal run for a
 // resource, if one exists — a read-only observation for wait/inspect
 // flows; claiming the slot atomically remains Schedule's job.
-func (p *FulfillOrderPipeline) ActiveRun(ctx context.Context, resource durable.ResourceID) (FulfillOrderRun, bool, error) {
-	run, ok, err := p.pipeline.ActiveRun(ctx, resource)
+func (p *FulfillOrderPipeline) GetActiveRun(ctx context.Context, resource durable.ResourceID) (FulfillOrderRun, bool, error) {
+	run, ok, err := p.pipeline.GetActiveRun(ctx, resource)
 	if err != nil || !ok {
 		return FulfillOrderRun{}, ok, err
 	}
 	return FulfillOrderRun{run: run}, true, nil
 }
 
-// Active returns handles for this pipeline's nonterminal runs.
-func (p *FulfillOrderPipeline) Active(ctx context.Context) ([]FulfillOrderRun, error) {
-	runs, err := p.pipeline.Active(ctx)
+// GetActiveRuns returns handles for this pipeline's nonterminal runs.
+func (p *FulfillOrderPipeline) GetActiveRuns(ctx context.Context) ([]FulfillOrderRun, error) {
+	runs, err := p.pipeline.GetActiveRuns(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -355,10 +355,10 @@ func (p *FulfillOrderPipeline) Active(ctx context.Context) ([]FulfillOrderRun, e
 	return out, nil
 }
 
-// Runs returns handles for all runs of this pipeline against a resource,
-// oldest first.
-func (p *FulfillOrderPipeline) Runs(ctx context.Context, resource durable.ResourceID) ([]FulfillOrderRun, error) {
-	runs, err := p.pipeline.Runs(ctx, resource)
+// GetRuns returns handles for all runs of this pipeline against a resource,
+// terminal and nonterminal, oldest first.
+func (p *FulfillOrderPipeline) GetRuns(ctx context.Context, resource durable.ResourceID) ([]FulfillOrderRun, error) {
+	runs, err := p.pipeline.GetRuns(ctx, resource)
 	if err != nil {
 		return nil, err
 	}

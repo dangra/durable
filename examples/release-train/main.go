@@ -80,7 +80,7 @@ func story(ctx context.Context, dir string) (*world, engine.Result, releasepb.De
 
 	<-w.apiCanaryRunning // web landed; the api deploy is mid-canary...
 	w.logf("---- incident declared: freezing the release ----")
-	trainHandle, err := train2.Run(ctx, trainRun.ID())
+	trainHandle, err := train2.GetRun(ctx, trainRun.ID())
 	if err != nil {
 		return fail(err)
 	}
@@ -95,7 +95,7 @@ func story(ctx context.Context, dir string) (*world, engine.Result, releasepb.De
 	w.mu.Lock()
 	apiID := w.apiDeployID
 	w.mu.Unlock()
-	apiRun, err := deploy2.Run(ctx, apiID)
+	apiRun, err := deploy2.GetRun(ctx, apiID)
 	if err != nil {
 		return fail(err)
 	}

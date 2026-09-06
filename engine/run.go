@@ -7,7 +7,7 @@ import (
 )
 
 // Run is an in-process handle to one execution. The handle itself is not
-// durable state; recover one after restart through Pipeline.Run.
+// durable state; recover one after restart through Pipeline.GetRun.
 type Run struct {
 	id     durable.RunID
 	engine *Engine

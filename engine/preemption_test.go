@@ -146,7 +146,7 @@ func TestStopCarriesCause(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 	defer e2.Stop(context.Background())
-	run2, err := pipe2.Run(context.Background(), run.ID())
+	run2, err := pipe2.GetRun(context.Background(), run.ID())
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -435,7 +435,7 @@ func TestFailFastShutdownUntouched(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 	defer e2.Stop(context.Background())
-	run2, err := pipe2.Run(context.Background(), run.ID())
+	run2, err := pipe2.GetRun(context.Background(), run.ID())
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}

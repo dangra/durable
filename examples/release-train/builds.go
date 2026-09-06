@@ -41,7 +41,7 @@ func yesterdaysBuild(ctx context.Context, store driver.Store, w *world) (*engine
 			return run.ID(), err
 		},
 		cancel: func(ctx context.Context, id durable.RunID, cause string) error {
-			run, err := deploy.Run(ctx, id)
+			run, err := deploy.GetRun(ctx, id)
 			if err != nil {
 				return err
 			}
@@ -76,7 +76,7 @@ func todaysBuild(ctx context.Context, store driver.Store, w *world) (*engine.Eng
 			return run.ID(), err
 		},
 		cancel: func(ctx context.Context, id durable.RunID, cause string) error {
-			run, err := deploy.Run(ctx, id)
+			run, err := deploy.GetRun(ctx, id)
 			if err != nil {
 				return err
 			}

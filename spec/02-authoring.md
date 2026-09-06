@@ -615,10 +615,10 @@ A bound Pipeline exposes:
 
 ```text
 Schedule
-Active
-ActiveRun
-Runs
-Run
+GetRun
+GetActiveRun
+GetActiveRuns
+GetRuns
 ```
 
 Example:
@@ -696,7 +696,7 @@ Output == nil
 ## Typed Run recovery
 
 ```go
-run, err := provision.Run(ctx, runID)
+run, err := provision.GetRun(ctx, runID)
 ```
 
 MUST verify the Run belongs to the expected Pipeline.

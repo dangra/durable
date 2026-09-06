@@ -66,7 +66,7 @@ func TestRecoveryResumesAcrossEngines(t *testing.T) {
 	}
 	defer e2.Stop(context.Background())
 
-	run2, err := p2.Run(context.Background(), run.ID())
+	run2, err := p2.GetRun(context.Background(), run.ID())
 	if err != nil {
 		t.Fatalf("Run lookup: %v", err)
 	}
@@ -106,7 +106,7 @@ func TestRetiredStepIsBypassed(t *testing.T) {
 	})
 	_, pipes := startEngine(t, store, def)
 
-	run, err := pipes[0].Run(context.Background(), runID)
+	run, err := pipes[0].GetRun(context.Background(), runID)
 	if err != nil {
 		t.Fatalf("Run lookup: %v", err)
 	}
@@ -146,7 +146,7 @@ func TestRetiredUnresolvedStepContinues(t *testing.T) {
 	})
 	_, pipes := startEngine(t, store, def)
 
-	run, _ := pipes[0].Run(context.Background(), runID)
+	run, _ := pipes[0].GetRun(context.Background(), runID)
 	res, err := run.Wait(context.Background())
 	if err != nil || !res.Succeeded() {
 		t.Fatalf("Wait = %+v, %v", res, err)
@@ -173,7 +173,7 @@ func TestUnresolvedStepRemovedIsInvalid(t *testing.T) {
 	})
 	_, pipes := startEngine(t, store, def)
 
-	run, _ := pipes[0].Run(context.Background(), runID)
+	run, _ := pipes[0].GetRun(context.Background(), runID)
 	_, err := run.Wait(context.Background())
 	if _, ok := errors.AsType[*engine.InvalidRunError](err); !ok {
 		t.Fatalf("Wait = %v, want InvalidRunError", err)
@@ -231,7 +231,7 @@ func TestInvalidReducerRepairedByRedeploy(t *testing.T) {
 	}
 	defer e2.Stop(context.Background())
 
-	run2, err := p2.Run(context.Background(), run.ID())
+	run2, err := p2.GetRun(context.Background(), run.ID())
 	if err != nil {
 		t.Fatalf("Run lookup: %v", err)
 	}

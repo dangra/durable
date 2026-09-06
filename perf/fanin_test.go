@@ -123,7 +123,7 @@ func BenchmarkAwaitFanIn(b *testing.B) {
 			if c == len(st.AwaitingRunIDs)-1 {
 				releasedLast = time.Now()
 			}
-			run, err := childPipe.Run(context.Background(), id)
+			run, err := childPipe.GetRun(context.Background(), id)
 			if err != nil {
 				b.Fatal(err)
 			}

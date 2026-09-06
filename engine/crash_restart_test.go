@@ -208,7 +208,7 @@ func runCrashScenario(t *testing.T, seed uint64, store driver.Store) {
 		victim := crashIDs[(int(seed)+round*3)%len(crashIDs)]
 		// A scheduled run must always be reopenable after restarts; a
 		// lookup error is itself a recovery regression.
-		run, err := crashPipe.Run(ctx, victim)
+		run, err := crashPipe.GetRun(ctx, victim)
 		if err != nil {
 			t.Fatalf("reopen %s after restart: %v", victim, err)
 		}
@@ -227,7 +227,7 @@ func runCrashScenario(t *testing.T, seed uint64, store driver.Store) {
 	defer cancel()
 	results := map[durable.RunID]engine.Result{}
 	for _, id := range crashIDs {
-		run, err := crashPipe.Run(ctx, id)
+		run, err := crashPipe.GetRun(ctx, id)
 		if err != nil {
 			t.Fatalf("lookup %s: %v", id, err)
 		}
@@ -238,7 +238,7 @@ func runCrashScenario(t *testing.T, seed uint64, store driver.Store) {
 		results[id] = res
 	}
 	for _, id := range waiterIDs {
-		run, err := waitPipe.Run(ctx, id)
+		run, err := waitPipe.GetRun(ctx, id)
 		if err != nil {
 			t.Fatalf("lookup waiter %s: %v", id, err)
 		}
@@ -304,7 +304,7 @@ func runCrashScenario(t *testing.T, seed uint64, store driver.Store) {
 		}
 
 		// Status agrees with Wait.
-		run, err := crashPipe.Run(ctx, id)
+		run, err := crashPipe.GetRun(ctx, id)
 		if err != nil {
 			t.Fatalf("reopen %s for status: %v", id, err)
 		}

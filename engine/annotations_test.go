@@ -104,7 +104,7 @@ func TestTracePropagationPattern(t *testing.T) {
 		defer cancel()
 		_ = e2.Stop(ctx)
 	})
-	run2, err := pipe2.Run(context.Background(), run.ID())
+	run2, err := pipe2.GetRun(context.Background(), run.ID())
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}

@@ -104,7 +104,7 @@ func TestAwaitWokenAttemptTransientErrorKeepsMemory(t *testing.T) {
 		t.Fatalf("parent Wait = %+v, %v", res, err)
 	}
 
-	children, err := childPipe.Runs(context.Background(), "child-res")
+	children, err := childPipe.GetRuns(context.Background(), "child-res")
 	if err != nil {
 		t.Fatalf("Runs: %v", err)
 	}
@@ -160,7 +160,7 @@ func TestAwaitWokenAttemptPermanentFailureUnwinds(t *testing.T) {
 	if res.RootFailure == nil || res.RootFailure.StepID != "p/v1" || res.RootFailure.Attempt != 2 || res.RootFailure.Phase != durable.PhaseForward {
 		t.Errorf("RootFailure = %+v; want p/v1 forward attempt 2", res.RootFailure)
 	}
-	children, _ := childPipe.Runs(context.Background(), "child-res")
+	children, _ := childPipe.GetRuns(context.Background(), "child-res")
 	if len(children) != 1 {
 		t.Errorf("children = %d, want 1", len(children))
 	}
@@ -211,7 +211,7 @@ func TestAwaitTransientErrorBeforePark(t *testing.T) {
 	if st.LastError != "" {
 		t.Errorf("LastError = %q after success; want cleared", st.LastError)
 	}
-	children, _ := childPipe.Runs(context.Background(), "child-res")
+	children, _ := childPipe.GetRuns(context.Background(), "child-res")
 	if len(children) != 1 {
 		t.Errorf("children = %d, want 1", len(children))
 	}
@@ -307,7 +307,7 @@ func TestAwaitUnwindParkThenTransientError(t *testing.T) {
 	}
 	entries := log.all()
 	t.Logf("unwind attempts: %+v", entries)
-	children, _ := childPipe.Runs(context.Background(), "child-res")
+	children, _ := childPipe.GetRuns(context.Background(), "child-res")
 	if len(children) != 1 {
 		t.Errorf("children = %d, want 1: the retried unwind attempt respawned the cleanup child", len(children))
 	}
@@ -351,7 +351,7 @@ func TestAwaitCancelBypassReportsTargetAndCancel(t *testing.T) {
 					cancelSeen.Store(true)
 					return nil
 				}
-				run, _, err := targetPipe.ActiveRun(ctx, "res")
+				run, _, err := targetPipe.GetActiveRun(ctx, "res")
 				if err != nil {
 					return err
 				}
@@ -459,7 +459,7 @@ func testAwaitRestartDuringWokenAttempt(t *testing.T, store driver.Store) {
 
 	e2, pp2 := boot()
 	t.Cleanup(func() { _ = e2.Stop(context.Background()) })
-	pRun2, err := pp2.Run(context.Background(), pRun.ID())
+	pRun2, err := pp2.GetRun(context.Background(), pRun.ID())
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -467,7 +467,7 @@ func testAwaitRestartDuringWokenAttempt(t *testing.T, store driver.Store) {
 		t.Fatalf("parent Wait after restart = %+v, %v", res, err)
 	}
 	entries := log.all()
-	children, _ := childPipe.Runs(context.Background(), "child-res")
+	children, _ := childPipe.GetRuns(context.Background(), "child-res")
 	if len(children) != 1 {
 		t.Errorf("children = %d, want 1: the attempt resumed after restart respawned the child (attempts %+v)", len(children), entries)
 	}
@@ -532,7 +532,7 @@ func TestAwaitAllWakesOnceEveryTargetIsDone(t *testing.T) {
 	g.open("child-0")
 	g.open("child-2")
 	for _, id := range []durable.RunID{ids[0], ids[2]} {
-		run, _ := childPipe.Run(context.Background(), id)
+		run, _ := childPipe.GetRun(context.Background(), id)
 		waitForState(t, run, engine.RunStateDone)
 	}
 	time.Sleep(20 * time.Millisecond)
@@ -557,12 +557,12 @@ func TestAwaitAllWakesOnceEveryTargetIsDone(t *testing.T) {
 			t.Errorf("Wake = %+v; want all 3 targets done", w)
 		}
 	}
-	children, _ := childPipe.Active(context.Background())
+	children, _ := childPipe.GetActiveRuns(context.Background())
 	if len(children) != 0 {
 		t.Errorf("active children after completion = %d", len(children))
 	}
 	for i := 0; i < 3; i++ {
-		runs, _ := childPipe.Runs(context.Background(), durable.ResourceID(fmt.Sprintf("child-%d", i)))
+		runs, _ := childPipe.GetRuns(context.Background(), durable.ResourceID(fmt.Sprintf("child-%d", i)))
 		if len(runs) != 1 {
 			t.Errorf("child-%d has %d runs; want 1 (no respawn)", i, len(runs))
 		}
@@ -653,7 +653,7 @@ func TestAwaitAnyRaceCancelsLosers(t *testing.T) {
 					}
 					winner.Store(w.Done[0])
 					for _, id := range w.Pending() {
-						run, err := childPipe.Run(ctx, id)
+						run, err := childPipe.GetRun(ctx, id)
 						if err != nil {
 							return err
 						}
@@ -688,7 +688,7 @@ func TestAwaitAnyRaceCancelsLosers(t *testing.T) {
 		t.Fatalf("winner = %v; want %s", got, ids[2])
 	}
 	for _, id := range ids[:2] {
-		run, _ := childPipe.Run(context.Background(), id)
+		run, _ := childPipe.GetRun(context.Background(), id)
 		res, err := run.Wait(context.Background())
 		if err != nil || !res.Canceled() {
 			t.Errorf("loser %s = %+v, %v; want canceled", id, res, err)
@@ -728,7 +728,7 @@ func TestAwaitAllCancelBypassReportsDone(t *testing.T) {
 	}
 	ids := waitForState(t, pRun, engine.RunStateAwaiting).AwaitingRunIDs
 	g.open("child-0")
-	first, _ := childPipe.Run(context.Background(), ids[0])
+	first, _ := childPipe.GetRun(context.Background(), ids[0])
 	waitForState(t, first, engine.RunStateDone)
 	if err := pRun.Cancel(context.Background(), "abandon"); err != nil {
 		t.Fatalf("Cancel: %v", err)
@@ -760,11 +760,11 @@ func TestAwaitAnyCycleIsInvalid(t *testing.T) {
 				if _, ok := inv.Awaited(); ok {
 					return nil
 				}
-				b, okB, err := pipeB.ActiveRun(ctx, "b")
+				b, okB, err := pipeB.GetActiveRun(ctx, "b")
 				if err != nil {
 					return err
 				}
-				c, okC, err := pipeC.ActiveRun(ctx, "c")
+				c, okC, err := pipeC.GetActiveRun(ctx, "c")
 				if err != nil {
 					return err
 				}
@@ -782,7 +782,7 @@ func TestAwaitAnyCycleIsInvalid(t *testing.T) {
 				if _, ok := inv.Awaited(); ok {
 					return nil
 				}
-				a, ok, err := pipeA.ActiveRun(ctx, "a")
+				a, ok, err := pipeA.GetActiveRun(ctx, "a")
 				if err != nil {
 					return err
 				}
@@ -878,7 +878,7 @@ func TestAwaitAllScheduleIsIdempotentAcrossRetry(t *testing.T) {
 		t.Fatalf("parent Wait = %+v, %v", res, err)
 	}
 	for i := 0; i < 3; i++ {
-		runs, _ := childPipe.Runs(context.Background(), durable.ResourceID(fmt.Sprintf("child-%d", i)))
+		runs, _ := childPipe.GetRuns(context.Background(), durable.ResourceID(fmt.Sprintf("child-%d", i)))
 		if len(runs) != 1 {
 			t.Errorf("child-%d has %d runs; want 1", i, len(runs))
 		}
@@ -945,7 +945,7 @@ func TestAwaitTimeoutExpiryIsAWake(t *testing.T) {
 	}
 	ids := st.AwaitingRunIDs
 	g.open("child-0")
-	first, _ := childPipe.Run(context.Background(), ids[0])
+	first, _ := childPipe.GetRun(context.Background(), ids[0])
 	waitForState(t, first, engine.RunStateDone)
 	defer g.open("child-1")
 
@@ -1077,7 +1077,7 @@ func TestAwaitTimeoutSurvivesRestart(t *testing.T) {
 
 	e2, pp2 := boot()
 	t.Cleanup(func() { _ = e2.Stop(context.Background()) })
-	pRun2, err := pp2.Run(context.Background(), pRun.ID())
+	pRun2, err := pp2.GetRun(context.Background(), pRun.ID())
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -1150,7 +1150,7 @@ func TestAwaitEmptyParkFromStoreIsInvalid(t *testing.T) {
 		t.Fatalf("ApplyTransition: %v", err)
 	}
 	_, pipes := startEngine(t, store, def)
-	run, err := pipes[0].Run(context.Background(), rec.RunID)
+	run, err := pipes[0].GetRun(context.Background(), rec.RunID)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}

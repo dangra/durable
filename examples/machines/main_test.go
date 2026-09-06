@@ -204,7 +204,7 @@ func TestExclusionGroup(t *testing.T) {
 	}
 
 	// The blocker is inspectable, typed, through its pipeline's handle.
-	blocker, err := provision.Run(context.Background(), conflict.RunID)
+	blocker, err := provision.GetRun(context.Background(), conflict.RunID)
 	if err != nil {
 		t.Fatalf("blocker lookup: %v", err)
 	}
@@ -216,7 +216,7 @@ func TestExclusionGroup(t *testing.T) {
 		t.Fatalf("blocker input = %+v, want the in-flight provision request", in)
 	}
 	// And discoverable without scheduling intent.
-	active, ok, err := provision.ActiveRun(context.Background(), "machine-9")
+	active, ok, err := provision.GetActiveRun(context.Background(), "machine-9")
 	if err != nil || !ok || active.ID() != run.ID() {
 		t.Fatalf("ActiveRun = %s ok=%v err=%v, want %s", active.ID(), ok, err, run.ID())
 	}

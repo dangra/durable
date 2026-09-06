@@ -736,6 +736,20 @@ func (r Run) InputBytes(context.Context) ([]byte, error)   // for generated code
 func (r Run) OutputBytes(context.Context) ([]byte, error)  // for generated code
 ```
 
+A handle is obtained from a bound Pipeline (`Schedule`, `GetRun`,
+`GetActiveRun`, `ListActiveRuns`, `GetRuns`) or from the Engine, for
+callers that hold only a `RunID` or want the view across pipelines:
+
+```go
+func (e *Engine) GetRun(context.Context, durable.RunID) (Run, error)
+func (e *Engine) ListActiveRuns(context.Context) ([]Run, error)
+```
+
+`Engine.GetRun` returns the untyped handle whatever pipeline owns the
+Run; `Status.PipelineID` names the typed Pipeline to route to when the
+typed Output is needed. `Pipeline.GetRun` on any other pipeline returns
+`*PipelineMismatchError`.
+
 The handle itself is not durable state.
 
 ---

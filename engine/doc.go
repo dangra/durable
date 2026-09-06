@@ -26,7 +26,10 @@
 // package's ScheduleOptions (handlers schedule children, so the options
 // are handler vocabulary) or seeded by an engine-wide ScheduleAnnotator;
 // the Run handle (Wait, Cancel, Status, Annotations, InputBytes,
-// OutputBytes); Result, Status, and RunState.
+// OutputBytes); Result, Status, and RunState. Lookups live on the
+// Pipeline (GetRun, GetActiveRun, ListActiveRuns, GetRuns) and, for
+// callers holding only a RunID or wanting the host-level view, on the
+// Engine (GetRun, ListActiveRuns).
 //
 // Errors. ErrNotStarted, ErrStarted, ErrRunInProgress,
 // PipelineMismatchError, and InvalidRunError. What a handler may meet

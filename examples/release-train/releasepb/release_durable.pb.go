@@ -418,33 +418,6 @@ func (p *DeployServicePipeline) GetActiveRun(ctx context.Context, resource durab
 	return DeployServiceRun{run: run}, true, nil
 }
 
-// ListActiveRuns returns handles for this pipeline's nonterminal runs.
-func (p *DeployServicePipeline) ListActiveRuns(ctx context.Context) ([]DeployServiceRun, error) {
-	runs, err := p.pipeline.ListActiveRuns(ctx)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]DeployServiceRun, 0, len(runs))
-	for _, run := range runs {
-		out = append(out, DeployServiceRun{run: run})
-	}
-	return out, nil
-}
-
-// GetRuns returns handles for all runs of this pipeline against a resource,
-// terminal and nonterminal, oldest first.
-func (p *DeployServicePipeline) GetRuns(ctx context.Context, resource durable.ResourceID) ([]DeployServiceRun, error) {
-	runs, err := p.pipeline.GetRuns(ctx, resource)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]DeployServiceRun, 0, len(runs))
-	for _, run := range runs {
-		out = append(out, DeployServiceRun{run: run})
-	}
-	return out, nil
-}
-
 // DeployServiceRun is a typed handle to one run of the pipeline.
 type DeployServiceRun struct {
 	run engine.Run
@@ -849,33 +822,6 @@ func (p *ReleaseTrainPipeline) GetActiveRun(ctx context.Context, resource durabl
 		return ReleaseTrainRun{}, ok, err
 	}
 	return ReleaseTrainRun{run: run}, true, nil
-}
-
-// ListActiveRuns returns handles for this pipeline's nonterminal runs.
-func (p *ReleaseTrainPipeline) ListActiveRuns(ctx context.Context) ([]ReleaseTrainRun, error) {
-	runs, err := p.pipeline.ListActiveRuns(ctx)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]ReleaseTrainRun, 0, len(runs))
-	for _, run := range runs {
-		out = append(out, ReleaseTrainRun{run: run})
-	}
-	return out, nil
-}
-
-// GetRuns returns handles for all runs of this pipeline against a resource,
-// terminal and nonterminal, oldest first.
-func (p *ReleaseTrainPipeline) GetRuns(ctx context.Context, resource durable.ResourceID) ([]ReleaseTrainRun, error) {
-	runs, err := p.pipeline.GetRuns(ctx, resource)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]ReleaseTrainRun, 0, len(runs))
-	for _, run := range runs {
-		out = append(out, ReleaseTrainRun{run: run})
-	}
-	return out, nil
 }
 
 // ReleaseTrainRun is a typed handle to one run of the pipeline.

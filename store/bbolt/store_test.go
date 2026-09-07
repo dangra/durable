@@ -342,3 +342,36 @@ func TestReapTerminal(t *testing.T) {
 		t.Fatalf("alive run = %+v, %v; want intact with cancel", alive, err)
 	}
 }
+
+// GetActiveRunID reads the slots bucket: set at CreateRun, released at
+// the terminal outcome, reusable afterwards.
+func TestGetActiveRunIDFollowsTheSlot(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(filepath.Join(t.TempDir(), "slots.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	rec := func(id durable.RunID) *driver.RunRecord {
+		return &driver.RunRecord{RunID: id, PipelineID: "p", ResourceID: "r", Group: "group/g", Phase: durable.PhaseForward, CreatedAt: time.Unix(1, 0), UpdatedAt: time.Unix(1, 0)}
+	}
+	if _, ok, err := s.GetActiveRunID(ctx, "group/g", "r"); err != nil || ok {
+		t.Fatalf("empty store: ok=%v err=%v", ok, err)
+	}
+	if _, created, err := s.CreateRun(ctx, rec("a")); err != nil || !created {
+		t.Fatal(err)
+	}
+	if id, ok, _ := s.GetActiveRunID(ctx, "group/g", "r"); !ok || id != "a" {
+		t.Fatalf("after create: %q %v", id, ok)
+	}
+	oc := durable.OutcomeSuccess
+	if err := s.ApplyTransition(ctx, "a", driver.Transition{Cursor: driver.Cursor{Phase: durable.PhaseDone}, Outcome: &oc}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, _ := s.GetActiveRunID(ctx, "group/g", "r"); ok {
+		t.Fatal("terminal outcome must release the slot")
+	}
+	if _, created, err := s.CreateRun(ctx, rec("c")); err != nil || !created {
+		t.Fatalf("slot must be reusable: created=%v err=%v", created, err)
+	}
+}

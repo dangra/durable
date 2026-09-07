@@ -620,8 +620,10 @@ The contract is the `store/driver` package: `Store`, `RunRecord`,
 `Cursor`, and `Transition`, built from the identity, phase, outcome,
 park, and failure-record vocabulary of the `kernel` package, which the
 `durable` package aliases. Store implementations persist every Cursor
-field and register a URI scheme with `store.Register`, so applications
-open them through `store.Open` and link only the drivers they import.
+field, answer `GetActiveRunID` from the same index `CreateRun` enforces
+the resource slot with (never by scanning), and register a URI scheme
+with `store.Register`, so applications open them through `store.Open`
+and link only the drivers they import.
 The in-memory `store/mem` is the executable reference, and `store/bbolt`
 is checked against it by differential fuzzing.
 

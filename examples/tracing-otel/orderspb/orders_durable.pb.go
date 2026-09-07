@@ -342,33 +342,6 @@ func (p *FulfillOrderPipeline) GetActiveRun(ctx context.Context, resource durabl
 	return FulfillOrderRun{run: run}, true, nil
 }
 
-// ListActiveRuns returns handles for this pipeline's nonterminal runs.
-func (p *FulfillOrderPipeline) ListActiveRuns(ctx context.Context) ([]FulfillOrderRun, error) {
-	runs, err := p.pipeline.ListActiveRuns(ctx)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]FulfillOrderRun, 0, len(runs))
-	for _, run := range runs {
-		out = append(out, FulfillOrderRun{run: run})
-	}
-	return out, nil
-}
-
-// GetRuns returns handles for all runs of this pipeline against a resource,
-// terminal and nonterminal, oldest first.
-func (p *FulfillOrderPipeline) GetRuns(ctx context.Context, resource durable.ResourceID) ([]FulfillOrderRun, error) {
-	runs, err := p.pipeline.GetRuns(ctx, resource)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]FulfillOrderRun, 0, len(runs))
-	for _, run := range runs {
-		out = append(out, FulfillOrderRun{run: run})
-	}
-	return out, nil
-}
-
 // FulfillOrderRun is a typed handle to one run of the pipeline.
 type FulfillOrderRun struct {
 	run engine.Run

@@ -187,3 +187,33 @@ func waitForAwaiting(t *testing.T, run engine.Run, want []durable.RunID) engine.
 		time.Sleep(time.Millisecond)
 	}
 }
+
+// runsFor reads every run of pipe against resource straight from the
+// store, terminal ones included. The schedule-idempotency tests assert a
+// fact about store contents — one child ever spawned — so they read the
+// store rather than a user-facing listing.
+func runsFor(t *testing.T, st driver.Store, pipe *engine.Pipeline, resource durable.ResourceID) []*driver.RunRecord {
+	t.Helper()
+	recs, err := st.ListRuns(context.Background(), pipe.ID(), resource)
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+	return recs
+}
+
+// activeRunsFor is runsFor restricted to nonterminal runs of pipe, over
+// every resource.
+func activeRunsFor(t *testing.T, st driver.Store, pipe *engine.Pipeline) []*driver.RunRecord {
+	t.Helper()
+	recs, err := st.ListNonterminal(context.Background())
+	if err != nil {
+		t.Fatalf("ListNonterminal: %v", err)
+	}
+	var out []*driver.RunRecord
+	for _, r := range recs {
+		if r.PipelineID == pipe.ID() {
+			out = append(out, r)
+		}
+	}
+	return out
+}

@@ -609,36 +609,6 @@ func emitBoundPipeline(g *protogen.GeneratedFile, pl *pipelineDecl) {
 	}
 	g.P("}")
 	g.P()
-
-	g.P("// ListActiveRuns returns handles for this pipeline's nonterminal runs.")
-	g.P("func (p *", name, "Pipeline) ListActiveRuns(ctx ", ctx, ") ([]", runType, ", error) {")
-	g.P("runs, err := p.pipeline.ListActiveRuns(ctx)")
-	emitRunSliceWrap(g, pl, runType, wrap)
-	g.P("}")
-	g.P()
-
-	g.P("// GetRuns returns handles for all runs of this pipeline against a resource,")
-	g.P("// terminal and nonterminal, oldest first.")
-	g.P("func (p *", name, "Pipeline) GetRuns(ctx ", ctx, ", resource ", resourceID, ") ([]", runType, ", error) {")
-	g.P("runs, err := p.pipeline.GetRuns(ctx, resource)")
-	emitRunSliceWrap(g, pl, runType, wrap)
-	g.P("}")
-	g.P()
-}
-
-func emitRunSliceWrap(g *protogen.GeneratedFile, pl *pipelineDecl, runType string, wrap func(string) string) {
-	if !pl.typedRun() {
-		g.P("return runs, err")
-		return
-	}
-	g.P("if err != nil {")
-	g.P("return nil, err")
-	g.P("}")
-	g.P("out := make([]", runType, ", 0, len(runs))")
-	g.P("for _, run := range runs {")
-	g.P("out = append(out, ", wrap("run"), ")")
-	g.P("}")
-	g.P("return out, nil")
 }
 
 func emitTypedRunAndResult(g *protogen.GeneratedFile, pl *pipelineDecl) {

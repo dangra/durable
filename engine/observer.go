@@ -188,6 +188,13 @@ func (s *observedStore) ListRuns(ctx context.Context, pipeline durable.PipelineI
 	return recs, err
 }
 
+func (s *observedStore) GetActiveRunID(ctx context.Context, group string, resource durable.ResourceID) (durable.RunID, bool, error) {
+	start := s.engine.clock.Now()
+	id, ok, err := s.inner.GetActiveRunID(ctx, group, resource)
+	s.op("GetActiveRunID", false, start, err)
+	return id, ok, err
+}
+
 func (s *observedStore) Close() error {
 	start := s.engine.clock.Now()
 	err := s.inner.Close()

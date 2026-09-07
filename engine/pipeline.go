@@ -148,45 +148,21 @@ func (p *Pipeline) GetRun(ctx context.Context, id durable.RunID) (Run, error) {
 // GetActiveRun returns a handle to this pipeline's nonterminal Run for a
 // resource, if one exists. It is a read-only observation for wait/inspect
 // flows (callers that know the resource but cannot reproduce the exact
-// Input); claiming the slot atomically remains Schedule's job.
+// Input); claiming the slot atomically remains Schedule's job. It is one
+// indexed store read.
 func (p *Pipeline) GetActiveRun(ctx context.Context, resource durable.ResourceID) (Run, bool, error) {
-	recs, err := p.engine.store.ListRuns(ctx, p.def.ID(), resource)
+	id, ok, err := p.engine.store.GetActiveRunID(ctx, p.def.slotGroup(), resource)
+	if err != nil || !ok {
+		return Run{}, false, err
+	}
+	rec, err := p.engine.store.GetRun(ctx, id)
 	if err != nil {
 		return Run{}, false, err
 	}
-	for _, rec := range recs {
-		if !rec.Terminal() {
-			return Run{id: rec.RunID, engine: p.engine}, true, nil
-		}
+	if rec.PipelineID != p.def.ID() {
+		// The slot is held by another pipeline of the same exclusion
+		// group: not this pipeline's active Run.
+		return Run{}, false, nil
 	}
-	return Run{}, false, nil
-}
-
-// ListActiveRuns returns handles for this pipeline's nonterminal Runs.
-func (p *Pipeline) ListActiveRuns(ctx context.Context) ([]Run, error) {
-	recs, err := p.engine.store.ListNonterminal(ctx)
-	if err != nil {
-		return nil, err
-	}
-	var runs []Run
-	for _, rec := range recs {
-		if rec.PipelineID == p.def.ID() {
-			runs = append(runs, Run{id: rec.RunID, engine: p.engine})
-		}
-	}
-	return runs, nil
-}
-
-// GetRuns returns handles for all Runs of this pipeline against a resource,
-// terminal and nonterminal, oldest first.
-func (p *Pipeline) GetRuns(ctx context.Context, resource durable.ResourceID) ([]Run, error) {
-	recs, err := p.engine.store.ListRuns(ctx, p.def.ID(), resource)
-	if err != nil {
-		return nil, err
-	}
-	runs := make([]Run, 0, len(recs))
-	for _, rec := range recs {
-		runs = append(runs, Run{id: rec.RunID, engine: p.engine})
-	}
-	return runs, nil
+	return Run{id: id, engine: p.engine}, true, nil
 }

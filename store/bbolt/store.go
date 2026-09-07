@@ -12,8 +12,10 @@
 // meta (identity + input), step-fact rows written at operation resolution,
 // rarely-written failures/terminal/cancel records, and the small cursor
 // rewritten per attempt. Per-attempt write volume is therefore independent
-// of input and state sizes. An active-slot index enforces at most one
-// nonterminal run per (exclusion scope, ResourceID).
+// of input and state sizes. An active-slot index keyed by (PipelineID,
+// ResourceID) holds every nonterminal run: CreateRun admits against it,
+// GetActiveRunID reads it, and ListNonterminal walks it, so recovery cost
+// follows the runs in flight rather than the retained history.
 package bbolt
 
 import (
@@ -434,16 +436,19 @@ func (s *Store) RequestCancel(_ context.Context, id kernel.RunID, req driver.Can
 	return accepted, err
 }
 
+// ListNonterminal walks the slots bucket: a run holds its slot from the
+// CreateRun transaction until the terminal transition releases it, so the
+// slot values are exactly the nonterminal run ids. The walk is
+// proportional to the runs in flight, not to the retained history in
+// meta. A slot naming a run with no meta row is corruption, reported
+// rather than skipped.
 func (s *Store) ListNonterminal(_ context.Context) ([]*driver.RunRecord, error) {
 	var out []*driver.RunRecord
 	err := s.db.View(func(tx *bolt.Tx) error {
-		return tx.Bucket(metaBucket).ForEach(func(k, _ []byte) error {
-			if tx.Bucket(terminalBucket).Get(k) != nil {
-				return nil
-			}
-			rec, err := getRun(tx, kernel.RunID(k))
+		return tx.Bucket(slotsBucket).ForEach(func(_, v []byte) error {
+			rec, err := getRun(tx, kernel.RunID(v))
 			if err != nil {
-				return err
+				return fmt.Errorf("bbolt: slot references run %s: %w", v, err)
 			}
 			out = append(out, rec)
 			return nil

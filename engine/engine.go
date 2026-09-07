@@ -170,6 +170,25 @@ func WithRecoveryBackoff(d time.Duration) Option {
 	}
 }
 
+// DefaultTextLimit is the byte length WithTextLimit defaults to.
+const DefaultTextLimit = 4096
+
+// WithTextLimit bounds every piece of free text the Engine records on a
+// Run: failure messages and reasons, the cursor's last error, and cancel
+// causes. Text longer than n bytes is cut at a rune boundary and marked
+// with "…". The bound keeps a handler that wraps a response body into
+// its error from growing the Run's failure record, which the store
+// rewrites on every permanent unwind failure; attribution and reasons
+// are meant to be short, and the full text belongs in logs and traces.
+// n must be positive; the default is DefaultTextLimit.
+func WithTextLimit(n int) Option {
+	return func(e *Engine) {
+		if n > 0 {
+			e.textLimit = n
+		}
+	}
+}
+
 // WithDrainTimeout makes Stop graceful: for up to d, the Engine starts
 // no new operation attempts (newly scheduled Runs included) while
 // in-flight attempts keep live contexts and their results commit
@@ -197,6 +216,7 @@ type Engine struct {
 	recoveryBackoff time.Duration
 	retention       RetentionPolicy
 	drainTimeout    time.Duration
+	textLimit       int
 	middleware      []durable.Middleware
 	observers       []observe.Observer
 	annotators      []ScheduleAnnotator
@@ -260,6 +280,7 @@ func New(store driver.Store, opts ...Option) *Engine {
 		logger:        slog.Default(),
 		retry:         defaultRetryPolicy,
 		concurrency:   16,
+		textLimit:     DefaultTextLimit,
 		invalid:       make(map[durable.RunID]*InvalidRunError),
 		attemptCancel: make(map[durable.RunID]context.CancelCauseFunc),
 		preempted:     make(map[durable.RunID]string),
@@ -718,7 +739,7 @@ func forwardStarted(rec *driver.RunRecord, stepID durable.StepID) bool {
 // applyCancel establishes the cancellation RootFailure and transitions the
 // Run to unwind.
 func (e *Engine) applyCancel(rec *driver.RunRecord) bool {
-	cause := sanitizeText(rec.Cancel.Cause)
+	cause := e.boundText(rec.Cancel.Cause)
 	if cause == "" {
 		cause = "canceled"
 	}
@@ -810,9 +831,9 @@ func (e *Engine) attemptResolved(rec *driver.RunRecord, stepID durable.StepID, p
 // rides the same durable write as NextAttemptAt. Text is sanitized: an
 // invalid-UTF-8 error message must not fail the marshal inside the
 // durable transition.
-func recordLastError(rec *driver.RunRecord, err error, now time.Time) {
-	rec.LastError = sanitizeText(err.Error())
-	rec.LastReason = sanitizeText(durable.FailureReason(err))
+func (e *Engine) recordLastError(rec *driver.RunRecord, err error, now time.Time) {
+	rec.LastError = e.boundText(err.Error())
+	rec.LastReason = e.boundText(durable.FailureReason(err))
 	rec.LastErrorAt = now
 }
 
@@ -1163,10 +1184,10 @@ func (e *Engine) runForward(rec *driver.RunRecord, def *boundDef, stepID durable
 			StepID:  stepID,
 			Phase:   durable.PhaseForward,
 			Attempt: sr.ForwardAttempts,
-			Message: sanitizeText(cause.Error()),
+			Message: e.boundText(cause.Error()),
 			At:      now,
 			Kind:    kind,
-			Reason:  sanitizeText(reason)}
+			Reason:  e.boundText(reason)}
 		// A Fail that wraps *PreemptedError declares a preemption-yield.
 		// Attribute it as cancellation only on engine-side evidence — the
 		// engine preempted this attempt, or the cancel request is already
@@ -1184,7 +1205,7 @@ func (e *Engine) runForward(rec *driver.RunRecord, def *boundDef, stepID durable
 				cause = "canceled"
 			}
 			rec.RootFailure.Kind = durable.FailureKindCanceled
-			rec.RootFailure.Message = sanitizeText(cause)
+			rec.RootFailure.Message = e.boundText(cause)
 		}
 		rec.Phase = durable.PhaseUnwind
 		rec.Awaited = nil
@@ -1202,7 +1223,7 @@ func (e *Engine) runForward(rec *driver.RunRecord, def *boundDef, stepID durable
 	default:
 		d := e.backoff(sr.ForwardAttempts)
 		rec.NextAttemptAt = now.Add(d)
-		recordLastError(rec, err, now)
+		e.recordLastError(rec, err, now)
 		if !e.apply(rec, driver.Transition{Cursor: activeCursor(rec, stepID, sr.ForwardAttempts)}) {
 			return false, time.Second, true
 		}
@@ -1265,10 +1286,10 @@ func (e *Engine) runUnwind(rec *driver.RunRecord, def *boundDef, stepID durable.
 			StepID:  stepID,
 			Phase:   durable.PhaseUnwind,
 			Attempt: sr.UnwindAttempts,
-			Message: sanitizeText(cause.Error()),
+			Message: e.boundText(cause.Error()),
 			At:      now,
 			Kind:    kind,
-			Reason:  sanitizeText(reason)})
+			Reason:  e.boundText(reason)})
 		rec.Awaited = nil
 		clearLastError(rec)
 		uf := rec.UnwindFailures[len(rec.UnwindFailures)-1]
@@ -1281,7 +1302,7 @@ func (e *Engine) runUnwind(rec *driver.RunRecord, def *boundDef, stepID durable.
 	default:
 		d := e.backoff(sr.UnwindAttempts)
 		rec.NextAttemptAt = now.Add(d)
-		recordLastError(rec, err, now)
+		e.recordLastError(rec, err, now)
 		if !e.apply(rec, driver.Transition{Cursor: activeCursor(rec, stepID, sr.UnwindAttempts)}) {
 			return false, time.Second, true
 		}

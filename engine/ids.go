@@ -57,3 +57,28 @@ func sanitizeText(s string) string {
 	}
 	return strings.ToValidUTF8(s, string(utf8.RuneError))
 }
+
+// truncationMark closes text cut by boundText.
+const truncationMark = "…"
+
+// boundText sanitizes s for storage and cuts it to the engine's text
+// limit at a rune boundary, ending the cut text with truncationMark so a
+// reader knows there was more. Text within the limit is unchanged.
+func (e *Engine) boundText(s string) string {
+	s = sanitizeText(s)
+	limit := e.textLimit
+	if limit <= 0 {
+		limit = DefaultTextLimit
+	}
+	if len(s) <= limit {
+		return s
+	}
+	cut := limit - len(truncationMark)
+	if cut < 0 {
+		cut = 0
+	}
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + truncationMark
+}

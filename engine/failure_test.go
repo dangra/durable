@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/dangra/durable"
@@ -188,5 +190,98 @@ func TestFailureInfo(t *testing.T) {
 		if _, _, ok := durable.FailureInfo(err); ok {
 			t.Fatalf("FailureInfo(%v) claims permanence", err)
 		}
+	}
+}
+
+// TestRecordedTextIsBounded pins WithTextLimit: failure messages, reasons,
+// and the cursor's last error are cut at the limit with a marker, so a
+// handler that wraps a response body into its error cannot grow the Run's
+// failure record; the default applies without the option.
+func TestRecordedTextIsBounded(t *testing.T) {
+	long := strings.Repeat("x", 3*engine.DefaultTextLimit) + "é"
+	build := func(release <-chan struct{}) *pipelinedef.Definition {
+		return pipelinedef.New(pipelinedef.Config{
+			ID: "bounded",
+			Steps: []pipelinedef.Step{
+				{
+					ID:     "a/v1",
+					Unwind: true,
+					Run:    func(ctx context.Context, inv durable.Invocation) (proto.Message, error) { return nil, nil },
+					UnwindFunc: func(ctx context.Context, inv durable.Invocation) error {
+						return durable.Fail(errors.New("unwind " + long))
+					},
+				},
+				stateless("b/v1", func(ctx context.Context, inv durable.Invocation) error {
+					select {
+					case <-release:
+						return durable.Fail(errors.New("root "+long), durable.WithReason("reason "+long))
+					default:
+						return errors.New("retry " + long)
+					}
+				}),
+			},
+		})
+	}
+	for _, tc := range []struct {
+		name  string
+		opts  []engine.Option
+		limit int
+	}{
+		{"default", nil, engine.DefaultTextLimit},
+		{"configured", []engine.Option{engine.WithTextLimit(48)}, 48},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			release := make(chan struct{})
+			eng := engine.New(mem.New(), append([]engine.Option{fastRetry, engine.WithLogger(discardTestLogger())}, tc.opts...)...)
+			pipe, err := eng.Bind(build(release))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := eng.Start(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			defer eng.Stop(context.Background())
+			bounded := func(what, s string) {
+				t.Helper()
+				if len(s) > tc.limit || !strings.HasSuffix(s, "…") || !utf8.ValidString(s) {
+					t.Fatalf("%s = %d bytes, suffix %q, valid=%v; want ≤ %d bytes ending in the marker", what, len(s), s[max(0, len(s)-4):], utf8.ValidString(s), tc.limit)
+				}
+			}
+
+			run, _, err := pipe.Schedule(context.Background(), "r", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// The retrying step's last error is bounded while in flight.
+			deadline := time.Now().Add(5 * time.Second)
+			for {
+				st, err := run.Status(context.Background())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if st.LastError != "" {
+					bounded("LastError", st.LastError)
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatal("LastError never surfaced")
+				}
+				time.Sleep(time.Millisecond)
+			}
+			close(release)
+			res, err := run.Wait(context.Background())
+			if err != nil || !res.Failed() {
+				t.Fatalf("Wait = %+v, %v", res, err)
+			}
+			bounded("RootFailure.Message", res.RootFailure.Message)
+			bounded("RootFailure.Reason", res.RootFailure.Reason)
+			if len(res.UnwindFailures) != 1 {
+				t.Fatalf("UnwindFailures = %+v", res.UnwindFailures)
+			}
+			bounded("UnwindFailures[0].Message", res.UnwindFailures[0].Message)
+			if !strings.HasPrefix(res.RootFailure.Message, "root x") || !strings.HasPrefix(res.UnwindFailures[0].Message, "unwind x") {
+				t.Fatalf("messages lost their head: %q / %q", res.RootFailure.Message[:8], res.UnwindFailures[0].Message[:8])
+			}
+		})
 	}
 }

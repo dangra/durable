@@ -105,6 +105,13 @@ release worker
 schedule wakeup
 ```
 
+Every piece of free text the Engine records on a Run — failure messages
+and reasons, the last-error fields, cancel causes — is bounded to the
+Engine's text limit (`WithTextLimit`, default 4096 bytes), cut at a rune
+boundary and marked, so a handler error that wraps a response body
+cannot grow the Run's failure record. The full text belongs in logs and
+traces.
+
 The last-error fields describe the most recent ordinary-error attempt of
 the current unresolved operation (handler panics included, as their
 synthesized message). LastReason is extracted from the error chain via

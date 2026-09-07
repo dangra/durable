@@ -736,21 +736,21 @@ func forwardStarted(rec *driver.RunRecord, stepID durable.StepID) bool {
 	return ok && sr.Forward.Attempts > 0
 }
 
-// applyCancel establishes the cancellation RootFailure and transitions the
+// applyCancel establishes the cancellation Failure and transitions the
 // Run to unwind.
 func (e *Engine) applyCancel(rec *driver.RunRecord) bool {
 	cause := e.boundText(rec.Cancel.Cause)
 	if cause == "" {
 		cause = "canceled"
 	}
-	rec.RootFailure = &durable.RootFailure{
+	rec.Failure = &durable.Failure{
 		Phase:   durable.PhaseForward,
 		Message: cause,
 		At:      e.clock.Now(),
 		Kind:    durable.FailureKindCanceled}
 	rec.Phase = durable.PhaseUnwind
 	rec.NextAttemptAt = time.Time{}
-	if !e.apply(rec, driver.Transition{Cursor: idleCursor(rec), RootFailure: rec.RootFailure}) {
+	if !e.apply(rec, driver.Transition{Cursor: idleCursor(rec), Failure: rec.Failure}) {
 		return false
 	}
 	// A canceled Run may have been parked on a class without ever
@@ -787,7 +787,7 @@ func (e *Engine) completeRun(rec *driver.RunRecord) {
 // planes: the log line and the AttemptDone event are produced from the
 // same facts, so a future resolution path cannot serve one and drift on
 // the other. For observe.AttemptFailed, attribution comes off the record — the
-// RootFailure forward, the newest UnwindFailure during unwind.
+// Failure forward, the newest Failure during unwind.
 func (e *Engine) attemptResolved(rec *driver.RunRecord, stepID durable.StepID, phase durable.Phase, attempt uint64, elapsed time.Duration, result observe.AttemptResult, err error, retryIn time.Duration, panicked bool) {
 	switch result {
 	case observe.AttemptSucceeded:
@@ -809,7 +809,7 @@ func (e *Engine) attemptResolved(rec *driver.RunRecord, stepID durable.StepID, p
 			e.logger.Info("durable: run failed; unwinding",
 				"pipeline", string(rec.PipelineID), "resource", string(rec.ResourceID),
 				"run", string(rec.RunID), "step", string(stepID), "attempt", attempt,
-				"error", err, "kind", rec.RootFailure.Kind.String(), "reason", rec.RootFailure.Reason)
+				"error", err, "kind", rec.Failure.Kind.String(), "reason", rec.Failure.Reason)
 		} else {
 			uf := rec.Step(stepID).Unwind.Failure
 			// Warn, not Info: a permanently failed unwind means
@@ -1181,7 +1181,7 @@ func (e *Engine) runForward(rec *driver.RunRecord, def *boundDef, stepID durable
 
 	case permanent:
 		sr.Forward.Status = driver.OpFailed
-		rec.RootFailure = &durable.RootFailure{
+		rec.Failure = &durable.Failure{
 			StepID:  stepID,
 			Phase:   durable.PhaseForward,
 			Attempt: sr.Forward.Attempts,
@@ -1205,25 +1205,25 @@ func (e *Engine) runForward(rec *driver.RunRecord, def *boundDef, stepID durable
 			if cause == "" {
 				cause = "canceled"
 			}
-			rec.RootFailure.Kind = durable.FailureKindCanceled
-			rec.RootFailure.Message = e.boundText(cause)
+			rec.Failure.Kind = durable.FailureKindCanceled
+			rec.Failure.Message = e.boundText(cause)
 		}
 		rec.Phase = durable.PhaseUnwind
 		rec.Awaited = nil
 		clearLastError(rec)
 		// The step's own record carries the failure that resolved it; the
-		// root failure is the same record at Run level.
-		failed := rec.RootFailure.FailureRecord
+		// run failure is the same record at Run level.
+		failed := *rec.Failure
 		sr.Forward.Failure = &failed
 		sr.Forward.Order = rec.NextOrder()
-		if !e.apply(rec, driver.Transition{Cursor: idleCursor(rec), Ops: []driver.OpWrite{{StepID: stepID, Phase: durable.PhaseForward, Record: sr.Forward}}, RootFailure: rec.RootFailure}) {
+		if !e.apply(rec, driver.Transition{Cursor: idleCursor(rec), Ops: []driver.OpWrite{{StepID: stepID, Phase: durable.PhaseForward, Record: sr.Forward}}, Failure: rec.Failure}) {
 			return false, time.Second, true
 		}
 		e.attemptResolved(rec, stepID, durable.PhaseForward, sr.Forward.Attempts, now.Sub(opStart), observe.AttemptFailed, cause, 0, false)
 		e.emitRunUnwinding(observe.RunFailureEvent{
 			PipelineID: rec.PipelineID, ResourceID: rec.ResourceID, RunID: rec.RunID,
-			StepID: stepID, Kind: rec.RootFailure.Kind, Reason: rec.RootFailure.Reason,
-			Message: rec.RootFailure.Message})
+			StepID: stepID, Kind: rec.Failure.Kind, Reason: rec.Failure.Reason,
+			Message: rec.Failure.Message})
 		return true, 0, false
 
 	default:
@@ -1252,13 +1252,12 @@ func (e *Engine) runUnwind(rec *driver.RunRecord, def *boundDef, stepID durable.
 
 	inv := e.invocation(rec, def, stepID, sr.Unwind.Attempts, durable.PhaseUnwind)
 	inv.awaited = rec.Awaited.Clone()
-	// A fresh copy per attempt: the handler owns what it reads.
-	inv.failure = &durable.Failure{
-		UnwindFailures: rec.UnwindFailures(),
+	// Fresh copies per attempt: the handler owns what it reads.
+	if rec.Failure != nil {
+		f := *rec.Failure
+		inv.failure = &f
 	}
-	if rec.RootFailure != nil {
-		inv.failure.Root = *rec.RootFailure
-	}
+	inv.unwindFailures = rec.UnwindFailures()
 	opStart := e.clock.Now()
 	panicked, err := e.invokeUnwind(sc, inv)
 	e.takePreempted(rec.RunID) // clear evidence; yields attribute only forward
@@ -1289,7 +1288,7 @@ func (e *Engine) runUnwind(rec *driver.RunRecord, def *boundDef, stepID durable.
 
 	case permanent:
 		sr.Unwind.Status = driver.OpFailed
-		sr.Unwind.Failure = &durable.FailureRecord{
+		sr.Unwind.Failure = &durable.Failure{
 			StepID:  stepID,
 			Phase:   durable.PhaseUnwind,
 			Attempt: sr.Unwind.Attempts,

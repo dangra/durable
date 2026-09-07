@@ -127,7 +127,7 @@ func TestOperationRecordRoundTrip(t *testing.T) {
 	for _, op := range []driver.OperationRecord{
 		{Status: driver.OpSucceeded, Attempts: 3, State: []byte{1, 2, 3}, Order: 7},
 		{Status: driver.OpUnresolved, Attempts: 2},
-		{Status: driver.OpFailed, Attempts: 4, Order: 9, Failure: &kernel.FailureRecord{
+		{Status: driver.OpFailed, Attempts: 4, Order: 9, Failure: &kernel.Failure{
 			StepID:  "reserve/v1",
 			Phase:   kernel.PhaseUnwind,
 			Attempt: 4,
@@ -152,7 +152,7 @@ func TestOperationRecordRoundTrip(t *testing.T) {
 }
 
 func TestFailureRecordRoundTrip(t *testing.T) {
-	root := kernel.FailureRecord{
+	root := kernel.Failure{
 		StepID:  "create/v1",
 		Phase:   kernel.PhaseForward,
 		Attempt: 5,
@@ -173,7 +173,7 @@ func TestFailureRecordRoundTrip(t *testing.T) {
 		t.Fatalf("round trip mismatch:\n got: %+v\nwant: %+v", got, root)
 	}
 	// Cancellation roots have no StepID.
-	b, err = MarshalFailureRecord(kernel.FailureRecord{Message: "canceled", At: at(1), Kind: kernel.FailureKindCanceled})
+	b, err = MarshalFailureRecord(kernel.Failure{Message: "canceled", At: at(1), Kind: kernel.FailureKindCanceled})
 	if err != nil {
 		t.Fatalf("MarshalFailureRecord: %v", err)
 	}

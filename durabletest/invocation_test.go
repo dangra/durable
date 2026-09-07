@@ -73,21 +73,20 @@ func TestFakeInvocationStateLookup(t *testing.T) {
 
 func TestFakeInvocationCopiesAndMemory(t *testing.T) {
 	wake := &durable.Wake{Targets: []durable.RunID{"child"}, Done: []durable.RunID{"child"}}
-	failure := &durable.Failure{
-		Root:           durable.RootFailure{FailureRecord: durable.FailureRecord{StepID: "ship/v1", Message: "boom"}},
-		UnwindFailures: []durable.UnwindFailure{{FailureRecord: durable.FailureRecord{StepID: "t/v1"}}},
-	}
+	failure := &durable.Failure{StepID: "ship/v1", Message: "boom"}
+	unwound := []durable.Failure{{StepID: "t/v1"}}
 	inv := durabletest.NewInvocation(durabletest.InvocationConfig{
-		PipelineID:  "p",
-		ResourceID:  "r",
-		RunID:       "run",
-		StepID:      "s/v1",
-		Attempt:     3,
-		Phase:       durable.PhaseUnwind,
-		Input:       wrapperspb.String("in"),
-		Annotations: map[string]string{"traceparent": "00-abc"},
-		Awaited:     wake,
-		Failure:     failure,
+		PipelineID:     "p",
+		ResourceID:     "r",
+		RunID:          "run",
+		StepID:         "s/v1",
+		Attempt:        3,
+		Phase:          durable.PhaseUnwind,
+		Input:          wrapperspb.String("in"),
+		Annotations:    map[string]string{"traceparent": "00-abc"},
+		Awaited:        wake,
+		Failure:        failure,
+		UnwindFailures: unwound,
 	})
 	if inv.PipelineID() != "p" || inv.ResourceID() != "r" || inv.RunID() != "run" || inv.StepID() != "s/v1" || inv.Attempt() != 3 || inv.Phase() != durable.PhaseUnwind {
 		t.Fatal("identity accessors must echo the config")
@@ -106,14 +105,14 @@ func TestFakeInvocationCopiesAndMemory(t *testing.T) {
 	if !ok || len(w.Done) != 1 {
 		t.Fatalf("Awaited = %+v, %v", w, ok)
 	}
-	f := inv.Failure()
-	if f == nil || f.Root.StepID != "ship/v1" || len(f.UnwindFailures) != 1 {
-		t.Fatalf("Failure = %+v", f)
+	f, ufs := inv.Failure(), inv.UnwindFailures()
+	if f == nil || f.StepID != "ship/v1" || len(ufs) != 1 || ufs[0].StepID != "t/v1" {
+		t.Fatalf("Failure = %+v, UnwindFailures = %+v", f, ufs)
 	}
-	f.Root.StepID, f.UnwindFailures[0].StepID = "mutated", "mutated"
-	failure.UnwindFailures[0].Message = "mutated"
-	if g := inv.Failure(); g.Root.StepID != "ship/v1" || g.UnwindFailures[0].StepID != "t/v1" || g.UnwindFailures[0].Message != "" {
-		t.Fatalf("Failure must be a copy on both sides: %+v", g)
+	f.StepID, ufs[0].StepID = "mutated", "mutated"
+	failure.Message, unwound[0].Message = "mutated", "mutated"
+	if g, gu := inv.Failure(), inv.UnwindFailures(); g.StepID != "ship/v1" || g.Message != "boom" || gu[0].StepID != "t/v1" || gu[0].Message != "" {
+		t.Fatalf("Failure and UnwindFailures must be copies on both sides: %+v %+v", g, gu)
 	}
 	w.Done[0] = "mutated"
 	if wake.Done[0] != "child" {

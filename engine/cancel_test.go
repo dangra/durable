@@ -43,8 +43,8 @@ func TestCancelScheduledRunFreesSlot(t *testing.T) {
 	if !res.Failed() || !res.Canceled() {
 		t.Fatalf("result = %+v, want canceled failure", res)
 	}
-	if res.RootFailure.Kind != durable.FailureKindCanceled || res.RootFailure.Message != "operator retracted" {
-		t.Fatalf("RootFailure = %+v", res.RootFailure)
+	if res.Failure.Kind != durable.FailureKindCanceled || res.Failure.Message != "operator retracted" {
+		t.Fatalf("Failure = %+v", res.Failure)
 	}
 	// The slot is free again immediately.
 	if _, created, err := p.Schedule(context.Background(), "r", nil, durable.StartAfter(time.Hour)); err != nil || !created {
@@ -179,9 +179,9 @@ func TestOrganicFailureBeatsCancel(t *testing.T) {
 		t.Fatalf("Wait = %+v, %v", res, err)
 	}
 	if res.Canceled() {
-		t.Fatalf("result = %+v; organic permanent failure should be the root", res.RootFailure)
+		t.Fatalf("result = %+v; organic permanent failure should be the root", res.Failure)
 	}
-	if res.RootFailure.StepID != "s/v1" {
-		t.Fatalf("RootFailure = %+v, want step s/v1", res.RootFailure)
+	if res.Failure.StepID != "s/v1" {
+		t.Fatalf("Failure = %+v, want step s/v1", res.Failure)
 	}
 }

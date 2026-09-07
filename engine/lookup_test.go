@@ -76,10 +76,10 @@ func TestEngineGetRunAcrossPipelines(t *testing.T) {
 	}
 }
 
-// Status carries the root failure from the moment the Run starts
+// Status carries the run failure from the moment the Run starts
 // unwinding, so a poller learns why a Run is unwinding without Wait, and
 // keeps it on the terminal failure where it equals Result's.
-func TestStatusCarriesRootFailureDuringUnwind(t *testing.T) {
+func TestStatusCarriesFailureDuringUnwind(t *testing.T) {
 	ctx := context.Background()
 	release := make(chan struct{})
 	def := pipelinedef.New(pipelinedef.Config{
@@ -109,9 +109,9 @@ func TestStatusCarriesRootFailureDuringUnwind(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Forward: no root failure yet.
-	if st, err := run.Status(ctx); err != nil || (st.Phase == durable.PhaseForward && st.RootFailure != nil) {
-		t.Fatalf("forward Status = %+v, %v; want no root failure", st, err)
+	// Forward: no run failure yet.
+	if st, err := run.Status(ctx); err != nil || (st.Phase == durable.PhaseForward && st.Failure != nil) {
+		t.Fatalf("forward Status = %+v, %v; want no run failure", st, err)
 	}
 	// Unwinding, held in a/v1's unwind: the cause is observable now.
 	deadline := time.Now().Add(5 * time.Second)
@@ -129,9 +129,9 @@ func TestStatusCarriesRootFailureDuringUnwind(t *testing.T) {
 		}
 		time.Sleep(time.Millisecond)
 	}
-	if st.Outcome != nil || st.RootFailure == nil || st.RootFailure.StepID != "b/v1" ||
-		st.RootFailure.Kind != durable.FailureKindUser || st.RootFailure.Reason != "capacity" {
-		t.Fatalf("unwinding Status = %+v; want root failure b/v1 user/capacity and no outcome", st)
+	if st.Outcome != nil || st.Failure == nil || st.Failure.StepID != "b/v1" ||
+		st.Failure.Kind != durable.FailureKindUser || st.Failure.Reason != "capacity" {
+		t.Fatalf("unwinding Status = %+v; want run failure b/v1 user/capacity and no outcome", st)
 	}
 
 	close(release)
@@ -140,12 +140,12 @@ func TestStatusCarriesRootFailureDuringUnwind(t *testing.T) {
 		t.Fatalf("Wait = %+v, %v", res, err)
 	}
 	st, err = run.Status(ctx)
-	if err != nil || st.Outcome == nil || *st.Outcome != durable.OutcomeFailure || st.RootFailure == nil || *st.RootFailure != *res.RootFailure {
-		t.Fatalf("terminal Status = %+v, %v; want Result's root failure", st, err)
+	if err != nil || st.Outcome == nil || *st.Outcome != durable.OutcomeFailure || st.Failure == nil || *st.Failure != *res.Failure {
+		t.Fatalf("terminal Status = %+v, %v; want Result's run failure", st, err)
 	}
 	// The copy is the caller's.
-	st.RootFailure.Reason = "mutated"
-	if again, _ := run.Status(ctx); again.RootFailure.Reason != "capacity" {
-		t.Fatal("Status must hand out a copy of the root failure")
+	st.Failure.Reason = "mutated"
+	if again, _ := run.Status(ctx); again.Failure.Reason != "capacity" {
+		t.Fatal("Status must hand out a copy of the run failure")
 	}
 }

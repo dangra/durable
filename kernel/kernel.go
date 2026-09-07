@@ -172,7 +172,7 @@ const (
 	// itself: no amount of infrastructure health would have made it
 	// succeed.
 	FailureKindUser
-	// FailureKindCanceled marks a RootFailure established by Run
+	// FailureKindCanceled marks a Run's Failure established by
 	// cancellation. It is created by the engine; handlers should not
 	// attribute their own failures with it.
 	FailureKindCanceled
@@ -189,11 +189,17 @@ func (k FailureKind) String() string {
 	}
 }
 
-// FailureRecord is the durable representation of one permanent operation
-// failure. Arbitrary Go error chains are intentionally flattened: only the
-// execution location, attempt, phase, timestamp, and human-readable message
-// are preserved.
-type FailureRecord struct {
+// Failure is the durable representation of one permanent failure.
+// Arbitrary Go error chains are intentionally flattened: only the
+// execution location, attempt, phase, timestamp, and human-readable
+// message are preserved.
+//
+// One type serves every role, and the role is where the value sits: a
+// Run's Failure is the one that ended its forward phase (a step's
+// permanent forward failure, or a cancellation, which has no StepID); an
+// operation's Failure is the one that resolved that operation; the
+// unwind failures of a Run are the failures of its unwind operations.
+type Failure struct {
 	StepID  StepID
 	Phase   Phase
 	Attempt uint64
@@ -205,16 +211,4 @@ type FailureRecord struct {
 	// low-cardinality slug, empty when none was provided.
 	Kind   FailureKind
 	Reason string
-}
-
-// RootFailure is the permanent forward failure that established the Run's
-// transition from forward execution to unwind.
-type RootFailure struct {
-	FailureRecord
-}
-
-// UnwindFailure is a permanent failure of one unwind operation. It does not
-// stop the remaining unwind.
-type UnwindFailure struct {
-	FailureRecord
 }

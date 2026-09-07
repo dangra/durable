@@ -9,7 +9,7 @@ import "errors"
 // belongs in the error message.
 //
 // The engine extracts the reason with errors.As at resolution time — for
-// permanent failures (recorded on the FailureRecord) and for ordinary
+// permanent failures (recorded on the Failure) and for ordinary
 // retryable errors (recorded as the Run's LastReason). An explicit
 // WithReason on Fail takes precedence over the chain.
 type FailureReasoner interface {
@@ -50,8 +50,8 @@ func WithReason(reason string) FailOption {
 // permanent-failure mechanism; options attach attribution.
 //
 // Returned from a forward handler, it resolves the current operation as
-// permanently failed, establishes the Run's RootFailure, and begins unwind.
-// Returned from an Unwind handler, it records a permanent UnwindFailure and
+// permanently failed, establishes the Run's Failure, and begins unwind.
+// Returned from an Unwind handler, it records a permanent Failure and
 // unwind continues with earlier eligible Steps.
 //
 // Any other non-nil error means the operation remains unresolved and is
@@ -114,7 +114,7 @@ func reasonOf(err error) string {
 
 // FailureInfo reports whether a handler's returned error declares
 // permanent failure via Fail and, if so, the attribution it resolves
-// to — the kind and reason that will reach the Run's RootFailure.
+// to — the kind and reason that will reach the Run's Failure.
 // Middleware wrapping handlers use it to label spans and metrics with
 // the same attribution the engine will commit.
 func FailureInfo(err error) (kind FailureKind, reason string, ok bool) {

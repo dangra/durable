@@ -78,7 +78,7 @@ func FuzzRoundTrip(f *testing.F) {
 			State: append([]byte(nil), blob...), Order: uint32(b),
 		}
 		if op.Status == driver.OpFailed {
-			op.Failure = &kernel.FailureRecord{
+			op.Failure = &kernel.Failure{
 				StepID: kernel.StepID(s2), Phase: phase, Attempt: n / 3, Message: s1, At: when,
 				Kind: kernel.FailureKind(b % 3), Reason: s2,
 			}
@@ -100,17 +100,17 @@ func FuzzRoundTrip(f *testing.F) {
 			t.Fatalf("operation failure round trip: %+v != %+v", gop.Failure, op.Failure)
 		}
 
-		// Root FailureRecord.
-		var root *kernel.RootFailure
+		// Root Failure.
+		var root *kernel.Failure
 		if a%2 == 0 {
-			root = &kernel.RootFailure{FailureRecord: kernel.FailureRecord{
+			root = &kernel.Failure{
 				StepID: kernel.StepID(s1), Phase: phase, Attempt: n,
 				Message: s2, At: when, Kind: kernel.FailureKind(b % 3), Reason: s1,
-			}}
+			}
 		}
-		var groot *kernel.RootFailure
+		var groot *kernel.Failure
 		if root != nil {
-			fb, err := MarshalFailureRecord(root.FailureRecord)
+			fb, err := MarshalFailureRecord(*root)
 			if err != nil {
 				t.Fatalf("MarshalFailureRecord: %v", err)
 			}
@@ -118,11 +118,11 @@ func FuzzRoundTrip(f *testing.F) {
 			if err != nil {
 				t.Fatalf("UnmarshalFailureRecord: %v", err)
 			}
-			groot = &kernel.RootFailure{FailureRecord: f}
+			groot = &f
 		}
 		if root != nil && (groot.StepID != root.StepID || groot.Kind != root.Kind ||
 			groot.Message != root.Message || !sameTime(groot.At, root.At)) {
-			t.Fatalf("root failure round trip: %+v != %+v", groot, root)
+			t.Fatalf("run failure round trip: %+v != %+v", groot, root)
 		}
 
 		// Terminal.

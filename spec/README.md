@@ -42,7 +42,7 @@ A handler explicitly declares permanent operation failure with:
 return durable.Fail(err)
 ```
 
-During forward execution, permanent failure establishes a root failure and begins unwind.
+During forward execution, permanent failure establishes a run failure and begins unwind.
 
 For:
 
@@ -297,11 +297,11 @@ ordinary error
     -> retry
 
 durable.Fail during Run
-    -> RootFailure
+    -> Failure
     -> unwind
 
 durable.Fail during Unwind
-    -> permanent UnwindFailure
+    -> permanent Failure
     -> continue backward
 
 runtime incompatibility

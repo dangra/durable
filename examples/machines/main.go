@@ -41,7 +41,7 @@ func main() {
 		log.Fatal(err)
 	}
 	if result.Failed() {
-		log.Fatalf("provisioning failed at %s: %s", result.RootFailure.StepID, result.RootFailure.Message)
+		log.Fatalf("provisioning failed at %s: %s", result.Failure.StepID, result.Failure.Message)
 	}
 	out := result.Output()
 	fmt.Printf("provisioned %s on %s\n", out.GetMachineId(), out.GetHostId())

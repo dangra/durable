@@ -71,20 +71,15 @@ const (
 	// FailureKindUser attributes the failure to the request or intent
 	// itself.
 	FailureKindUser = kernel.FailureKindUser
-	// FailureKindCanceled marks a RootFailure established by Run
+	// FailureKindCanceled marks a Run's Failure established by
 	// cancellation; it is created by the engine.
 	FailureKindCanceled = kernel.FailureKindCanceled
 )
 
-// FailureRecord is the durable representation of one permanent operation
-// failure: execution location, attempt, phase, timestamp, message, and
-// informational kind/reason attribution.
-type FailureRecord = kernel.FailureRecord
-
-// RootFailure is the permanent forward failure that established the Run's
-// transition from forward execution to unwind.
-type RootFailure = kernel.RootFailure
-
-// UnwindFailure is a permanent failure of one unwind operation. It does
-// not stop the remaining unwind.
-type UnwindFailure = kernel.UnwindFailure
+// Failure is the durable representation of one permanent failure:
+// execution location, attempt, phase, timestamp, message, and
+// informational kind/reason attribution. The same type is a Run's
+// failure (the one that ended its forward phase, read through
+// Result.Failure, Status.Failure, and Invocation.Failure), an
+// operation's failure, and each entry of Invocation.UnwindFailures.
+type Failure = kernel.Failure

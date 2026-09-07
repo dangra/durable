@@ -129,7 +129,7 @@ func uploadSnapshot(w *world) snapshotspb.UploadSnapshotFuncs {
 			}
 			// The failure being unwound is on the invocation.
 			inv.Logger().Info("deleting orphaned snapshot object",
-				"key", up.GetObjectKey(), "root_step", inv.Failure().Root.StepID)
+				"key", up.GetObjectKey(), "root_step", inv.Failure().StepID)
 			w.delete(up.GetObjectKey())
 			return nil
 		},
@@ -219,6 +219,6 @@ func main() {
 		log.Fatalf("snapshot of vol-2: %+v, %v", result, err)
 	}
 	fmt.Printf("vol-2: failed at %s (%s/%s); unwound: objects in storage %d (vol-1's), volumes frozen %d\n",
-		result.RootFailure.StepID, result.RootFailure.Kind, result.RootFailure.Reason,
+		result.Failure.StepID, result.Failure.Kind, result.Failure.Reason,
 		len(w.objects), len(w.frozen))
 }

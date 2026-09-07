@@ -15,7 +15,7 @@ func TestAttemptSpansLinkToOrigin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Outcome != durable.OutcomeFailure || res.RootFailure == nil || res.RootFailure.Reason != "invalid-address" {
+	if res.Outcome != durable.OutcomeFailure || res.Failure == nil || res.Failure.Reason != "invalid-address" {
 		t.Fatalf("result = %+v, want the scripted shipping failure", res.Result)
 	}
 

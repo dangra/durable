@@ -37,10 +37,15 @@ type InvocationConfig struct {
 	// execution.
 	Awaited *durable.Wake
 
-	// Failure is what an unwind handler under test is unwinding; nil for
-	// a forward attempt. The engine guarantees it is set exactly when
-	// Phase is PhaseUnwind; the fake does not enforce that pairing.
+	// Failure is the Run's failure an unwind handler under test is
+	// unwinding; nil for a forward attempt. The engine guarantees it is
+	// set exactly when Phase is PhaseUnwind; the fake does not enforce
+	// that pairing.
 	Failure *durable.Failure
+
+	// UnwindFailures are the permanent unwind failures recorded before
+	// the attempt under test, in execution order.
+	UnwindFailures []durable.Failure
 
 	// Logger backs Invocation.Logger; nil discards.
 	Logger *slog.Logger
@@ -78,9 +83,9 @@ func NewInvocation(cfg InvocationConfig) *Invocation {
 	cfg.Awaited = cfg.Awaited.Clone()
 	if cfg.Failure != nil {
 		f := *cfg.Failure
-		f.UnwindFailures = slices.Clone(f.UnwindFailures)
 		cfg.Failure = &f
 	}
+	cfg.UnwindFailures = slices.Clone(cfg.UnwindFailures)
 	if cfg.Phase == 0 {
 		cfg.Phase = durable.PhaseForward
 	}
@@ -138,15 +143,19 @@ func (inv *Invocation) Awaited() (durable.Wake, bool) {
 	return *inv.cfg.Awaited.Clone(), true
 }
 
-// Failure returns a copy of the configured failure, nil when none was
+// Failure returns a copy of the configured Run failure, nil when none was
 // configured.
 func (inv *Invocation) Failure() *durable.Failure {
 	if inv.cfg.Failure == nil {
 		return nil
 	}
 	f := *inv.cfg.Failure
-	f.UnwindFailures = slices.Clone(f.UnwindFailures)
 	return &f
+}
+
+// UnwindFailures returns a copy of the configured unwind failures.
+func (inv *Invocation) UnwindFailures() []durable.Failure {
+	return slices.Clone(inv.cfg.UnwindFailures)
 }
 
 // AwaitedRunID reports the configured park memory when it has exactly one

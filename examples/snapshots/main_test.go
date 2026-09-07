@@ -75,9 +75,9 @@ func TestSnapshotUnwindsOnCatalogFull(t *testing.T) {
 	if err != nil || !result.Failed() {
 		t.Fatalf("Wait = %+v, %v; want failure", result, err)
 	}
-	rf := result.RootFailure
+	rf := result.Failure
 	if rf.StepID != "register-snapshot/v1" || rf.Kind != durable.FailureKindUser || rf.Reason != "catalog-full" {
-		t.Fatalf("RootFailure = %+v", rf)
+		t.Fatalf("Failure = %+v", rf)
 	}
 	if w.uploaded != 1 || len(w.objects) != 0 {
 		t.Fatalf("uploaded = %d, objects = %v; want the one upload deleted by unwind", w.uploaded, w.objects)
@@ -111,7 +111,7 @@ func TestUploadUnwindDeletesObject(t *testing.T) {
 		State: map[durable.StepID]proto.Message{
 			snapshotspb.UploadSnapshotStep.ID(): &snapshotspb.UploadSnapshot{ObjectKey: "backups/vol-9/run.img"},
 		},
-		Failure: &durable.Failure{Root: durable.RootFailure{FailureRecord: durable.FailureRecord{StepID: "register-snapshot/v1"}}},
+		Failure: &durable.Failure{StepID: "register-snapshot/v1"},
 	})
 	if err := uploadSnapshot(w).Unwind(ctx, snapshotspb.NewUploadSnapshotInvocation(inv)); err != nil {
 		t.Fatalf("Unwind: %v", err)

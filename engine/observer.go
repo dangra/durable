@@ -77,9 +77,9 @@ func (e *Engine) emitRunTerminal(rec *driver.RunRecord) {
 		Duration:    rec.UpdatedAt.Sub(rec.CreatedAt),
 		Annotations: copyAnnotations(rec.Annotations),
 	}
-	if rec.RootFailure != nil {
-		ev.Kind = rec.RootFailure.Kind
-		ev.Reason = rec.RootFailure.Reason
+	if rec.Failure != nil {
+		ev.Kind = rec.Failure.Kind
+		ev.Reason = rec.Failure.Reason
 	}
 	for i := range e.observers {
 		emit(e, e.observers[i].RunTerminal, ev)

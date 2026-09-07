@@ -42,7 +42,7 @@ type OperationRecord struct {
 	State []byte
 	// Failure is the permanent failure that resolved the operation, set
 	// exactly when Status is OpFailed.
-	Failure *kernel.FailureRecord
+	Failure *kernel.Failure
 	// Order is the operation's resolution sequence within the Run, from 1
 	// in the order operations resolved; 0 while unresolved. It is what
 	// puts unwind failures in execution order without the store knowing
@@ -115,11 +115,11 @@ type Transition struct {
 	// written whole; a permanent failure rides in the record's Failure.
 	Ops []OpWrite
 
-	// RootFailure is set at most once per Run: the failure that ended the
+	// Failure is set at most once per Run: the failure that ended the
 	// forward phase. A step's own permanent failure is on its operation
 	// record; a cancellation has no resolving operation, which is why the
-	// root failure is a Run-level fact.
-	RootFailure *kernel.RootFailure
+	// run failure is a Run-level fact.
+	Failure *kernel.Failure
 
 	// Outcome commits terminality; Output accompanies a successful
 	// outcome for Output-producing pipelines. Committing an Outcome
@@ -146,7 +146,7 @@ type RunRecord struct {
 	Phase kernel.Phase
 	Steps map[kernel.StepID]*StepRecord
 
-	RootFailure *kernel.RootFailure
+	Failure *kernel.Failure
 
 	Output []byte
 	// Outcome is set only once the Run is terminal.
@@ -207,10 +207,10 @@ func (r *RunRecord) Step(id kernel.StepID) *StepRecord {
 
 // UnwindFailures returns the permanent unwind failures of the Run in
 // resolution order, derived from the unwind operations' records.
-func (r *RunRecord) UnwindFailures() []kernel.UnwindFailure {
+func (r *RunRecord) UnwindFailures() []kernel.Failure {
 	type ordered struct {
 		order uint32
-		f     kernel.FailureRecord
+		f     kernel.Failure
 	}
 	var found []ordered
 	for _, sr := range r.Steps {
@@ -219,9 +219,9 @@ func (r *RunRecord) UnwindFailures() []kernel.UnwindFailure {
 		}
 	}
 	sort.Slice(found, func(i, j int) bool { return found[i].order < found[j].order })
-	out := make([]kernel.UnwindFailure, len(found))
+	out := make([]kernel.Failure, len(found))
 	for i, o := range found {
-		out[i] = kernel.UnwindFailure{FailureRecord: o.f}
+		out[i] = o.f
 	}
 	return out
 }
@@ -263,9 +263,9 @@ func (r *RunRecord) Clone() *RunRecord {
 			c.Annotations[k] = v
 		}
 	}
-	if r.RootFailure != nil {
-		rf := *r.RootFailure
-		c.RootFailure = &rf
+	if r.Failure != nil {
+		rf := *r.Failure
+		c.Failure = &rf
 	}
 	if r.Outcome != nil {
 		o := *r.Outcome

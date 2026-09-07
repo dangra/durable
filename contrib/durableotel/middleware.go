@@ -93,8 +93,8 @@ func inject(ctx context.Context, cfg config) propagation.MapCarrier {
 // sets Error status; a permanent failure additionally stamps the
 // durable.failure_kind and durable.reason the engine will commit
 // (FailureInfo). An unwind attempt additionally starts with the failure
-// it is unwinding (Invocation.Failure): durable.root_failure.step, .kind,
-// and .reason name the root failure that ended the forward phase, and
+// it is unwinding (Invocation.Failure): durable.run_failure.step, .kind,
+// and .reason name the run failure that ended the forward phase, and
 // durable.unwind_failures counts the unwind steps that had already
 // failed permanently; these are set at span start so sampling can key
 // on them. A park resolution (AwaitRun, AwaitAll, AwaitAny) is not
@@ -121,15 +121,15 @@ func Middleware(opts ...Option) durable.Middleware {
 				AttrAttempt.Int64(int64(inv.Attempt())),
 			}
 			// An unwind attempt says what it is unwinding, at start so
-			// samplers and processors see it: the root failure's step,
+			// samplers and processors see it: the Run failure's step,
 			// kind, and reason, and the permanent unwind failures so far.
 			if f := inv.Failure(); f != nil {
 				attrs = append(attrs,
-					AttrRootStep.String(string(f.Root.StepID)),
-					AttrRootFailureKind.String(f.Root.Kind.String()),
-					AttrUnwindFailures.Int64(int64(len(f.UnwindFailures))))
-				if f.Root.Reason != "" {
-					attrs = append(attrs, AttrRootReason.String(f.Root.Reason))
+					AttrRunFailureStep.String(string(f.StepID)),
+					AttrRunFailureKind.String(f.Kind.String()),
+					AttrUnwindFailures.Int64(int64(len(inv.UnwindFailures()))))
+				if f.Reason != "" {
+					attrs = append(attrs, AttrRunFailureReason.String(f.Reason))
 				}
 			}
 			for _, k := range cfg.spanAnnotations {

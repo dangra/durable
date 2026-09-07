@@ -20,7 +20,7 @@ var ErrEngineStopping = errors.New("durable: engine stopping")
 // attempt observes Invocation.CancelRequested). A handler or middleware
 // that instead yields immediately returns a Fail wrapping this error;
 // when engine-side evidence confirms the preemption (or the cancel
-// request is already visible), the resulting RootFailure is attributed
+// request is already visible), the resulting Failure is attributed
 // FailureKindCanceled with the cancellation's cause — see
 // FailFastOnCancel.
 type PreemptedError struct {

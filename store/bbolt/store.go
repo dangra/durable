@@ -11,7 +11,7 @@
 // cadences (the internal durable.storage.v1 protobuf schema): write-once
 // meta (identity + input), one operation row per step phase written at
 // that operation's resolution and carrying its own failure, the run's
-// write-once root failure, terminal, and cancel records, and the small
+// write-once run failure, terminal, and cancel records, and the small
 // cursor rewritten per attempt. Per-attempt write volume is therefore
 // independent of input and state sizes, an unwind never rewrites the
 // forward row's state, and no row is read back to be rewritten. An active-slot index keyed by (PipelineID,
@@ -212,8 +212,8 @@ func putRun(tx *bolt.Tx, rec *driver.RunRecord) error {
 			}
 		}
 	}
-	if rec.RootFailure != nil {
-		if err := putRootFailure(tx, rec.RunID, rec.RootFailure); err != nil {
+	if rec.Failure != nil {
+		if err := putRootFailure(tx, rec.RunID, rec.Failure); err != nil {
 			return err
 		}
 	}
@@ -250,8 +250,8 @@ func (s *Store) ApplyTransition(_ context.Context, id kernel.RunID, t driver.Tra
 				return err
 			}
 		}
-		if t.RootFailure != nil {
-			if err := putRootFailure(tx, id, t.RootFailure); err != nil {
+		if t.Failure != nil {
+			if err := putRootFailure(tx, id, t.Failure); err != nil {
 				return err
 			}
 		}
@@ -285,15 +285,15 @@ func putOp(tx *bolt.Tx, id kernel.RunID, step kernel.StepID, phase kernel.Phase,
 	return tx.Bucket(stepsBucket).Put(opKey(id, step, phase), b)
 }
 
-func putRootFailure(tx *bolt.Tx, id kernel.RunID, rf *kernel.RootFailure) error {
-	b, err := storagepb.MarshalFailureRecord(rf.FailureRecord)
+func putRootFailure(tx *bolt.Tx, id kernel.RunID, rf *kernel.Failure) error {
+	b, err := storagepb.MarshalFailureRecord(*rf)
 	if err != nil {
 		return err
 	}
 	return tx.Bucket(failuresBucket).Put([]byte(id), b)
 }
 
-func readRootFailure(tx *bolt.Tx, id kernel.RunID) (*kernel.RootFailure, error) {
+func readRootFailure(tx *bolt.Tx, id kernel.RunID) (*kernel.Failure, error) {
 	b := tx.Bucket(failuresBucket).Get([]byte(id))
 	if b == nil {
 		return nil, nil
@@ -302,7 +302,7 @@ func readRootFailure(tx *bolt.Tx, id kernel.RunID) (*kernel.RootFailure, error) 
 	if err != nil {
 		return nil, err
 	}
-	return &kernel.RootFailure{FailureRecord: f}, nil
+	return &f, nil
 }
 
 // getRun assembles the read model from the run's components: meta, step
@@ -361,7 +361,7 @@ func getRun(tx *bolt.Tx, id kernel.RunID) (*driver.RunRecord, error) {
 	if err != nil {
 		return nil, err
 	}
-	rec.RootFailure = root
+	rec.Failure = root
 
 	if tb := tx.Bucket(terminalBucket).Get([]byte(id)); tb != nil {
 		oc, out, err := storagepb.UnmarshalTerminal(tb)

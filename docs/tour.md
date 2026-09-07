@@ -478,7 +478,7 @@ into reaping with a policy:
 
 ```go
 eng := engine.New(store,
-    engine.WithRetention(engine.RetentionPolicy{TerminalAfter: 30 * 24 * time.Hour}))
+    engine.WithRetentionPolicy(engine.RetentionPolicy{TerminalAfter: 30 * 24 * time.Hour}))
 ```
 
 Runnable: [`ExampleStartAfter`](https://pkg.go.dev/github.com/dangra/durable/engine#example-StartAfter).

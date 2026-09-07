@@ -98,11 +98,12 @@ func WithLogger(l *slog.Logger) Option {
 // passes to Schedule. See WithScheduleAnnotator.
 type ScheduleAnnotator func(context.Context) map[string]string
 
-// WithScheduleAnnotator installs an engine-wide annotator: on every
-// Schedule, it derives annotations from the caller's ctx and merges
+// WithScheduleAnnotator installs engine-wide annotators: on every
+// Schedule, each derives annotations from the caller's ctx and merges
 // them in before the call's own ScheduleOptions, so an explicit
-// WithAnnotations at the call site wins on key conflicts. Repeatable —
-// annotators run in installation order, later keys winning.
+// WithAnnotations at the call site wins on key conflicts. Annotators run
+// in installation order, within one call and across repeated options,
+// later keys winning.
 //
 // It exists so propagation intent is declared once, at engine
 // construction, instead of remembered at every Schedule call site: a
@@ -110,10 +111,12 @@ type ScheduleAnnotator func(context.Context) map[string]string
 // baggage already riding the ctx the subsystem passes anyway (e.g.
 // contrib/durableotel's Annotator). Returned maps are copied; a nil or
 // empty result contributes nothing.
-func WithScheduleAnnotator(a ScheduleAnnotator) Option {
+func WithScheduleAnnotator(a ...ScheduleAnnotator) Option {
 	return func(e *Engine) {
-		if a != nil {
-			e.annotators = append(e.annotators, a)
+		for _, an := range a {
+			if an != nil {
+				e.annotators = append(e.annotators, an)
+			}
 		}
 	}
 }
@@ -133,7 +136,7 @@ func WithConcurrencyClass(name string, capacity int) Option {
 }
 
 // RetentionPolicy configures reaping of terminal Runs. Retention is off by
-// default: without WithRetention, terminal Runs accumulate indefinitely.
+// default: without WithRetentionPolicy, terminal Runs accumulate indefinitely.
 type RetentionPolicy struct {
 	// TerminalAfter is how long after its terminal commit a Run is kept.
 	// It must be positive to enable retention.
@@ -142,10 +145,11 @@ type RetentionPolicy struct {
 	Interval time.Duration
 }
 
-// WithRetention enables background reaping of terminal Runs. Only terminal
-// Runs are ever reaped — nonterminal Runs, invalid ones included, are
-// never touched regardless of age. The first sweep runs at Start.
-func WithRetention(p RetentionPolicy) Option {
+// WithRetentionPolicy enables background reaping of terminal Runs. Only
+// terminal Runs are ever reaped — nonterminal Runs, invalid ones
+// included, are never touched regardless of age. The first sweep runs at
+// Start.
+func WithRetentionPolicy(p RetentionPolicy) Option {
 	return func(e *Engine) {
 		if p.TerminalAfter > 0 {
 			if p.Interval <= 0 {

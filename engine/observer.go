@@ -10,11 +10,12 @@ import (
 	"time"
 )
 
-// WithObserver installs an observe.Observer. Multiple observers compose: each
-// event fires on every installed observer, in installation order.
-func WithObserver(o observe.Observer) Option {
+// WithObserver installs observers. Observers compose: each event fires
+// on every installed observer, in installation order, across repeated
+// options as well as within one call.
+func WithObserver(o ...observe.Observer) Option {
 	return func(e *Engine) {
-		e.observers = append(e.observers, o)
+		e.observers = append(e.observers, o...)
 	}
 }
 

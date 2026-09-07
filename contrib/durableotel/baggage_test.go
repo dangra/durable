@@ -94,8 +94,8 @@ func TestBaggageRoundTrip(t *testing.T) {
 
 	ctx := baggageCtx(t)
 	seen, annotations := runBaggageProbe(t, tp,
-		[]durable.ScheduleOption{durableotel.WithTraceContext(ctx, durableotel.WithBaggage())},
-		durableotel.WithBaggage(), durableotel.WithSpanBaggage("tenant"))
+		[]durable.ScheduleOption{durableotel.WithTraceContext(ctx, durableotel.WithBaggagePropagation())},
+		durableotel.WithBaggagePropagation(), durableotel.WithSpanBaggage("tenant"))
 
 	if seen["tenant"] != "acme" || seen["machine_id"] != "m-42" {
 		t.Fatalf("handler baggage = %v, want both members", seen)
@@ -125,8 +125,8 @@ func TestSpanBaggageAllMembers(t *testing.T) {
 
 	ctx := baggageCtx(t)
 	_, _ = runBaggageProbe(t, tp,
-		[]durable.ScheduleOption{durableotel.WithTraceContext(ctx, durableotel.WithBaggage())},
-		durableotel.WithBaggage(), durableotel.WithSpanBaggage())
+		[]durable.ScheduleOption{durableotel.WithTraceContext(ctx, durableotel.WithBaggagePropagation())},
+		durableotel.WithBaggagePropagation(), durableotel.WithSpanBaggage())
 
 	spans := recorder.Ended()
 	if len(spans) != 1 {
@@ -139,7 +139,7 @@ func TestSpanBaggageAllMembers(t *testing.T) {
 	}
 }
 
-// TestBaggageIsOptIn pins the default: without WithBaggage, baggage on
+// TestBaggageIsOptIn pins the default: without WithBaggagePropagation, baggage on
 // the scheduling ctx neither persists nor reaches attempts.
 func TestBaggageIsOptIn(t *testing.T) {
 	tp := sdktrace.NewTracerProvider()
@@ -150,9 +150,9 @@ func TestBaggageIsOptIn(t *testing.T) {
 		[]durable.ScheduleOption{durableotel.WithTraceContext(ctx)})
 
 	if len(seen) != 0 {
-		t.Fatalf("handler baggage = %v, want none without WithBaggage", seen)
+		t.Fatalf("handler baggage = %v, want none without WithBaggagePropagation", seen)
 	}
 	if _, ok := annotations["baggage"]; ok {
-		t.Fatal("baggage annotation persisted without WithBaggage")
+		t.Fatal("baggage annotation persisted without WithBaggagePropagation")
 	}
 }

@@ -33,15 +33,16 @@ func WithTraceContext(ctx context.Context, opts ...Option) durable.ScheduleOptio
 }
 
 // Annotator returns a engine.ScheduleAnnotator that injects the
-// scheduling ctx's trace context (and baggage, with WithBaggage) into
-// every Run's annotations. Installed once at engine construction, it
-// removes the per-call-site burden entirely — a pipeline handed to a
-// subsystem propagates whatever already rides the ctx the subsystem
-// passes to Schedule anyway:
+// scheduling ctx's trace context (and baggage, with
+// WithBaggagePropagation) into every Run's annotations. Installed once
+// at engine construction, it removes the per-call-site burden entirely —
+// a pipeline handed to a subsystem propagates whatever already rides the
+// ctx the subsystem passes to Schedule anyway:
 //
+//	baggage := durableotel.WithBaggagePropagation()
 //	engine := engine.New(store,
-//		engine.WithMiddleware(durableotel.Middleware(durableotel.WithBaggage())),
-//		engine.WithScheduleAnnotator(durableotel.Annotator(durableotel.WithBaggage())))
+//		engine.WithMiddleware(durableotel.Middleware(baggage)),
+//		engine.WithScheduleAnnotator(durableotel.Annotator(baggage)))
 //	// anywhere, with nothing to remember:
 //	pipe.Schedule(reqCtx, resource, input)
 //
@@ -88,7 +89,7 @@ func inject(ctx context.Context, cfg config) propagation.MapCarrier {
 // and Run identity ride as durable.* attributes, WithSpanAnnotations
 // adds selected Run annotations, and WithSpanBaggage adds whatever
 // baggage members the attempt ctx carries (typically delivered by
-// WithBaggage). A handler error records on the span and
+// WithBaggagePropagation). A handler error records on the span and
 // sets Error status; a permanent failure additionally stamps the
 // durable.failure_kind and durable.reason the engine will commit
 // (FailureInfo). An unwind attempt additionally starts with the failure

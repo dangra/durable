@@ -47,8 +47,8 @@ func TestAnnotatorEngineWide(t *testing.T) {
 	})
 	eng := engine.New(mem.New(), fastRetry, quietLogger(),
 		engine.WithMiddleware(durableotel.Middleware(
-			durableotel.WithTracerProvider(tp), durableotel.WithBaggage())),
-		engine.WithScheduleAnnotator(durableotel.Annotator(durableotel.WithBaggage())))
+			durableotel.WithTracerProvider(tp), durableotel.WithBaggagePropagation())),
+		engine.WithScheduleAnnotator(durableotel.Annotator(durableotel.WithBaggagePropagation())))
 	pipe, err := eng.Bind(def)
 	if err != nil {
 		t.Fatalf("Bind: %v", err)

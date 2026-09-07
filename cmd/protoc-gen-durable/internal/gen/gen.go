@@ -300,6 +300,12 @@ func emitInvocation(g *protogen.GeneratedFile, pl *pipelineDecl, s *stepDecl) {
 	g.P("core ", core)
 	g.P("}")
 	g.P()
+	g.P("// New", inv, " wraps core for calling a ", goName, "Handler directly, outside")
+	g.P("// an engine: hand it durabletest.NewInvocation to unit-test the handler.")
+	g.P("// The engine wraps its own invocations; application code never needs")
+	g.P("// this at runtime.")
+	g.P("func New", inv, "(core ", core, ") ", inv, " { return ", inv, "{core: core} }")
+	g.P()
 	g.P("func (inv ", inv, ") PipelineID() ", g.QualifiedGoIdent(durablePkg.Ident("PipelineID")), " { return inv.core.PipelineID() }")
 	g.P("func (inv ", inv, ") ResourceID() ", g.QualifiedGoIdent(durablePkg.Ident("ResourceID")), " { return inv.core.ResourceID() }")
 	g.P("func (inv ", inv, ") RunID() ", g.QualifiedGoIdent(durablePkg.Ident("RunID")), " { return inv.core.RunID() }")
@@ -414,6 +420,18 @@ func emitReducerType(g *protogen.GeneratedFile, pl *pipelineDecl) {
 	g.P("// free, synchronous, and non-failing.")
 	g.P("type ", name, "Reducer func(*", g.QualifiedGoIdent(pl.msg.GoIdent), ") *", g.QualifiedGoIdent(pl.output.GoIdent))
 	g.P()
+	views := lowerFirst(name) + "Views"
+	g.P("// Reduce folds view through r: the marker the reducer receives reads")
+	g.P("// its Input and States from view for the duration of the call. The")
+	g.P("// engine reduces through it; a unit test hands it durabletest.NewInvocation")
+	g.P("// (which is also a durable.ReduceView) to exercise the reducer alone.")
+	g.P("func (r ", name, "Reducer) Reduce(view ", g.QualifiedGoIdent(durablePkg.Ident("ReduceView")), ") *", g.QualifiedGoIdent(pl.output.GoIdent), " {")
+	g.P("x := &", g.QualifiedGoIdent(pl.msg.GoIdent), "{}")
+	g.P(views, ".Store(x, view)")
+	g.P("defer ", views, ".Delete(x)")
+	g.P("return r(x)")
+	g.P("}")
+	g.P()
 }
 
 func emitMarkerView(g *protogen.GeneratedFile, pl *pipelineDecl) {
@@ -449,7 +467,6 @@ func emitMarkerView(g *protogen.GeneratedFile, pl *pipelineDecl) {
 
 func emitDefinition(g *protogen.GeneratedFile, pl *pipelineDecl) {
 	name := pl.msg.GoIdent.GoName
-	views := lowerFirst(name) + "Views"
 	ctx := g.QualifiedGoIdent(contextPkg.Ident("Context"))
 	core := g.QualifiedGoIdent(durablePkg.Ident("Invocation"))
 	protoMsg := g.QualifiedGoIdent(protoPkg.Ident("Message"))
@@ -488,10 +505,7 @@ func emitDefinition(g *protogen.GeneratedFile, pl *pipelineDecl) {
 	}
 	if pl.output != nil {
 		g.P("Reduce: func(view ", g.QualifiedGoIdent(durablePkg.Ident("ReduceView")), ") ", protoMsg, " {")
-		g.P("x := &", g.QualifiedGoIdent(pl.msg.GoIdent), "{}")
-		g.P(views, ".Store(x, view)")
-		g.P("defer ", views, ".Delete(x)")
-		g.P("return reduce(x)")
+		g.P("return reduce.Reduce(view)")
 		g.P("},")
 	}
 	g.P("Steps: []", g.QualifiedGoIdent(defPkg.Ident("Step")), "{")

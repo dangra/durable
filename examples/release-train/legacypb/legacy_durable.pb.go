@@ -29,6 +29,14 @@ type ProvisionEnvInvocation struct {
 	core durable.Invocation
 }
 
+// NewProvisionEnvInvocation wraps core for calling a ProvisionEnvHandler directly, outside
+// an engine: hand it durabletest.NewInvocation to unit-test the handler.
+// The engine wraps its own invocations; application code never needs
+// this at runtime.
+func NewProvisionEnvInvocation(core durable.Invocation) ProvisionEnvInvocation {
+	return ProvisionEnvInvocation{core: core}
+}
+
 func (inv ProvisionEnvInvocation) PipelineID() durable.PipelineID { return inv.core.PipelineID() }
 func (inv ProvisionEnvInvocation) ResourceID() durable.ResourceID { return inv.core.ResourceID() }
 func (inv ProvisionEnvInvocation) RunID() durable.RunID           { return inv.core.RunID() }
@@ -99,6 +107,14 @@ func (f ProvisionEnvFuncs) Unwind(ctx context.Context, inv ProvisionEnvInvocatio
 // RunMigrationsInvocation is passed to RunMigrationsHandler methods.
 type RunMigrationsInvocation struct {
 	core durable.Invocation
+}
+
+// NewRunMigrationsInvocation wraps core for calling a RunMigrationsHandler directly, outside
+// an engine: hand it durabletest.NewInvocation to unit-test the handler.
+// The engine wraps its own invocations; application code never needs
+// this at runtime.
+func NewRunMigrationsInvocation(core durable.Invocation) RunMigrationsInvocation {
+	return RunMigrationsInvocation{core: core}
 }
 
 func (inv RunMigrationsInvocation) PipelineID() durable.PipelineID { return inv.core.PipelineID() }
@@ -173,6 +189,14 @@ type ShiftTrafficInvocation struct {
 	core durable.Invocation
 }
 
+// NewShiftTrafficInvocation wraps core for calling a ShiftTrafficHandler directly, outside
+// an engine: hand it durabletest.NewInvocation to unit-test the handler.
+// The engine wraps its own invocations; application code never needs
+// this at runtime.
+func NewShiftTrafficInvocation(core durable.Invocation) ShiftTrafficInvocation {
+	return ShiftTrafficInvocation{core: core}
+}
+
 func (inv ShiftTrafficInvocation) PipelineID() durable.PipelineID { return inv.core.PipelineID() }
 func (inv ShiftTrafficInvocation) ResourceID() durable.ResourceID { return inv.core.ResourceID() }
 func (inv ShiftTrafficInvocation) RunID() durable.RunID           { return inv.core.RunID() }
@@ -237,6 +261,17 @@ func (f ShiftTrafficFunc) Run(ctx context.Context, inv ShiftTrafficInvocation) (
 // free, synchronous, and non-failing.
 type DeployServiceReducer func(*DeployService) *DeployServiceOutput
 
+// Reduce folds view through r: the marker the reducer receives reads
+// its Input and States from view for the duration of the call. The
+// engine reduces through it; a unit test hands it durabletest.NewInvocation
+// (which is also a durable.ReduceView) to exercise the reducer alone.
+func (r DeployServiceReducer) Reduce(view durable.ReduceView) *DeployServiceOutput {
+	x := &DeployService{}
+	deployServiceViews.Store(x, view)
+	defer deployServiceViews.Delete(x)
+	return r(x)
+}
+
 var deployServiceViews sync.Map
 
 func (x *DeployService) durableView() durable.ReduceView {
@@ -276,10 +311,7 @@ func NewDeployService(
 		ID:       "deploy-service",
 		NewInput: func() proto.Message { return &DeployServiceInput{} },
 		Reduce: func(view durable.ReduceView) proto.Message {
-			x := &DeployService{}
-			deployServiceViews.Store(x, view)
-			defer deployServiceViews.Delete(x)
-			return reduce(x)
+			return reduce.Reduce(view)
 		},
 		Steps: []pipelinedef.Step{
 			{

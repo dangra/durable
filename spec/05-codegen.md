@@ -45,11 +45,13 @@ Published protobuf extensions MUST use globally allocated extension numbers.
 
 - typed Step handler interfaces,
 - handler func adapters (`http.HandlerFunc` style),
-- typed concrete Invocation types,
+- typed concrete Invocation types, with a `NewXxxInvocation(core)`
+  constructor for engine-free handler tests,
 - typed Step references,
 - generic concrete `State` methods,
 - Pipeline constructors,
-- Reducer function types,
+- Reducer function types, with a `Reduce(view)` method the engine and
+  reducer tests fold through,
 - runtime methods on Pipeline marker types,
 - bound Pipeline handles,
 - typed Runs,

@@ -33,6 +33,14 @@ type ProvisionEnvInvocation struct {
 	core durable.Invocation
 }
 
+// NewProvisionEnvInvocation wraps core for calling a ProvisionEnvHandler directly, outside
+// an engine: hand it durabletest.NewInvocation to unit-test the handler.
+// The engine wraps its own invocations; application code never needs
+// this at runtime.
+func NewProvisionEnvInvocation(core durable.Invocation) ProvisionEnvInvocation {
+	return ProvisionEnvInvocation{core: core}
+}
+
 func (inv ProvisionEnvInvocation) PipelineID() durable.PipelineID { return inv.core.PipelineID() }
 func (inv ProvisionEnvInvocation) ResourceID() durable.ResourceID { return inv.core.ResourceID() }
 func (inv ProvisionEnvInvocation) RunID() durable.RunID           { return inv.core.RunID() }
@@ -103,6 +111,14 @@ func (f ProvisionEnvFuncs) Unwind(ctx context.Context, inv ProvisionEnvInvocatio
 // RunMigrationsInvocation is passed to RunMigrationsHandler methods.
 type RunMigrationsInvocation struct {
 	core durable.Invocation
+}
+
+// NewRunMigrationsInvocation wraps core for calling a RunMigrationsHandler directly, outside
+// an engine: hand it durabletest.NewInvocation to unit-test the handler.
+// The engine wraps its own invocations; application code never needs
+// this at runtime.
+func NewRunMigrationsInvocation(core durable.Invocation) RunMigrationsInvocation {
+	return RunMigrationsInvocation{core: core}
 }
 
 func (inv RunMigrationsInvocation) PipelineID() durable.PipelineID { return inv.core.PipelineID() }
@@ -177,6 +193,14 @@ type CanaryAnalysisInvocation struct {
 	core durable.Invocation
 }
 
+// NewCanaryAnalysisInvocation wraps core for calling a CanaryAnalysisHandler directly, outside
+// an engine: hand it durabletest.NewInvocation to unit-test the handler.
+// The engine wraps its own invocations; application code never needs
+// this at runtime.
+func NewCanaryAnalysisInvocation(core durable.Invocation) CanaryAnalysisInvocation {
+	return CanaryAnalysisInvocation{core: core}
+}
+
 func (inv CanaryAnalysisInvocation) PipelineID() durable.PipelineID { return inv.core.PipelineID() }
 func (inv CanaryAnalysisInvocation) ResourceID() durable.ResourceID { return inv.core.ResourceID() }
 func (inv CanaryAnalysisInvocation) RunID() durable.RunID           { return inv.core.RunID() }
@@ -239,6 +263,14 @@ func (f CanaryAnalysisFunc) Run(ctx context.Context, inv CanaryAnalysisInvocatio
 // ShiftTrafficInvocation is passed to ShiftTrafficHandler methods.
 type ShiftTrafficInvocation struct {
 	core durable.Invocation
+}
+
+// NewShiftTrafficInvocation wraps core for calling a ShiftTrafficHandler directly, outside
+// an engine: hand it durabletest.NewInvocation to unit-test the handler.
+// The engine wraps its own invocations; application code never needs
+// this at runtime.
+func NewShiftTrafficInvocation(core durable.Invocation) ShiftTrafficInvocation {
+	return ShiftTrafficInvocation{core: core}
 }
 
 func (inv ShiftTrafficInvocation) PipelineID() durable.PipelineID { return inv.core.PipelineID() }
@@ -305,6 +337,17 @@ func (f ShiftTrafficFunc) Run(ctx context.Context, inv ShiftTrafficInvocation) (
 // free, synchronous, and non-failing.
 type DeployServiceReducer func(*DeployService) *DeployServiceOutput
 
+// Reduce folds view through r: the marker the reducer receives reads
+// its Input and States from view for the duration of the call. The
+// engine reduces through it; a unit test hands it durabletest.NewInvocation
+// (which is also a durable.ReduceView) to exercise the reducer alone.
+func (r DeployServiceReducer) Reduce(view durable.ReduceView) *DeployServiceOutput {
+	x := &DeployService{}
+	deployServiceViews.Store(x, view)
+	defer deployServiceViews.Delete(x)
+	return r(x)
+}
+
 var deployServiceViews sync.Map
 
 func (x *DeployService) durableView() durable.ReduceView {
@@ -345,10 +388,7 @@ func NewDeployService(
 		ID:       "deploy-service",
 		NewInput: func() proto.Message { return &DeployServiceInput{} },
 		Reduce: func(view durable.ReduceView) proto.Message {
-			x := &DeployService{}
-			deployServiceViews.Store(x, view)
-			defer deployServiceViews.Delete(x)
-			return reduce(x)
+			return reduce.Reduce(view)
 		},
 		Steps: []pipelinedef.Step{
 			{
@@ -534,6 +574,14 @@ type PlanReleaseInvocation struct {
 	core durable.Invocation
 }
 
+// NewPlanReleaseInvocation wraps core for calling a PlanReleaseHandler directly, outside
+// an engine: hand it durabletest.NewInvocation to unit-test the handler.
+// The engine wraps its own invocations; application code never needs
+// this at runtime.
+func NewPlanReleaseInvocation(core durable.Invocation) PlanReleaseInvocation {
+	return PlanReleaseInvocation{core: core}
+}
+
 func (inv PlanReleaseInvocation) PipelineID() durable.PipelineID { return inv.core.PipelineID() }
 func (inv PlanReleaseInvocation) ResourceID() durable.ResourceID { return inv.core.ResourceID() }
 func (inv PlanReleaseInvocation) RunID() durable.RunID           { return inv.core.RunID() }
@@ -596,6 +644,14 @@ type ShipWebInvocation struct {
 	core durable.Invocation
 }
 
+// NewShipWebInvocation wraps core for calling a ShipWebHandler directly, outside
+// an engine: hand it durabletest.NewInvocation to unit-test the handler.
+// The engine wraps its own invocations; application code never needs
+// this at runtime.
+func NewShipWebInvocation(core durable.Invocation) ShipWebInvocation {
+	return ShipWebInvocation{core: core}
+}
+
 func (inv ShipWebInvocation) PipelineID() durable.PipelineID { return inv.core.PipelineID() }
 func (inv ShipWebInvocation) ResourceID() durable.ResourceID { return inv.core.ResourceID() }
 func (inv ShipWebInvocation) RunID() durable.RunID           { return inv.core.RunID() }
@@ -656,6 +712,14 @@ type ShipApiInvocation struct {
 	core durable.Invocation
 }
 
+// NewShipApiInvocation wraps core for calling a ShipApiHandler directly, outside
+// an engine: hand it durabletest.NewInvocation to unit-test the handler.
+// The engine wraps its own invocations; application code never needs
+// this at runtime.
+func NewShipApiInvocation(core durable.Invocation) ShipApiInvocation {
+	return ShipApiInvocation{core: core}
+}
+
 func (inv ShipApiInvocation) PipelineID() durable.PipelineID { return inv.core.PipelineID() }
 func (inv ShipApiInvocation) ResourceID() durable.ResourceID { return inv.core.ResourceID() }
 func (inv ShipApiInvocation) RunID() durable.RunID           { return inv.core.RunID() }
@@ -714,6 +778,14 @@ func (f ShipApiFunc) Run(ctx context.Context, inv ShipApiInvocation) error { ret
 // AnnounceInvocation is passed to AnnounceHandler methods.
 type AnnounceInvocation struct {
 	core durable.Invocation
+}
+
+// NewAnnounceInvocation wraps core for calling a AnnounceHandler directly, outside
+// an engine: hand it durabletest.NewInvocation to unit-test the handler.
+// The engine wraps its own invocations; application code never needs
+// this at runtime.
+func NewAnnounceInvocation(core durable.Invocation) AnnounceInvocation {
+	return AnnounceInvocation{core: core}
 }
 
 func (inv AnnounceInvocation) PipelineID() durable.PipelineID { return inv.core.PipelineID() }

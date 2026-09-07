@@ -52,14 +52,14 @@ func (s RunState) String() string {
 }
 
 // Result is the terminal result of a Run. An invalid nonterminal Run does
-// not produce a Result. A failed Run carries the RootFailure that started
+// not produce a Result. A failed Run carries the Failure that started
 // its unwind; what each unwind step did with it is a fact on that step's
 // operation record, read by later unwind handlers through
 // Invocation.Failure, and is not part of the Result.
 type Result struct {
 	Outcome durable.Outcome
 
-	RootFailure *durable.RootFailure
+	Failure *durable.Failure
 }
 
 func (r Result) Succeeded() bool { return r.Outcome == durable.OutcomeSuccess }
@@ -67,11 +67,11 @@ func (r Result) Succeeded() bool { return r.Outcome == durable.OutcomeSuccess }
 func (r Result) Failed() bool { return r.Outcome == durable.OutcomeFailure }
 
 // Canceled reports whether the Run terminated because of a cancellation
-// request. A canceled Run is a failed Run whose RootFailure carries
+// request. A canceled Run is a failed Run whose Failure carries
 // FailureKindCanceled; a Run whose operation permanently failed on its own
 // while a cancellation was pending reports Failed but not Canceled.
 func (r Result) Canceled() bool {
-	return r.RootFailure != nil && r.RootFailure.Kind == durable.FailureKindCanceled
+	return r.Failure != nil && r.Failure.Kind == durable.FailureKindCanceled
 }
 
 // Status is a point-in-time observation of a Run.
@@ -98,6 +98,13 @@ type Status struct {
 
 	// Outcome is set only for terminal Runs.
 	Outcome *durable.Outcome
+
+	// Failure is the failure that ended the forward phase, set from
+	// the moment the Run starts unwinding and kept on the terminal
+	// failure; nil while the Run is executing forward and on success.
+	// It is the same value Result carries, observable before Wait
+	// returns.
+	Failure *durable.Failure
 
 	// InvalidReason is set when State is RunStateInvalid.
 	InvalidReason string

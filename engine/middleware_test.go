@@ -32,7 +32,7 @@ func TestMiddlewareOrderingAndPhases(t *testing.T) {
 				// The failure being unwound is visible from the chain,
 				// non-nil exactly in the unwind phase.
 				switch f := inv.Failure(); {
-				case inv.Phase() == durable.PhaseUnwind && (f == nil || f.Root.StepID != "b/v1"):
+				case inv.Phase() == durable.PhaseUnwind && (f == nil || f.StepID != "b/v1"):
 					t.Errorf("%s: unwind of %s sees Failure %+v; want root b/v1", name, inv.StepID(), f)
 				case inv.Phase() == durable.PhaseForward && f != nil:
 					t.Errorf("%s: forward %s sees Failure %+v; want nil", name, inv.StepID(), f)

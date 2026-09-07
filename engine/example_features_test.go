@@ -30,7 +30,7 @@ func ExampleFail() {
 					return nil, nil
 				},
 				UnwindFunc: func(ctx context.Context, inv durable.Invocation) error {
-					fmt.Printf("removing tenant record (unwinding: %s)\n", inv.Failure().Root.Reason)
+					fmt.Printf("removing tenant record (unwinding: %s)\n", inv.Failure().Reason)
 					return nil
 				},
 			},
@@ -64,7 +64,7 @@ func ExampleFail() {
 		panic(err)
 	}
 	fmt.Printf("outcome=%s kind=%s reason=%s\n",
-		result.Outcome, result.RootFailure.Kind, result.RootFailure.Reason)
+		result.Outcome, result.Failure.Kind, result.Failure.Reason)
 	// Output:
 	// removing tenant record (unwinding: invalid-vat-id)
 	// outcome=failure kind=user reason=invalid-vat-id

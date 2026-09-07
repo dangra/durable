@@ -364,7 +364,7 @@ inv := durabletest.NewInvocation(durabletest.InvocationConfig{
     State:   map[durable.StepID]proto.Message{
         machines.ReserveCapacityStep.ID(): &machines.ReserveCapacity{ReservationId: "res-1"},
     },
-    Failure: &durable.Failure{Root: durable.RootFailure{ /* ... */ }},
+    Failure: &durable.Failure{ /* ... */ },
 })
 err := handler.Unwind(ctx, machines.NewReserveCapacityInvocation(inv))
 ```
@@ -395,7 +395,7 @@ Permanent failure:
 ```text
 (_, durable.Fail(err))
     -> discard State
-    -> RootFailure
+    -> Failure
     -> unwind
 ```
 
@@ -917,7 +917,7 @@ func (h *reserveCapacity) Unwind(
     }
 
     inv.Logger().Info("releasing reservation",
-        "root_step", inv.Failure().Root.StepID)
+        "root_step", inv.Failure().StepID)
 
     if err := h.release(
         ctx,

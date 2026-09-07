@@ -61,7 +61,7 @@ func TestForwardSuccessWithReducer(t *testing.T) {
 		t.Fatalf("Wait: %v", err)
 	}
 	if !res.Succeeded() {
-		t.Fatalf("Outcome = %v, want success (root failure: %+v)", res.Outcome, res.RootFailure)
+		t.Fatalf("Outcome = %v, want success (run failure: %+v)", res.Outcome, res.Failure)
 	}
 	b, err := run.OutputBytes(context.Background())
 	if err != nil {
@@ -180,11 +180,11 @@ func TestPermanentFailureUnwinds(t *testing.T) {
 	if !res.Failed() {
 		t.Fatalf("Outcome = %v, want failure", res.Outcome)
 	}
-	if res.RootFailure == nil || res.RootFailure.StepID != "create/v1" {
-		t.Fatalf("RootFailure = %+v, want step create/v1", res.RootFailure)
+	if res.Failure == nil || res.Failure.StepID != "create/v1" {
+		t.Fatalf("Failure = %+v, want step create/v1", res.Failure)
 	}
-	if !strings.Contains(res.RootFailure.Message, "quota exceeded") {
-		t.Fatalf("RootFailure.Message = %q", res.RootFailure.Message)
+	if !strings.Contains(res.Failure.Message, "quota exceeded") {
+		t.Fatalf("Failure.Message = %q", res.Failure.Message)
 	}
 
 	mu.Lock()
@@ -194,11 +194,8 @@ func TestPermanentFailureUnwinds(t *testing.T) {
 		t.Fatalf("unwind order = %v, want %v", unwoundSteps, want)
 	}
 	// A unwinds after reserve permanently failed: it must see that failure.
-	if failureSeenByA.Root.StepID != "create/v1" {
-		t.Fatalf("failure.Root.StepID = %q", failureSeenByA.Root.StepID)
-	}
-	if len(failureSeenByA.UnwindFailures) != 1 || failureSeenByA.UnwindFailures[0].StepID != "reserve/v1" {
-		t.Fatalf("failure.UnwindFailures = %+v, want reserve/v1", failureSeenByA.UnwindFailures)
+	if failureSeenByA.StepID != "create/v1" {
+		t.Fatalf("Failure().StepID = %q", failureSeenByA.StepID)
 	}
 	// Failed Runs have no Pipeline Output.
 	if b, _ := run.OutputBytes(context.Background()); b != nil {

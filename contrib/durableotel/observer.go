@@ -74,7 +74,7 @@ func NewObserver(opts ...Option) (observe.Observer, error) {
 		scheduled       = counter("durable.runs.scheduled", "Runs accepted by Schedule.", "{run}")
 		attempts        = counter("durable.attempts", "Operation attempts, by resolution.", "{attempt}")
 		attemptDuration = histogram("durable.attempt.duration", "Handler execution time of one attempt.", attemptBoundaries)
-		unwinding       = counter("durable.runs.unwinding", "Runs whose RootFailure was established.", "{run}")
+		unwinding       = counter("durable.runs.unwinding", "Runs whose Failure was established.", "{run}")
 		terminal        = counter("durable.runs.terminal", "Runs committing a terminal outcome.", "{run}")
 		runDuration     = histogram("durable.run.duration", "Run duration, acceptance to terminal.", runBoundaries)
 		invalidated     = counter("durable.runs.invalidated", "Runs marked invalid for the current deployment.", "{run}")

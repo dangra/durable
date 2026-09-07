@@ -5,7 +5,7 @@
 //
 // A run is stored as components with distinct write cadences: RunMeta
 // (once), one OperationRecord row per step operation (once, at its
-// resolution, carrying its own failure), the root FailureRecord, Terminal,
+// resolution, carrying its own failure), the root Failure, Terminal,
 // and CancelRequest (once each), and the small Cursor (every attempt).
 package storagepb
 
@@ -223,15 +223,15 @@ func UnmarshalOperationRecord(b []byte) (driver.OperationRecord, error) {
 }
 
 // MarshalFailureRecord encodes one failure record on its own: the run's
-// write-once root failure row.
-func MarshalFailureRecord(f kernel.FailureRecord) ([]byte, error) {
+// write-once run failure row.
+func MarshalFailureRecord(f kernel.Failure) ([]byte, error) {
 	return marshal("failure record", failureRecordToProto(&f))
 }
 
-func UnmarshalFailureRecord(b []byte) (kernel.FailureRecord, error) {
+func UnmarshalFailureRecord(b []byte) (kernel.Failure, error) {
 	pb := &FailureRecord{}
 	if err := unmarshal("failure record", b, pb); err != nil {
-		return kernel.FailureRecord{}, err
+		return kernel.Failure{}, err
 	}
 	return failureRecordFromProto(pb), nil
 }
@@ -260,7 +260,7 @@ func UnmarshalCancel(b []byte) (*driver.CancelRequest, error) {
 	return &driver.CancelRequest{Cause: pb.GetCause(), At: fromTS(pb.GetAt())}, nil
 }
 
-func failureRecordToProto(f *kernel.FailureRecord) *FailureRecord {
+func failureRecordToProto(f *kernel.Failure) *FailureRecord {
 	return &FailureRecord{
 		StepId:  string(f.StepID),
 		Phase:   phaseToProto(f.Phase),
@@ -272,8 +272,8 @@ func failureRecordToProto(f *kernel.FailureRecord) *FailureRecord {
 	}
 }
 
-func failureRecordFromProto(f *FailureRecord) kernel.FailureRecord {
-	return kernel.FailureRecord{
+func failureRecordFromProto(f *FailureRecord) kernel.Failure {
+	return kernel.Failure{
 		StepID:  kernel.StepID(f.GetStepId()),
 		Phase:   phaseFromProto(f.GetPhase()),
 		Attempt: f.GetAttempt(),

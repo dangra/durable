@@ -158,18 +158,15 @@ func TestMiddlewareSpansLinkToOrigin(t *testing.T) {
 			t.Fatalf("span %q claims failure attribution %q/%q", key, kind, reason)
 		}
 		// Only the unwind attempt says what it is unwinding.
-		rootStep, hasRoot := attr(sp, string(durableotel.AttrRootStep))
-		rootKind, _ := attr(sp, string(durableotel.AttrRootFailureKind))
-		rootReason, _ := attr(sp, string(durableotel.AttrRootReason))
+		rootStep, hasRoot := attr(sp, string(durableotel.AttrRunFailureStep))
+		rootKind, _ := attr(sp, string(durableotel.AttrRunFailureKind))
+		rootReason, _ := attr(sp, string(durableotel.AttrRunFailureReason))
 		if key == "prepare/v1 unwind|1" {
 			if rootStep != "explode/v1" || rootKind != "user" || rootReason != "invalid-input" {
-				t.Fatalf("unwind span root failure = %q %q/%q, want explode/v1 user/invalid-input", rootStep, rootKind, rootReason)
-			}
-			if n, ok := attr(sp, string(durableotel.AttrUnwindFailures)); !ok || n != "0" {
-				t.Fatalf("unwind span unwind_failures = %q, %v; want 0", n, ok)
+				t.Fatalf("unwind span run failure = %q %q/%q, want explode/v1 user/invalid-input", rootStep, rootKind, rootReason)
 			}
 		} else if hasRoot {
-			t.Fatalf("forward span %q carries a root failure %q", key, rootStep)
+			t.Fatalf("forward span %q carries a run failure %q", key, rootStep)
 		}
 		if sp.SpanContext().TraceID() == origin.TraceID() {
 			t.Fatalf("span %q lives in the origin trace; the shape is links, not a parent", key)
@@ -443,11 +440,11 @@ func TestWithTraceContextRoundTrip(t *testing.T) {
 	}
 }
 
-// TestMiddlewareUnwindSpansCountPriorFailures runs a three-step saga
-// whose middle unwind fails permanently: the first unwind attempt starts
-// with zero prior unwind failures and records its own attribution; the
-// next one starts with one.
-func TestMiddlewareUnwindSpansCountPriorFailures(t *testing.T) {
+// TestMiddlewareUnwindSpansCarryRunAndOwnFailure runs a three-step saga
+// whose middle unwind fails permanently: every unwind span names the Run
+// failure, and the one that fails itself records its own attribution
+// beside it.
+func TestMiddlewareUnwindSpansCarryRunAndOwnFailure(t *testing.T) {
 	recorder := tracetest.NewSpanRecorder()
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
 	defer tp.Shutdown(t.Context())
@@ -485,9 +482,9 @@ func TestMiddlewareUnwindSpansCountPriorFailures(t *testing.T) {
 		t.Fatalf("Wait = %+v, %v; want the scripted failure", res, err)
 	}
 
-	want := map[string]struct{ prior, kind, reason string }{
-		"b/v1 unwind": {"0", "system", "stuck"}, // its own permanent failure
-		"a/v1 unwind": {"1", "", ""},            // after b's failure; succeeded
+	want := map[string]struct{ kind, reason string }{
+		"b/v1 unwind": {"system", "stuck"}, // its own permanent failure
+		"a/v1 unwind": {"", ""},            // after b's failure; succeeded
 	}
 	seen := 0
 	for _, sp := range recorder.Ended() {
@@ -496,17 +493,14 @@ func TestMiddlewareUnwindSpansCountPriorFailures(t *testing.T) {
 			continue
 		}
 		seen++
-		if step, _ := attr(sp, string(durableotel.AttrRootStep)); step != "c/v1" {
-			t.Fatalf("%s root step = %q, want c/v1", sp.Name(), step)
+		if step, _ := attr(sp, string(durableotel.AttrRunFailureStep)); step != "c/v1" {
+			t.Fatalf("%s run failure step = %q, want c/v1", sp.Name(), step)
 		}
-		if kind, _ := attr(sp, string(durableotel.AttrRootFailureKind)); kind != "system" {
-			t.Fatalf("%s root kind = %q, want system", sp.Name(), kind)
+		if kind, _ := attr(sp, string(durableotel.AttrRunFailureKind)); kind != "system" {
+			t.Fatalf("%s run failure kind = %q, want system", sp.Name(), kind)
 		}
-		if _, has := attr(sp, string(durableotel.AttrRootReason)); has {
-			t.Fatalf("%s carries a root reason; the root Fail declared none", sp.Name())
-		}
-		if prior, _ := attr(sp, string(durableotel.AttrUnwindFailures)); prior != w.prior {
-			t.Fatalf("%s unwind_failures = %q, want %q", sp.Name(), prior, w.prior)
+		if _, has := attr(sp, string(durableotel.AttrRunFailureReason)); has {
+			t.Fatalf("%s carries a run failure reason; the Fail declared none", sp.Name())
 		}
 		kind, _ := attr(sp, string(durableotel.AttrFailureKind))
 		reason, _ := attr(sp, string(durableotel.AttrReason))

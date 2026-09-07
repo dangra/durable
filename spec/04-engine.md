@@ -216,7 +216,7 @@ continue Engine
 
 No:
 
-- RootFailure,
+- Failure,
 - automatic Unwind,
 - OutcomeFailure
 
@@ -305,6 +305,9 @@ type Status struct {
     LastErrorAt time.Time
 
     Outcome *Outcome
+    // Set from the start of unwind; on a terminal failure it equals
+    // Result.Failure. Nil while executing forward and on success.
+    Failure *Failure
 
     CancelRequested bool
     CancelCause     string
@@ -503,7 +506,7 @@ Shutdown:
 - at the deadline — immediately, by default — kills the remaining
   attempt contexts, with `context.Cause` `ErrEngineStopping`;
 - leaves unresolved Runs nonterminal,
-- does not create RootFailure.
+- does not create Failure.
 
 A future Engine resumes them. A handler that only returns on
 `ctx.Done()` drains at the deadline, so the drain timeout is kept
@@ -640,7 +643,7 @@ The engine mutates durable state exclusively through atomic transitions:
 Store.ApplyTransition(ctx, runID, Transition{
     Cursor:      ...,  // always applied
     Ops:         ...,  // one operation row per resolution, failure included
-    RootFailure: ...,  // set once; a cancellation has no resolving operation
+    Failure: ...,  // set once; a cancellation has no resolving operation
     Output:      ..., Outcome: ..., // terminality; releases the slot
 })
 ```
@@ -753,7 +756,7 @@ every observer, in installation order):
 RunScheduled   acceptance, with any delayed start and the annotations
 AttemptDone    every attempt resolution: succeeded, retrying (with the
                delay), failed, or awaiting; duration; whether it panicked
-RunUnwinding   the RootFailure that started an unwind
+RunUnwinding   the Failure that started an unwind
 RunTerminal    the outcome
 RunInvalid     the reason
 WaiterWoken    a park resolved: targets, done, expired, time parked

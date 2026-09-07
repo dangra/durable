@@ -52,7 +52,7 @@ func TestProvisionMachineSucceeds(t *testing.T) {
 		t.Fatalf("Wait: %v", err)
 	}
 	if !result.Succeeded() {
-		t.Fatalf("Outcome = %v (root: %+v)", result.Outcome, result.RootFailure)
+		t.Fatalf("Outcome = %v (root: %+v)", result.Outcome, result.Failure)
 	}
 	out := result.Output()
 	if out.GetMachineId() == "" || out.GetHostId() != "host-ord-1" {
@@ -87,8 +87,8 @@ func TestProvisionMachineFailureUnwindsReservation(t *testing.T) {
 	if !result.Failed() {
 		t.Fatalf("Outcome = %v, want failure", result.Outcome)
 	}
-	if result.RootFailure == nil || result.RootFailure.StepID != "create-machine/v1" {
-		t.Fatalf("RootFailure = %+v", result.RootFailure)
+	if result.Failure == nil || result.Failure.StepID != "create-machine/v1" {
+		t.Fatalf("Failure = %+v", result.Failure)
 	}
 	if result.Output() != nil {
 		t.Fatalf("Output = %+v, want nil for failed run", result.Output())
@@ -115,11 +115,11 @@ func TestProvisionMachineInputValidationFailsFast(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Wait: %v", err)
 	}
-	if !result.Failed() || result.RootFailure.StepID != "validate/v1" {
-		t.Fatalf("result = %+v, want validate/v1 root failure", result)
+	if !result.Failed() || result.Failure.StepID != "validate/v1" {
+		t.Fatalf("result = %+v, want validate/v1 run failure", result)
 	}
-	if result.RootFailure.Kind != durable.FailureKindUser || result.RootFailure.Reason != "invalid-input" {
-		t.Fatalf("RootFailure = %+v, want user/invalid-input attribution", result.RootFailure)
+	if result.Failure.Kind != durable.FailureKindUser || result.Failure.Reason != "invalid-input" {
+		t.Fatalf("Failure = %+v, want user/invalid-input attribution", result.Failure)
 	}
 }
 

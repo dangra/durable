@@ -3,7 +3,6 @@ package durabletest
 import (
 	"log/slog"
 	"maps"
-	"slices"
 	"sync"
 
 	"google.golang.org/protobuf/proto"
@@ -37,9 +36,10 @@ type InvocationConfig struct {
 	// execution.
 	Awaited *durable.Wake
 
-	// Failure is what an unwind handler under test is unwinding; nil for
-	// a forward attempt. The engine guarantees it is set exactly when
-	// Phase is PhaseUnwind; the fake does not enforce that pairing.
+	// Failure is the Run's failure an unwind handler under test is
+	// unwinding; nil for a forward attempt. The engine guarantees it is
+	// set exactly when Phase is PhaseUnwind; the fake does not enforce
+	// that pairing.
 	Failure *durable.Failure
 
 	// Logger backs Invocation.Logger; nil discards.
@@ -78,7 +78,6 @@ func NewInvocation(cfg InvocationConfig) *Invocation {
 	cfg.Awaited = cfg.Awaited.Clone()
 	if cfg.Failure != nil {
 		f := *cfg.Failure
-		f.UnwindFailures = slices.Clone(f.UnwindFailures)
 		cfg.Failure = &f
 	}
 	if cfg.Phase == 0 {
@@ -138,14 +137,13 @@ func (inv *Invocation) Awaited() (durable.Wake, bool) {
 	return *inv.cfg.Awaited.Clone(), true
 }
 
-// Failure returns a copy of the configured failure, nil when none was
+// Failure returns a copy of the configured Run failure, nil when none was
 // configured.
 func (inv *Invocation) Failure() *durable.Failure {
 	if inv.cfg.Failure == nil {
 		return nil
 	}
 	f := *inv.cfg.Failure
-	f.UnwindFailures = slices.Clone(f.UnwindFailures)
 	return &f
 }
 

@@ -327,12 +327,12 @@ Cancellation reuses unwind rather than abandoning work:
 Cancel(runID, cause)
     -> durably record the request (first cancel wins)
     -> stop selecting new forward work
-    -> RootFailure{Kind: FailureKindCanceled, Message: cause}
+    -> Failure{Kind: FailureKindCanceled, Message: cause}
     -> normal unwind of successfully executed Steps
     -> OutcomeFailure, terminal
 ```
 
-The cancellation RootFailure has no StepID: it is not a Step failure. The
+The cancellation Failure has no StepID: it is not a Step failure. The
 Outcome model stays binary; `Result.Canceled()` reports a failure whose
 root carries `FailureKindCanceled`.
 
@@ -355,7 +355,7 @@ operational, never semantic.) Returning `ctx.Err()` keeps the cooperative
 default: the attempt is retried and the next one observes
 `CancelRequested`. A handler or middleware may instead **yield**: return
 `Fail` wrapping the `*PreemptedError`. The Engine attributes the resulting
-RootFailure `FailureKindCanceled` with the cancellation's cause only when
+Failure `FailureKindCanceled` with the cancellation's cause only when
 its own evidence confirms the preemption — it preempted this attempt, or
 the request is already durable — never on the error value alone, which a
 handler could fabricate with no cancel pending. `FailFastOnCancel` is the
@@ -366,7 +366,7 @@ work.
 
 If the pinned operation succeeds, the Step is recorded and participates in
 unwind like any other. If it permanently fails on its own, that organic
-failure becomes the RootFailure — the Run terminates with unwind either
+failure becomes the Failure — the Run terminates with unwind either
 way, but `Canceled()` is false.
 
 A never-started Run (including a delayed one) has no eligible unwind work
@@ -582,7 +582,7 @@ Therefore:
 Conceptually:
 
 ```go
-type FailureRecord struct {
+type Failure struct {
     StepID  StepID
     Phase   Phase
     Attempt uint64
@@ -592,20 +592,14 @@ type FailureRecord struct {
     Kind   FailureKind
     Reason string
 }
-
-type RootFailure struct {
-    FailureRecord
-}
-
-type UnwindFailure struct {
-    FailureRecord
-}
-
-type Failure struct {
-    Root           RootFailure
-    UnwindFailures []UnwindFailure
-}
 ```
+
+One type serves every role, and the role is where the value sits: a
+Run's `Failure` is the one that ended its forward phase (a step's
+permanent forward failure, or a cancellation, which has no `StepID`),
+read through `Result.Failure`, `Status.Failure`, and
+`Invocation.Failure`; an operation's failure is the one that resolved
+it, kept on its operation record in the Store.
 
 Arbitrary Go error chains are intentionally flattened.
 
@@ -643,7 +637,7 @@ const (
 `system` means infrastructure or environment is at fault; `user` means the
 request or intent itself is. System is the default because it is the
 overwhelmingly common case and the safe alerting posture. `canceled` marks
-RootFailures established by Run cancellation; it is created by the engine
+Run failures established by cancellation; it is created by the engine
 and reserved — handlers do not attribute their own failures with it.
 
 **Reason** is a machine-readable slug ("invalid-image",
@@ -680,7 +674,8 @@ resolution.
 
 ## Failure during Unwind
 
-`Failure.UnwindFailures` is populated incrementally.
+A permanent unwind failure resolves that one operation and does not stop
+the remaining unwind.
 
 Suppose:
 
@@ -691,21 +686,14 @@ B.Unwind    -> permanent failure
 A.Unwind    -> current
 ```
 
-A reads through `inv.Failure()`:
+A reads `inv.Failure()` and gets D's failure, the Run's. C's and B's
+failures are on their operation records in the Store, in resolution
+order; the handler contract does not expose them, and the failure
+reducer (future work) is where they become part of a typed account of
+the failed Run.
 
-```go
-&Failure{
-    Root: root,
-    UnwindFailures: []UnwindFailure{
-        cFailure,
-        bFailure,
-    },
-}
-```
-
-Permanent unwind failures appear in unwind execution order.
-
-Ordinary retry errors are operational history and are not added to `UnwindFailures`.
+Ordinary retry errors are operational history and are not recorded as
+failures.
 
 ---
 
@@ -730,15 +718,14 @@ No other terminal business outcomes exist in v1.
 type Result struct {
     Outcome Outcome
 
-    RootFailure *RootFailure
+    Failure *Failure
 }
 ```
 
-A `Result` carries the root failure only. What each unwind step did with
-it is a fact on that step's operation record, visible to later unwind
-handlers through `Failure.UnwindFailures`; a typed account of a failed
-Run for callers is the failure reducer's job (future work), the way the
-Output is the reducer's account of a successful one.
+A `Result` carries the Run's failure only. What each unwind step did
+with it is a fact on that step's operation record in the Store; a typed
+account of a failed Run for callers is the failure reducer's job (future
+work), the way the Output is the reducer's account of a successful one.
 
 Convenience methods SHOULD include:
 
@@ -751,14 +738,14 @@ Success:
 
 ```text
 OutcomeSuccess
-RootFailure = nil
+Failure = nil
 ```
 
 Business failure:
 
 ```text
 OutcomeFailure
-RootFailure != nil
+Failure != nil
 ```
 
 An invalid nonterminal Run does not produce a terminal `Result`.

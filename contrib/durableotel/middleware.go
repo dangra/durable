@@ -93,11 +93,10 @@ func inject(ctx context.Context, cfg config) propagation.MapCarrier {
 // sets Error status; a permanent failure additionally stamps the
 // durable.failure_kind and durable.reason the engine will commit
 // (FailureInfo). An unwind attempt additionally starts with the failure
-// it is unwinding (Invocation.Failure): durable.root_failure.step, .kind,
-// and .reason name the root failure that ended the forward phase, and
-// durable.unwind_failures counts the unwind steps that had already
-// failed permanently; these are set at span start so sampling can key
-// on them. A park resolution (AwaitRun, AwaitAll, AwaitAny) is not
+// it is unwinding (Invocation.Failure): durable.run_failure.step, .kind,
+// and .reason name the Run failure that ended the forward phase, set at
+// span start so sampling can key on them. A park resolution (AwaitRun,
+// AwaitAll, AwaitAny) is not
 // a failure and becomes durable.await_targets and durable.await_mode
 // attributes instead. A handler panic is
 // recorded on the span — exception event with stack trace, Error
@@ -121,15 +120,14 @@ func Middleware(opts ...Option) durable.Middleware {
 				AttrAttempt.Int64(int64(inv.Attempt())),
 			}
 			// An unwind attempt says what it is unwinding, at start so
-			// samplers and processors see it: the root failure's step,
-			// kind, and reason, and the permanent unwind failures so far.
+			// samplers and processors see it: the Run failure's step,
+			// kind, and reason.
 			if f := inv.Failure(); f != nil {
 				attrs = append(attrs,
-					AttrRootStep.String(string(f.Root.StepID)),
-					AttrRootFailureKind.String(f.Root.Kind.String()),
-					AttrUnwindFailures.Int64(int64(len(f.UnwindFailures))))
-				if f.Root.Reason != "" {
-					attrs = append(attrs, AttrRootReason.String(f.Root.Reason))
+					AttrRunFailureStep.String(string(f.StepID)),
+					AttrRunFailureKind.String(f.Kind.String()))
+				if f.Reason != "" {
+					attrs = append(attrs, AttrRunFailureReason.String(f.Reason))
 				}
 			}
 			for _, k := range cfg.spanAnnotations {

@@ -110,9 +110,9 @@ func (s *Store) ApplyTransition(_ context.Context, id kernel.RunID, t driver.Tra
 		}
 	}
 
-	if t.RootFailure != nil {
-		rf := *t.RootFailure
-		rec.RootFailure = &rf
+	if t.Failure != nil {
+		rf := *t.Failure
+		rec.Failure = &rf
 	}
 	if t.Outcome != nil {
 		oc := *t.Outcome

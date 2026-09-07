@@ -27,7 +27,7 @@ type canonRecord struct {
 	Input                         []byte
 	Phase                         durable.Phase
 	Steps                         []canonStep
-	Root                          *durable.RootFailure
+	Root                          *durable.Failure
 	Output                        []byte
 	Outcome                       *durable.Outcome
 	NextAttemptAt, LastErrorAt    int64
@@ -68,7 +68,7 @@ func normBytes(b []byte) []byte {
 	return b
 }
 
-func canonFailure(f durable.FailureRecord) durable.FailureRecord {
+func canonFailure(f durable.Failure) durable.Failure {
 	f.At = time.Unix(0, nanos(f.At)).UTC()
 	return f
 }
@@ -95,8 +95,9 @@ func canonicalize(rec *driver.RunRecord) *canonRecord {
 		oc := *rec.Outcome
 		c.Outcome = &oc
 	}
-	if rec.RootFailure != nil {
-		c.Root = &durable.RootFailure{FailureRecord: canonFailure(rec.RootFailure.FailureRecord)}
+	if rec.Failure != nil {
+		f := canonFailure(*rec.Failure)
+		c.Root = &f
 	}
 	if rec.Cancel != nil {
 		c.Cancel = &canonCancel{Cause: rec.Cancel.Cause, At: nanos(rec.Cancel.At)}
@@ -264,7 +265,7 @@ func FuzzStoreContract(f *testing.F) {
 						Order:    uint32(arg % 5),
 					}
 					if op.Status == driver.OpFailed {
-						op.Failure = &durable.FailureRecord{
+						op.Failure = &durable.Failure{
 							StepID: steps[int(arg/2)%len(steps)], Phase: opPhase,
 							Attempt: op.Attempts, Message: "op", At: now,
 							Kind: durable.FailureKind(arg % 3), Reason: "r",
@@ -273,11 +274,11 @@ func FuzzStoreContract(f *testing.F) {
 					tr.Ops = []driver.OpWrite{{StepID: steps[int(arg/2)%len(steps)], Phase: opPhase, Record: op}}
 				}
 				if arg%5 == 0 {
-					tr.RootFailure = &durable.RootFailure{FailureRecord: durable.FailureRecord{
+					tr.Failure = &durable.Failure{
 						StepID: steps[0], Phase: durable.PhaseForward,
 						Attempt: 1, Message: "root", At: now,
 						Kind: durable.FailureKindUser, Reason: "why",
-					}}
+					}
 				}
 				if arg%7 == 0 {
 					oc := outcomes[int(arg)%len(outcomes)]

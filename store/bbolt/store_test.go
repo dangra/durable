@@ -424,18 +424,18 @@ func TestOperationRowsAreWrittenOnce(t *testing.T) {
 		t.Fatalf("forward row = %d bytes; want the state in it", len(forwardRow))
 	}
 
-	// The root failure ends the forward phase: a failed forward row for
+	// The run failure ends the forward phase: a failed forward row for
 	// b/v1 and one root row.
-	root := &durable.RootFailure{FailureRecord: durable.FailureRecord{StepID: "b/v1", Phase: durable.PhaseForward, Attempt: 1, Message: "boom", At: now}}
-	failed := root.FailureRecord
-	apply(driver.Transition{Cursor: driver.Cursor{Phase: durable.PhaseUnwind}, RootFailure: root, Ops: []driver.OpWrite{{
+	root := &durable.Failure{StepID: "b/v1", Phase: durable.PhaseForward, Attempt: 1, Message: "boom", At: now}
+	failed := *root
+	apply(driver.Transition{Cursor: driver.Cursor{Phase: durable.PhaseUnwind}, Failure: root, Ops: []driver.OpWrite{{
 		StepID: "b/v1", Phase: durable.PhaseForward,
 		Record: driver.OperationRecord{Status: driver.OpFailed, Attempts: 1, Failure: &failed, Order: 2},
 	}}})
 
 	// a/v1 unwinds and fails permanently: its own small row, and the
 	// forward row is byte-for-byte what it was.
-	uf := durable.FailureRecord{StepID: "a/v1", Phase: durable.PhaseUnwind, Attempt: 2, Message: "stuck", At: now}
+	uf := durable.Failure{StepID: "a/v1", Phase: durable.PhaseUnwind, Attempt: 2, Message: "stuck", At: now}
 	apply(driver.Transition{Cursor: driver.Cursor{Phase: durable.PhaseUnwind}, Ops: []driver.OpWrite{{
 		StepID: "a/v1", Phase: durable.PhaseUnwind,
 		Record: driver.OperationRecord{Status: driver.OpFailed, Attempts: 2, Failure: &uf, Order: 3},
@@ -451,8 +451,8 @@ func TestOperationRowsAreWrittenOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.RootFailure == nil || got.RootFailure.StepID != "b/v1" {
-		t.Fatalf("RootFailure = %+v", got.RootFailure)
+	if got.Failure == nil || got.Failure.StepID != "b/v1" {
+		t.Fatalf("Failure = %+v", got.Failure)
 	}
 	if op := got.Step("b/v1").Forward; op.Status != driver.OpFailed || op.Failure == nil || op.Failure.Message != "boom" || op.Order != 2 {
 		t.Fatalf("b/v1 forward = %+v", op)

@@ -699,7 +699,7 @@ Unwind -> ordinary error
     unresolved, retry
 
 Unwind -> durable.Fail(err)
-    permanent UnwindFailure
+    permanent Failure
     record
     continue backward
 ```

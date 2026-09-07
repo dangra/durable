@@ -219,8 +219,8 @@ func TestFailFastOnCancel(t *testing.T) {
 	if !res.Canceled() {
 		t.Fatalf("result = %+v, want Canceled()", res)
 	}
-	if got := res.RootFailure.Message; got != "release frozen" {
-		t.Fatalf("RootFailure.Message = %q, want the cancel cause", got)
+	if got := res.Failure.Message; got != "release frozen" {
+		t.Fatalf("Failure.Message = %q, want the cancel cause", got)
 	}
 	if n := attempts.Load(); n != 1 {
 		t.Fatalf("blocking handler ran %d times, want exactly 1 (yield converts the preempted attempt)", n)
@@ -276,8 +276,8 @@ func TestFailFastShortCircuit(t *testing.T) {
 	if !res.Canceled() {
 		t.Fatalf("result = %+v, want Canceled()", res)
 	}
-	if res.RootFailure.Message != "stop retrying" {
-		t.Fatalf("RootFailure.Message = %q, want the cancel cause", res.RootFailure.Message)
+	if res.Failure.Message != "stop retrying" {
+		t.Fatalf("Failure.Message = %q, want the cancel cause", res.Failure.Message)
 	}
 	if sawCancel.Load() {
 		t.Fatal("handler observed CancelRequested; the middleware must short-circuit first")
@@ -380,8 +380,8 @@ func TestFabricatedPreemptionNotCanceled(t *testing.T) {
 	if res.Canceled() {
 		t.Fatal("fabricated preemption attributed as canceled")
 	}
-	if res.RootFailure.Kind != durable.FailureKindSystem {
-		t.Fatalf("kind = %v, want system", res.RootFailure.Kind)
+	if res.Failure.Kind != durable.FailureKindSystem {
+		t.Fatalf("kind = %v, want system", res.Failure.Kind)
 	}
 }
 

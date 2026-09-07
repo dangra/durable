@@ -80,7 +80,7 @@ func (r Run) Wait(ctx context.Context) (Result, error) {
 // canceling an already-canceling Run is a no-op returning nil.
 //
 // Cancellation reuses unwind: the Run stops selecting new forward work, a
-// RootFailure with FailureKindCanceled is established, successfully
+// Failure with FailureKindCanceled is established, successfully
 // executed Steps unwind normally, and the Run terminates with
 // OutcomeFailure. A started operation is never abandoned: its in-flight
 // attempt context is preempted once — carrying a *PreemptedError with
@@ -136,6 +136,10 @@ func (r Run) Status(ctx context.Context) (Status, error) {
 		if sr.Unwind.Status == driver.OpUnresolved {
 			st.StepID, st.Attempt = id, sr.Unwind.Attempts
 		}
+	}
+	if rec.Failure != nil {
+		rf := *rec.Failure
+		st.Failure = &rf
 	}
 	switch {
 	case rec.Terminal():
@@ -222,9 +226,9 @@ func started(rec *driver.RunRecord) bool {
 
 func resultOf(rec *driver.RunRecord) Result {
 	res := Result{Outcome: *rec.Outcome}
-	if rec.RootFailure != nil {
-		rf := *rec.RootFailure
-		res.RootFailure = &rf
+	if rec.Failure != nil {
+		rf := *rec.Failure
+		res.Failure = &rf
 	}
 	return res
 }

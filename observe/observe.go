@@ -33,7 +33,7 @@ type Observer struct {
 	// AttemptDone fires when one operation attempt resolves (success or
 	// permanent failure), schedules a retry, or parks via AwaitRun.
 	AttemptDone func(AttemptEvent)
-	// RunUnwinding fires when a RootFailure is established — permanent
+	// RunUnwinding fires when a Failure is established — permanent
 	// forward failure or an accepted cancellation — and unwind begins.
 	RunUnwinding func(RunFailureEvent)
 	// RunTerminal fires when a Run commits its terminal outcome.
@@ -117,7 +117,7 @@ type AttemptEvent struct {
 	Panicked bool
 }
 
-// RunFailureEvent reports a RootFailure being established (RunUnwinding)
+// RunFailureEvent reports a Failure being established (RunUnwinding)
 // or a Run turning invalid for the current deployment (RunInvalid, where
 // only Reason is populated besides the identity, and kernel.StepID when the
 // problem is step-scoped).
@@ -132,7 +132,7 @@ type RunFailureEvent struct {
 }
 
 // RunTerminalEvent reports a Run's terminal commit. Kind and Reason
-// carry RootFailure attribution for OutcomeFailure; Duration is
+// carry Failure attribution for OutcomeFailure; Duration is
 // acceptance-to-terminal. Annotations is a copy shared by this event's
 // observers — it carries the acceptance-time metadata (tenant tags)
 // metric adapters label by; the engine's own state is never exposed.

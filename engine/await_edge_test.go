@@ -119,7 +119,7 @@ func TestAwaitWokenAttemptTransientErrorKeepsMemory(t *testing.T) {
 }
 
 // Edge case 2: the woken attempt fails permanently. The run unwinds; the
-// root failure is attributed to the woken attempt; the child is never
+// run failure is attributed to the woken attempt; the child is never
 // respawned; the step's unwind operation is a different operation and does
 // not inherit the forward operation's await memory.
 func TestAwaitWokenAttemptPermanentFailureUnwinds(t *testing.T) {
@@ -156,8 +156,8 @@ func TestAwaitWokenAttemptPermanentFailureUnwinds(t *testing.T) {
 	if err != nil || res.Succeeded() {
 		t.Fatalf("parent Wait = %+v, %v; want failure", res, err)
 	}
-	if res.RootFailure == nil || res.RootFailure.StepID != "p/v1" || res.RootFailure.Attempt != 2 || res.RootFailure.Phase != durable.PhaseForward {
-		t.Errorf("RootFailure = %+v; want p/v1 forward attempt 2", res.RootFailure)
+	if res.Failure == nil || res.Failure.StepID != "p/v1" || res.Failure.Attempt != 2 || res.Failure.Phase != durable.PhaseForward {
+		t.Errorf("Failure = %+v; want p/v1 forward attempt 2", res.Failure)
 	}
 	children := runsFor(t, store, childPipe, "child-res")
 	if len(children) != 1 {
@@ -953,7 +953,7 @@ func TestAwaitTimeoutExpiryIsAWake(t *testing.T) {
 	defer g.open("child-1")
 
 	res, err := pRun.Wait(context.Background())
-	if err != nil || res.Succeeded() || res.RootFailure == nil || res.RootFailure.Reason != "deploy-timeout" {
+	if err != nil || res.Succeeded() || res.Failure == nil || res.Failure.Reason != "deploy-timeout" {
 		t.Fatalf("parent Wait = %+v, %v; want failure with reason deploy-timeout", res, err)
 	}
 	w := expiredWake.Load()

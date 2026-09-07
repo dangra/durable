@@ -55,29 +55,29 @@ func failingRun(t *testing.T, id durable.PipelineID, fail error) engine.Result {
 func TestFailureAttribution(t *testing.T) {
 	t.Run("defaults to system with no reason", func(t *testing.T) {
 		res := failingRun(t, "attr-default", durable.Fail(errors.New("boom")))
-		if res.RootFailure.Kind != durable.FailureKindSystem || res.RootFailure.Reason != "" {
-			t.Fatalf("RootFailure = %+v, want system kind, empty reason", res.RootFailure)
+		if res.Failure.Kind != durable.FailureKindSystem || res.Failure.Reason != "" {
+			t.Fatalf("Failure = %+v, want system kind, empty reason", res.Failure)
 		}
 	})
 	t.Run("explicit options", func(t *testing.T) {
 		res := failingRun(t, "attr-opts", durable.Fail(errors.New("bad region"),
 			durable.WithUserKind(), durable.WithReason("invalid-input")))
-		if res.RootFailure.Kind != durable.FailureKindUser || res.RootFailure.Reason != "invalid-input" {
-			t.Fatalf("RootFailure = %+v, want user/invalid-input", res.RootFailure)
+		if res.Failure.Kind != durable.FailureKindUser || res.Failure.Reason != "invalid-input" {
+			t.Fatalf("Failure = %+v, want user/invalid-input", res.Failure)
 		}
 	})
 	t.Run("extracted from error chain", func(t *testing.T) {
 		wrapped := fmt.Errorf("preparing image: %w", &classifiedError{msg: "no manifest"})
 		res := failingRun(t, "attr-chain", durable.Fail(wrapped))
-		if res.RootFailure.Kind != durable.FailureKindUser || res.RootFailure.Reason != "invalid-image" {
-			t.Fatalf("RootFailure = %+v, want user/invalid-image from chain", res.RootFailure)
+		if res.Failure.Kind != durable.FailureKindUser || res.Failure.Reason != "invalid-image" {
+			t.Fatalf("Failure = %+v, want user/invalid-image from chain", res.Failure)
 		}
 	})
 	t.Run("options override the chain", func(t *testing.T) {
 		res := failingRun(t, "attr-precedence", durable.Fail(&classifiedError{msg: "x"},
 			durable.WithReason("overridden")))
-		if res.RootFailure.Reason != "overridden" || res.RootFailure.Kind != durable.FailureKindUser {
-			t.Fatalf("RootFailure = %+v, want reason overridden, kind still from chain", res.RootFailure)
+		if res.Failure.Reason != "overridden" || res.Failure.Kind != durable.FailureKindUser {
+			t.Fatalf("Failure = %+v, want reason overridden, kind still from chain", res.Failure)
 		}
 	})
 }
@@ -160,11 +160,11 @@ func TestInvalidUTF8ErrorsDoNotWedge(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Wait: %v (a wedged marshal would hang, not return)", err)
 	}
-	if res.Outcome != durable.OutcomeFailure || res.RootFailure == nil {
+	if res.Outcome != durable.OutcomeFailure || res.Failure == nil {
 		t.Fatalf("result = %+v", res)
 	}
-	if !utf8.ValidString(res.RootFailure.Message) || !utf8.ValidString(res.RootFailure.Reason) {
-		t.Fatalf("unsanitized failure text: %+v", res.RootFailure)
+	if !utf8.ValidString(res.Failure.Message) || !utf8.ValidString(res.Failure.Reason) {
+		t.Fatalf("unsanitized failure text: %+v", res.Failure)
 	}
 
 	// Invalid UTF-8 identifiers are rejected upfront instead.
@@ -284,8 +284,8 @@ func TestRecordedTextIsBounded(t *testing.T) {
 			if err != nil || !res.Failed() {
 				t.Fatalf("Wait = %+v, %v", res, err)
 			}
-			bounded("RootFailure.Message", res.RootFailure.Message)
-			bounded("RootFailure.Reason", res.RootFailure.Reason)
+			bounded("Failure.Message", res.Failure.Message)
+			bounded("Failure.Reason", res.Failure.Reason)
 			rec, err := st.GetRun(context.Background(), run.ID())
 			if err != nil {
 				t.Fatal(err)
@@ -295,8 +295,8 @@ func TestRecordedTextIsBounded(t *testing.T) {
 				t.Fatalf("UnwindFailures = %+v", ufs)
 			}
 			bounded("UnwindFailures[0].Message", ufs[0].Message)
-			if !strings.HasPrefix(res.RootFailure.Message, "root x") || !strings.HasPrefix(ufs[0].Message, "unwind x") {
-				t.Fatalf("messages lost their head: %q / %q", res.RootFailure.Message[:8], ufs[0].Message[:8])
+			if !strings.HasPrefix(res.Failure.Message, "root x") || !strings.HasPrefix(ufs[0].Message, "unwind x") {
+				t.Fatalf("messages lost their head: %q / %q", res.Failure.Message[:8], ufs[0].Message[:8])
 			}
 		})
 	}

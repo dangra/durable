@@ -53,22 +53,19 @@ const (
 	AttrOutcome     attribute.Key = "durable.outcome"
 	AttrFailureKind attribute.Key = "durable.failure_kind"
 	AttrReason      attribute.Key = "durable.reason"
-	// The unwind-only attributes describe what an unwind attempt is
-	// unwinding (Invocation.Failure), distinct from the attempt's own
-	// outcome above: the root failure that ended the forward phase, and
-	// how many unwind steps had already failed permanently when the
-	// attempt started.
-	AttrRootStep        attribute.Key = "durable.root_failure.step"
-	AttrRootFailureKind attribute.Key = "durable.root_failure.kind"
-	AttrRootReason      attribute.Key = "durable.root_failure.reason"
-	AttrUnwindFailures  attribute.Key = "durable.unwind_failures"
-	AttrClass           attribute.Key = "durable.class"
-	AttrAwaitTargets    attribute.Key = "durable.await_targets"
-	AttrAwaitMode       attribute.Key = "durable.await_mode"
-	AttrPanicked        attribute.Key = "durable.panicked"
-	AttrStoreOp         attribute.Key = "durable.store.op"
-	AttrStoreWrite      attribute.Key = "durable.store.write"
-	AttrError           attribute.Key = "durable.error"
+	// The unwind-only attributes describe the Run's failure an unwind
+	// attempt is unwinding (Invocation.Failure), distinct from the
+	// attempt's own outcome above.
+	AttrRunFailureStep   attribute.Key = "durable.run_failure.step"
+	AttrRunFailureKind   attribute.Key = "durable.run_failure.kind"
+	AttrRunFailureReason attribute.Key = "durable.run_failure.reason"
+	AttrClass            attribute.Key = "durable.class"
+	AttrAwaitTargets     attribute.Key = "durable.await_targets"
+	AttrAwaitMode        attribute.Key = "durable.await_mode"
+	AttrPanicked         attribute.Key = "durable.panicked"
+	AttrStoreOp          attribute.Key = "durable.store.op"
+	AttrStoreWrite       attribute.Key = "durable.store.write"
+	AttrError            attribute.Key = "durable.error"
 )
 
 // Option configures this package's constructors.

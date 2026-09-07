@@ -73,10 +73,7 @@ func TestFakeInvocationStateLookup(t *testing.T) {
 
 func TestFakeInvocationCopiesAndMemory(t *testing.T) {
 	wake := &durable.Wake{Targets: []durable.RunID{"child"}, Done: []durable.RunID{"child"}}
-	failure := &durable.Failure{
-		Root:           durable.RootFailure{FailureRecord: durable.FailureRecord{StepID: "ship/v1", Message: "boom"}},
-		UnwindFailures: []durable.UnwindFailure{{FailureRecord: durable.FailureRecord{StepID: "t/v1"}}},
-	}
+	failure := &durable.Failure{StepID: "ship/v1", Message: "boom"}
 	inv := durabletest.NewInvocation(durabletest.InvocationConfig{
 		PipelineID:  "p",
 		ResourceID:  "r",
@@ -107,12 +104,12 @@ func TestFakeInvocationCopiesAndMemory(t *testing.T) {
 		t.Fatalf("Awaited = %+v, %v", w, ok)
 	}
 	f := inv.Failure()
-	if f == nil || f.Root.StepID != "ship/v1" || len(f.UnwindFailures) != 1 {
+	if f == nil || f.StepID != "ship/v1" {
 		t.Fatalf("Failure = %+v", f)
 	}
-	f.Root.StepID, f.UnwindFailures[0].StepID = "mutated", "mutated"
-	failure.UnwindFailures[0].Message = "mutated"
-	if g := inv.Failure(); g.Root.StepID != "ship/v1" || g.UnwindFailures[0].StepID != "t/v1" || g.UnwindFailures[0].Message != "" {
+	f.StepID = "mutated"
+	failure.Message = "mutated"
+	if g := inv.Failure(); g.StepID != "ship/v1" || g.Message != "boom" {
 		t.Fatalf("Failure must be a copy on both sides: %+v", g)
 	}
 	w.Done[0] = "mutated"

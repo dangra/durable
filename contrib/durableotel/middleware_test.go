@@ -481,8 +481,8 @@ func TestMiddlewareUnwindSpansCountPriorFailures(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Schedule: %v", err)
 	}
-	if res, err := run.Wait(t.Context()); err != nil || len(res.UnwindFailures) != 1 {
-		t.Fatalf("Wait = %+v, %v; want one unwind failure", res, err)
+	if res, err := run.Wait(t.Context()); err != nil || !res.Failed() {
+		t.Fatalf("Wait = %+v, %v; want the scripted failure", res, err)
 	}
 
 	want := map[string]struct{ prior, kind, reason string }{

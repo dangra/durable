@@ -200,9 +200,6 @@ func TestPermanentFailureUnwinds(t *testing.T) {
 	if len(failureSeenByA.UnwindFailures) != 1 || failureSeenByA.UnwindFailures[0].StepID != "reserve/v1" {
 		t.Fatalf("failure.UnwindFailures = %+v, want reserve/v1", failureSeenByA.UnwindFailures)
 	}
-	if len(res.UnwindFailures) != 1 || res.UnwindFailures[0].StepID != "reserve/v1" {
-		t.Fatalf("Result.UnwindFailures = %+v, want reserve/v1", res.UnwindFailures)
-	}
 	// Failed Runs have no Pipeline Output.
 	if b, _ := run.OutputBytes(context.Background()); b != nil {
 		t.Fatalf("OutputBytes = %v, want nil for failed run", b)

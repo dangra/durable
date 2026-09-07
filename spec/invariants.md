@@ -215,3 +215,5 @@ Part of the [`durable` specification](README.md). This list is append-only; inva
 106. Mutexes compose pairwise, not transitively: two pipelines exclude each other exactly when they share a name, so a pipeline holding several mutexes is blocked by any holder of any of them while pipelines sharing no name run together.
 
 107. Free text recorded on a Run (failure messages and reasons, last-error fields, cancel causes) never exceeds the Engine's text limit; longer text is cut at a rune boundary and marked.
+
+108. A Step's forward execution and its unwind are two operations, each persisted as its own record written when it resolves, carrying its status, attempts, committed State (forward only), the permanent failure that resolved it if any, and its resolution order within the Run. The Run's permanent unwind failures are the failed unwind operations in that order; the `RootFailure` is the only Run-level failure fact.

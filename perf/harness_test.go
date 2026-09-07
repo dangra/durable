@@ -274,8 +274,8 @@ func seedPopulation(b *testing.B, v *env, nonterminal, terminal int) []durable.R
 			steps = numSteps
 		}
 		for s := 0; s < steps; s++ {
-			rec.Steps[durable.StepID(fmt.Sprintf("recover-step-%d/v1", s))] = &driver.StepRecord{
-				ForwardStatus: driver.OpSucceeded, ForwardAttempts: 1, State: state,
+			rec.Steps[durable.StepID(fmt.Sprintf("recover-step-%d/v1", s))] = &driver.StepRecord{Forward: driver.OperationRecord{
+				Status: driver.OpSucceeded, Attempts: 1, State: state},
 			}
 		}
 		if _, created, err := v.store.CreateRun(context.Background(), rec, nil); err != nil || !created {

@@ -730,10 +730,15 @@ No other terminal business outcomes exist in v1.
 type Result struct {
     Outcome Outcome
 
-    RootFailure    *RootFailure
-    UnwindFailures []UnwindFailure
+    RootFailure *RootFailure
 }
 ```
+
+A `Result` carries the root failure only. What each unwind step did with
+it is a fact on that step's operation record, visible to later unwind
+handlers through `Failure.UnwindFailures`; a typed account of a failed
+Run for callers is the failure reducer's job (future work), the way the
+Output is the reducer's account of a successful one.
 
 Convenience methods SHOULD include:
 
@@ -747,7 +752,6 @@ Success:
 ```text
 OutcomeSuccess
 RootFailure = nil
-UnwindFailures = []
 ```
 
 Business failure:

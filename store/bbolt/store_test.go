@@ -55,8 +55,8 @@ func TestSlotSemantics(t *testing.T) {
 	// Facts round-trip.
 	err = s.ApplyTransition(ctx, "run-1", driver.Transition{
 		Cursor: driver.Cursor{Phase: durable.PhaseForward},
-		Steps: []driver.StepWrite{{StepID: "a", Record: driver.StepRecord{
-			ForwardStatus: driver.OpSucceeded, ForwardAttempts: 1, State: []byte{1, 2, 3},
+		Ops: []driver.OpWrite{{StepID: "a", Phase: durable.PhaseForward, Record: driver.OperationRecord{
+			Status: driver.OpSucceeded, Attempts: 1, State: []byte{1, 2, 3}, Order: 1,
 		}}},
 	})
 	if err != nil {
@@ -66,7 +66,7 @@ func TestSlotSemantics(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetRun: %v", err)
 	}
-	if sr := got.Steps["a"]; sr == nil || sr.ForwardStatus != driver.OpSucceeded || len(sr.State) != 3 {
+	if sr := got.Steps["a"]; sr == nil || sr.Forward.Status != driver.OpSucceeded || len(sr.Forward.State) != 3 {
 		t.Fatalf("round-tripped step record = %+v", got.Steps["a"])
 	}
 
@@ -278,8 +278,8 @@ func TestReapTerminal(t *testing.T) {
 		}
 		tr := driver.Transition{
 			Cursor: driver.Cursor{Phase: durable.PhaseForward, UpdatedAt: terminalAt},
-			Steps: []driver.StepWrite{{StepID: "a", Record: driver.StepRecord{
-				ForwardStatus: driver.OpSucceeded, ForwardAttempts: 1, State: []byte{1},
+			Ops: []driver.OpWrite{{StepID: "a", Phase: durable.PhaseForward, Record: driver.OperationRecord{
+				Status: driver.OpSucceeded, Attempts: 1, State: []byte{1}, Order: 1,
 			}}},
 		}
 		if terminal {
@@ -375,4 +375,119 @@ func TestGetActiveRunIDFollowsTheSlot(t *testing.T) {
 	if _, created, err := s.CreateRun(ctx, rec("c"), nil); err != nil || !created {
 		t.Fatalf("slot must be reusable: created=%v err=%v", created, err)
 	}
+}
+
+// TestOperationRowsAreWrittenOnce pins the row layout: one row per
+// operation under run id, step id, and phase; an unwind resolution leaves
+// the forward row's bytes untouched; a failed operation carries its own
+// failure; the failures bucket holds the root only; and reap sweeps all
+// of it.
+func TestOperationRowsAreWrittenOnce(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(filepath.Join(t.TempDir(), "ops.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	now := time.Unix(1_700_000_000, 0).UTC()
+	rec := &driver.RunRecord{
+		RunID: "run-o", PipelineID: "p", ResourceID: "r", Phase: durable.PhaseForward,
+		Steps: map[durable.StepID]*driver.StepRecord{}, CreatedAt: now, UpdatedAt: now,
+	}
+	if _, created, err := s.CreateRun(ctx, rec, nil); err != nil || !created {
+		t.Fatalf("CreateRun = %v, %v", created, err)
+	}
+	apply := func(tr driver.Transition) {
+		t.Helper()
+		tr.Cursor.UpdatedAt = now
+		if err := s.ApplyTransition(ctx, "run-o", tr); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rowBytes := func(step string, phase durable.Phase) []byte {
+		var b []byte
+		s.db.View(func(tx *bolt.Tx) error {
+			b = bytes.Clone(tx.Bucket(stepsBucket).Get(opKey("run-o", durable.StepID(step), phase)))
+			return nil
+		})
+		return b
+	}
+
+	// Forward success with a large state.
+	state := bytes.Repeat([]byte{7}, 4096)
+	apply(driver.Transition{Cursor: driver.Cursor{Phase: durable.PhaseForward}, Ops: []driver.OpWrite{{
+		StepID: "a/v1", Phase: durable.PhaseForward,
+		Record: driver.OperationRecord{Status: driver.OpSucceeded, Attempts: 1, State: state, Order: 1},
+	}}})
+	forwardRow := rowBytes("a/v1", durable.PhaseForward)
+	if len(forwardRow) < len(state) {
+		t.Fatalf("forward row = %d bytes; want the state in it", len(forwardRow))
+	}
+
+	// The root failure ends the forward phase: a failed forward row for
+	// b/v1 and one root row.
+	root := &durable.RootFailure{FailureRecord: durable.FailureRecord{StepID: "b/v1", Phase: durable.PhaseForward, Attempt: 1, Message: "boom", At: now}}
+	failed := root.FailureRecord
+	apply(driver.Transition{Cursor: driver.Cursor{Phase: durable.PhaseUnwind}, RootFailure: root, Ops: []driver.OpWrite{{
+		StepID: "b/v1", Phase: durable.PhaseForward,
+		Record: driver.OperationRecord{Status: driver.OpFailed, Attempts: 1, Failure: &failed, Order: 2},
+	}}})
+
+	// a/v1 unwinds and fails permanently: its own small row, and the
+	// forward row is byte-for-byte what it was.
+	uf := durable.FailureRecord{StepID: "a/v1", Phase: durable.PhaseUnwind, Attempt: 2, Message: "stuck", At: now}
+	apply(driver.Transition{Cursor: driver.Cursor{Phase: durable.PhaseUnwind}, Ops: []driver.OpWrite{{
+		StepID: "a/v1", Phase: durable.PhaseUnwind,
+		Record: driver.OperationRecord{Status: driver.OpFailed, Attempts: 2, Failure: &uf, Order: 3},
+	}}})
+	if !bytes.Equal(rowBytes("a/v1", durable.PhaseForward), forwardRow) {
+		t.Fatal("unwind resolution rewrote the forward row")
+	}
+	if unwindRow := rowBytes("a/v1", durable.PhaseUnwind); len(unwindRow) == 0 || len(unwindRow) > 256 {
+		t.Fatalf("unwind row = %d bytes; want a small row of its own", len(unwindRow))
+	}
+
+	got, err := s.GetRun(ctx, "run-o")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.RootFailure == nil || got.RootFailure.StepID != "b/v1" {
+		t.Fatalf("RootFailure = %+v", got.RootFailure)
+	}
+	if op := got.Step("b/v1").Forward; op.Status != driver.OpFailed || op.Failure == nil || op.Failure.Message != "boom" || op.Order != 2 {
+		t.Fatalf("b/v1 forward = %+v", op)
+	}
+	if ufs := got.UnwindFailures(); len(ufs) != 1 || ufs[0].StepID != "a/v1" || ufs[0].Message != "stuck" {
+		t.Fatalf("UnwindFailures = %+v", ufs)
+	}
+	if a := got.Step("a/v1"); a.Forward.Status != driver.OpSucceeded || len(a.Forward.State) != len(state) || a.Unwind.Order != 3 {
+		t.Fatalf("a/v1 = %+v", a)
+	}
+	s.db.View(func(tx *bolt.Tx) error {
+		n := 0
+		tx.Bucket(failuresBucket).ForEach(func(k, _ []byte) error { n++; return nil })
+		if n != 1 {
+			t.Fatalf("failures bucket rows = %d; want the root only", n)
+		}
+		n = 0
+		tx.Bucket(stepsBucket).ForEach(func(k, _ []byte) error { n++; return nil })
+		if n != 3 {
+			t.Fatalf("operation rows = %d; want a forward, a unwind, b forward", n)
+		}
+		return nil
+	})
+
+	oc := durable.OutcomeFailure
+	apply(driver.Transition{Cursor: driver.Cursor{Phase: durable.PhaseDone}, Outcome: &oc})
+	if n, err := s.ReapTerminal(ctx, now.Add(time.Second), 10); err != nil || n != 1 {
+		t.Fatalf("ReapTerminal = %d, %v", n, err)
+	}
+	s.db.View(func(tx *bolt.Tx) error {
+		for _, b := range [][]byte{stepsBucket, failuresBucket} {
+			if k, _ := tx.Bucket(b).Cursor().First(); k != nil {
+				t.Fatalf("bucket %s still holds %q after reap", b, k)
+			}
+		}
+		return nil
+	})
 }

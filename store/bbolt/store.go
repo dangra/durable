@@ -9,10 +9,12 @@
 // The storage representation is implementation-defined by the spec; this
 // implementation stores each run as components with distinct write
 // cadences (the internal durable.storage.v1 protobuf schema): write-once
-// meta (identity + input), step-fact rows written at operation resolution,
-// rarely-written failures/terminal/cancel records, and the small cursor
-// rewritten per attempt. Per-attempt write volume is therefore independent
-// of input and state sizes. An active-slot index keyed by (PipelineID,
+// meta (identity + input), one operation row per step phase written at
+// that operation's resolution and carrying its own failure, the run's
+// write-once root failure, terminal, and cancel records, and the small
+// cursor rewritten per attempt. Per-attempt write volume is therefore
+// independent of input and state sizes, an unwind never rewrites the
+// forward row's state, and no row is read back to be rewritten. An active-slot index keyed by (PipelineID,
 // ResourceID) holds every nonterminal run: CreateRun admits against it,
 // GetActiveRunID reads it, and ListNonterminal walks it, so recovery cost
 // follows the runs in flight rather than the retained history.
@@ -94,8 +96,33 @@ func slotKeyFor(pipeline kernel.PipelineID, resource kernel.ResourceID) []byte {
 	return []byte(string(pipeline) + "\x00" + string(resource))
 }
 
-func stepKey(id kernel.RunID, step kernel.StepID) []byte {
-	return []byte(string(id) + "\x00" + string(step))
+// opKey addresses one operation row: run id, step id, and a phase byte,
+// NUL-separated. runPrefix(id) covers every operation of a run; the
+// forward row sorts before the unwind row of the same step.
+func opKey(id kernel.RunID, step kernel.StepID, phase kernel.Phase) []byte {
+	return []byte(string(id) + "\x00" + string(step) + "\x00" + string(phaseByte(phase)))
+}
+
+func runPrefix(id kernel.RunID) []byte { return []byte(string(id) + "\x00") }
+
+func phaseByte(phase kernel.Phase) byte {
+	if phase == kernel.PhaseUnwind {
+		return 'u'
+	}
+	return 'f'
+}
+
+// splitOpKey recovers the step id and phase from a key under runPrefix.
+func splitOpKey(id kernel.RunID, k []byte) (kernel.StepID, kernel.Phase, bool) {
+	rest := k[len(id)+1:]
+	if len(rest) < 2 || rest[len(rest)-2] != 0 {
+		return "", 0, false
+	}
+	phase := kernel.PhaseForward
+	if rest[len(rest)-1] == 'u' {
+		phase = kernel.PhaseUnwind
+	}
+	return kernel.StepID(rest[:len(rest)-2]), phase, true
 }
 
 // groupCommit picks the adaptive commit strategy for one write call: a
@@ -177,20 +204,16 @@ func putRun(tx *bolt.Tx, rec *driver.RunRecord) error {
 		return err
 	}
 	for sid, sr := range rec.Steps {
-		b, err := storagepb.MarshalStepRecord(sr)
-		if err != nil {
-			return err
-		}
-		if err := tx.Bucket(stepsBucket).Put(stepKey(rec.RunID, sid), b); err != nil {
-			return err
+		for _, phase := range []kernel.Phase{kernel.PhaseForward, kernel.PhaseUnwind} {
+			if op := sr.Op(phase); op.Status != driver.OpNone {
+				if err := putOp(tx, rec.RunID, sid, phase, op); err != nil {
+					return err
+				}
+			}
 		}
 	}
-	if rec.RootFailure != nil || len(rec.UnwindFailures) > 0 {
-		b, err := storagepb.MarshalFailures(rec.RootFailure, rec.UnwindFailures)
-		if err != nil {
-			return err
-		}
-		if err := tx.Bucket(failuresBucket).Put([]byte(rec.RunID), b); err != nil {
+	if rec.RootFailure != nil {
+		if err := putRootFailure(tx, rec.RunID, rec.RootFailure); err != nil {
 			return err
 		}
 	}
@@ -221,33 +244,14 @@ func (s *Store) ApplyTransition(_ context.Context, id kernel.RunID, t driver.Tra
 		if err := tx.Bucket(cursorBucket).Put([]byte(id), cursor); err != nil {
 			return err
 		}
-		for _, sw := range t.Steps {
-			sr := sw.Record
-			b, err := storagepb.MarshalStepRecord(&sr)
-			if err != nil {
-				return err
-			}
-			if err := tx.Bucket(stepsBucket).Put(stepKey(id, sw.StepID), b); err != nil {
+		for _, ow := range t.Ops {
+			op := ow.Record
+			if err := putOp(tx, id, ow.StepID, ow.Phase, &op); err != nil {
 				return err
 			}
 		}
-		if t.RootFailure != nil || t.UnwindFailure != nil {
-			root, unwind, err := readFailures(tx, id)
-			if err != nil {
-				return err
-			}
-			if t.RootFailure != nil {
-				rf := *t.RootFailure
-				root = &rf
-			}
-			if t.UnwindFailure != nil {
-				unwind = append(unwind, *t.UnwindFailure)
-			}
-			b, err := storagepb.MarshalFailures(root, unwind)
-			if err != nil {
-				return err
-			}
-			if err := tx.Bucket(failuresBucket).Put([]byte(id), b); err != nil {
+		if t.RootFailure != nil {
+			if err := putRootFailure(tx, id, t.RootFailure); err != nil {
 				return err
 			}
 		}
@@ -273,12 +277,32 @@ func (s *Store) ApplyTransition(_ context.Context, id kernel.RunID, t driver.Tra
 	})
 }
 
-func readFailures(tx *bolt.Tx, id kernel.RunID) (*kernel.RootFailure, []kernel.UnwindFailure, error) {
+func putOp(tx *bolt.Tx, id kernel.RunID, step kernel.StepID, phase kernel.Phase, op *driver.OperationRecord) error {
+	b, err := storagepb.MarshalOperationRecord(op)
+	if err != nil {
+		return err
+	}
+	return tx.Bucket(stepsBucket).Put(opKey(id, step, phase), b)
+}
+
+func putRootFailure(tx *bolt.Tx, id kernel.RunID, rf *kernel.RootFailure) error {
+	b, err := storagepb.MarshalFailureRecord(rf.FailureRecord)
+	if err != nil {
+		return err
+	}
+	return tx.Bucket(failuresBucket).Put([]byte(id), b)
+}
+
+func readRootFailure(tx *bolt.Tx, id kernel.RunID) (*kernel.RootFailure, error) {
 	b := tx.Bucket(failuresBucket).Get([]byte(id))
 	if b == nil {
-		return nil, nil, nil
+		return nil, nil
 	}
-	return storagepb.UnmarshalFailures(b)
+	f, err := storagepb.UnmarshalFailureRecord(b)
+	if err != nil {
+		return nil, err
+	}
+	return &kernel.RootFailure{FailureRecord: f}, nil
 }
 
 // getRun assembles the read model from the run's components: meta, step
@@ -294,14 +318,18 @@ func getRun(tx *bolt.Tx, id kernel.RunID) (*driver.RunRecord, error) {
 		return nil, err
 	}
 
-	prefix := stepKey(id, "")
+	prefix := runPrefix(id)
 	c := tx.Bucket(stepsBucket).Cursor()
 	for k, v := c.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, v = c.Next() {
-		sr, err := storagepb.UnmarshalStepRecord(v)
+		step, phase, ok := splitOpKey(id, k)
+		if !ok {
+			return nil, fmt.Errorf("bbolt: malformed operation key %q", k)
+		}
+		op, err := storagepb.UnmarshalOperationRecord(v)
 		if err != nil {
 			return nil, err
 		}
-		*rec.Step(kernel.StepID(k[len(prefix):])) = *sr
+		*rec.Step(step).Op(phase) = op
 	}
 
 	cb := tx.Bucket(cursorBucket).Get([]byte(id))
@@ -320,21 +348,20 @@ func getRun(tx *bolt.Tx, id kernel.RunID) (*driver.RunRecord, error) {
 	rec.UpdatedAt = cur.UpdatedAt
 	if cur.StepID != "" {
 		sr := rec.Step(cur.StepID)
-		if cur.Phase == kernel.PhaseUnwind && sr.ForwardStatus == driver.OpSucceeded {
-			sr.UnwindStatus = driver.OpUnresolved
-			sr.UnwindAttempts = cur.Attempts
+		if cur.Phase == kernel.PhaseUnwind && sr.Forward.Status == driver.OpSucceeded {
+			sr.Unwind.Status = driver.OpUnresolved
+			sr.Unwind.Attempts = cur.Attempts
 		} else {
-			sr.ForwardStatus = driver.OpUnresolved
-			sr.ForwardAttempts = cur.Attempts
+			sr.Forward.Status = driver.OpUnresolved
+			sr.Forward.Attempts = cur.Attempts
 		}
 	}
 
-	root, unwind, err := readFailures(tx, id)
+	root, err := readRootFailure(tx, id)
 	if err != nil {
 		return nil, err
 	}
 	rec.RootFailure = root
-	rec.UnwindFailures = unwind
 
 	if tb := tx.Bucket(terminalBucket).Get([]byte(id)); tb != nil {
 		oc, out, err := storagepb.UnmarshalTerminal(tb)
@@ -386,13 +413,15 @@ func (s *Store) ReapTerminal(_ context.Context, before time.Time, limit int) (in
 			}
 		}
 		for _, id := range victims {
-			prefix := stepKey(kernel.RunID(id), "")
+			// Operation rows hang off the run id; collect before deleting,
+			// since bbolt forbids mutating a bucket while iterating it.
+			prefix := runPrefix(kernel.RunID(id))
 			sc := tx.Bucket(stepsBucket).Cursor()
-			var stepKeys [][]byte
+			var opKeys [][]byte
 			for k, _ := sc.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, _ = sc.Next() {
-				stepKeys = append(stepKeys, bytes.Clone(k))
+				opKeys = append(opKeys, bytes.Clone(k))
 			}
-			for _, k := range stepKeys {
+			for _, k := range opKeys {
 				if err := tx.Bucket(stepsBucket).Delete(k); err != nil {
 					return err
 				}

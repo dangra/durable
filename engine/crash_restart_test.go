@@ -283,23 +283,23 @@ func runCrashScenario(t *testing.T, seed uint64, store driver.Store) {
 			case rec.Outcome == nil:
 				t.Fatalf("run %s nonterminal after Wait returned", id)
 			case *rec.Outcome == durable.OutcomeSuccess:
-				if sr.ForwardStatus != driver.OpSucceeded {
+				if sr.Forward.Status != driver.OpSucceeded {
 					t.Fatalf("run %s step %s: success run with unresolved step %+v", id, stepID, sr)
 				}
-				if sr.UnwindStatus != driver.OpNone {
+				if sr.Unwind.Status != driver.OpNone {
 					t.Fatalf("run %s step %s: success run has unwind facts %+v", id, stepID, sr)
 				}
 			default: // failure: unwind completeness
-				if sr.ForwardStatus == driver.OpSucceeded && unwindable && sr.UnwindStatus != driver.OpSucceeded {
+				if sr.Forward.Status == driver.OpSucceeded && unwindable && sr.Unwind.Status != driver.OpSucceeded {
 					t.Fatalf("run %s step %s: succeeded unwindable step not unwound: %+v", id, stepID, sr)
 				}
 			}
 			// At-least-once sanity: a resolved forward op consumed at
 			// least the scripted transient attempts (crashes may add
 			// more, never fewer logical attempts than failures scripted).
-			if sr.ForwardStatus == driver.OpSucceeded && sr.ForwardAttempts < script.failUntil+1 {
+			if sr.Forward.Status == driver.OpSucceeded && sr.Forward.Attempts < script.failUntil+1 {
 				t.Fatalf("run %s step %s: succeeded after %d attempts, script demands > %d",
-					id, stepID, sr.ForwardAttempts, script.failUntil)
+					id, stepID, sr.Forward.Attempts, script.failUntil)
 			}
 		}
 

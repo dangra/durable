@@ -82,7 +82,7 @@ func TestRecoveryResumesAcrossEngines(t *testing.T) {
 func TestRetiredStepIsBypassed(t *testing.T) {
 	store := mem.New()
 	runID := seedRun(t, store, "evolving", map[durable.StepID]*driver.StepRecord{
-		"a/v1": {ForwardStatus: driver.OpSucceeded},
+		"a/v1": {Forward: driver.OperationRecord{Status: driver.OpSucceeded}},
 	})
 
 	var bRan, cRan atomic.Bool
@@ -125,8 +125,8 @@ func TestRetiredStepIsBypassed(t *testing.T) {
 func TestRetiredUnresolvedStepContinues(t *testing.T) {
 	store := mem.New()
 	runID := seedRun(t, store, "evolving", map[durable.StepID]*driver.StepRecord{
-		"a/v1": {ForwardStatus: driver.OpSucceeded},
-		"b/v1": {ForwardStatus: driver.OpUnresolved, ForwardAttempts: 2},
+		"a/v1": {Forward: driver.OperationRecord{Status: driver.OpSucceeded}},
+		"b/v1": {Forward: driver.OperationRecord{Status: driver.OpUnresolved, Attempts: 2}},
 	})
 
 	var bAttempt atomic.Uint64
@@ -159,8 +159,8 @@ func TestRetiredUnresolvedStepContinues(t *testing.T) {
 func TestUnresolvedStepRemovedIsInvalid(t *testing.T) {
 	store := mem.New()
 	runID := seedRun(t, store, "evolving", map[durable.StepID]*driver.StepRecord{
-		"a/v1": {ForwardStatus: driver.OpSucceeded},
-		"b/v1": {ForwardStatus: driver.OpUnresolved, ForwardAttempts: 1},
+		"a/v1": {Forward: driver.OperationRecord{Status: driver.OpSucceeded}},
+		"b/v1": {Forward: driver.OperationRecord{Status: driver.OpUnresolved, Attempts: 1}},
 	})
 
 	def := pipelinedef.New(pipelinedef.Config{

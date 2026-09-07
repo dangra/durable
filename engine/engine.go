@@ -520,7 +520,7 @@ func (e *Engine) baseContext() (context.Context, bool) {
 
 func hasUnresolvedOp(rec *driver.RunRecord) bool {
 	for _, sr := range rec.Steps {
-		if sr.ForwardStatus == driver.OpUnresolved || sr.UnwindStatus == driver.OpUnresolved {
+		if sr.Forward.Status == driver.OpUnresolved || sr.Unwind.Status == driver.OpUnresolved {
 			return true
 		}
 	}
@@ -733,7 +733,7 @@ func (e *Engine) processRun(id durable.RunID) (time.Duration, bool) {
 // reserved an attempt for this Run.
 func forwardStarted(rec *driver.RunRecord, stepID durable.StepID) bool {
 	sr, ok := rec.Steps[stepID]
-	return ok && sr.ForwardAttempts > 0
+	return ok && sr.Forward.Attempts > 0
 }
 
 // applyCancel establishes the cancellation RootFailure and transitions the
@@ -811,7 +811,7 @@ func (e *Engine) attemptResolved(rec *driver.RunRecord, stepID durable.StepID, p
 				"run", string(rec.RunID), "step", string(stepID), "attempt", attempt,
 				"error", err, "kind", rec.RootFailure.Kind.String(), "reason", rec.RootFailure.Reason)
 		} else {
-			uf := rec.UnwindFailures[len(rec.UnwindFailures)-1]
+			uf := rec.Step(stepID).Unwind.Failure
 			// Warn, not Info: a permanently failed unwind means
 			// compensation did not happen — external resources may be
 			// leaked.
@@ -1127,14 +1127,14 @@ func (e *Engine) runForward(rec *driver.RunRecord, def *boundDef, stepID durable
 	sr := rec.Step(stepID)
 
 	// Durably reserve the attempt before invoking application code.
-	sr.ForwardStatus = driver.OpUnresolved
-	sr.ForwardAttempts++
+	sr.Forward.Status = driver.OpUnresolved
+	sr.Forward.Attempts++
 	rec.NextAttemptAt = time.Time{}
-	if !e.apply(rec, driver.Transition{Cursor: activeCursor(rec, stepID, sr.ForwardAttempts)}) {
+	if !e.apply(rec, driver.Transition{Cursor: activeCursor(rec, stepID, sr.Forward.Attempts)}) {
 		return false, time.Second, true
 	}
 
-	inv := e.invocation(rec, def, stepID, sr.ForwardAttempts, durable.PhaseForward)
+	inv := e.invocation(rec, def, stepID, sr.Forward.Attempts, durable.PhaseForward)
 	inv.awaited = rec.Awaited.Clone()
 	opStart := e.clock.Now()
 	state, panicked, err := e.invokeForward(sc, inv)
@@ -1146,7 +1146,7 @@ func (e *Engine) runForward(rec *driver.RunRecord, def *boundDef, stepID durable
 	}
 
 	if park, ok := durable.AwaitRequest(err); ok {
-		return e.parkAwait(rec, stepID, sr.ForwardAttempts, &park, durable.AwaitTimeout(err), e.clock.Now().Sub(opStart))
+		return e.parkAwait(rec, stepID, sr.Forward.Attempts, &park, durable.AwaitTimeout(err), e.clock.Now().Sub(opStart))
 	}
 
 	now := e.clock.Now()
@@ -1168,22 +1168,23 @@ func (e *Engine) runForward(rec *driver.RunRecord, def *boundDef, stepID durable
 			stateBytes = b
 		}
 		// State commit and forward success are one durable transition.
-		sr.ForwardStatus = driver.OpSucceeded
-		sr.State = stateBytes
+		sr.Forward.Status = driver.OpSucceeded
+		sr.Forward.State = stateBytes
+		sr.Forward.Order = rec.NextOrder()
 		rec.Awaited = nil
 		clearLastError(rec)
-		if !e.apply(rec, driver.Transition{Cursor: idleCursor(rec), Steps: []driver.StepWrite{{StepID: stepID, Record: *sr}}}) {
+		if !e.apply(rec, driver.Transition{Cursor: idleCursor(rec), Ops: []driver.OpWrite{{StepID: stepID, Phase: durable.PhaseForward, Record: sr.Forward}}}) {
 			return false, time.Second, true
 		}
-		e.attemptResolved(rec, stepID, durable.PhaseForward, sr.ForwardAttempts, now.Sub(opStart), observe.AttemptSucceeded, nil, 0, false)
+		e.attemptResolved(rec, stepID, durable.PhaseForward, sr.Forward.Attempts, now.Sub(opStart), observe.AttemptSucceeded, nil, 0, false)
 		return true, 0, false
 
 	case permanent:
-		sr.ForwardStatus = driver.OpFailed
+		sr.Forward.Status = driver.OpFailed
 		rec.RootFailure = &durable.RootFailure{
 			StepID:  stepID,
 			Phase:   durable.PhaseForward,
-			Attempt: sr.ForwardAttempts,
+			Attempt: sr.Forward.Attempts,
 			Message: e.boundText(cause.Error()),
 			At:      now,
 			Kind:    kind,
@@ -1210,10 +1211,15 @@ func (e *Engine) runForward(rec *driver.RunRecord, def *boundDef, stepID durable
 		rec.Phase = durable.PhaseUnwind
 		rec.Awaited = nil
 		clearLastError(rec)
-		if !e.apply(rec, driver.Transition{Cursor: idleCursor(rec), Steps: []driver.StepWrite{{StepID: stepID, Record: *sr}}, RootFailure: rec.RootFailure}) {
+		// The step's own record carries the failure that resolved it; the
+		// root failure is the same record at Run level.
+		failed := rec.RootFailure.FailureRecord
+		sr.Forward.Failure = &failed
+		sr.Forward.Order = rec.NextOrder()
+		if !e.apply(rec, driver.Transition{Cursor: idleCursor(rec), Ops: []driver.OpWrite{{StepID: stepID, Phase: durable.PhaseForward, Record: sr.Forward}}, RootFailure: rec.RootFailure}) {
 			return false, time.Second, true
 		}
-		e.attemptResolved(rec, stepID, durable.PhaseForward, sr.ForwardAttempts, now.Sub(opStart), observe.AttemptFailed, cause, 0, false)
+		e.attemptResolved(rec, stepID, durable.PhaseForward, sr.Forward.Attempts, now.Sub(opStart), observe.AttemptFailed, cause, 0, false)
 		e.emitRunUnwinding(observe.RunFailureEvent{
 			PipelineID: rec.PipelineID, ResourceID: rec.ResourceID, RunID: rec.RunID,
 			StepID: stepID, Kind: rec.RootFailure.Kind, Reason: rec.RootFailure.Reason,
@@ -1221,13 +1227,13 @@ func (e *Engine) runForward(rec *driver.RunRecord, def *boundDef, stepID durable
 		return true, 0, false
 
 	default:
-		d := e.backoff(sr.ForwardAttempts)
+		d := e.backoff(sr.Forward.Attempts)
 		rec.NextAttemptAt = now.Add(d)
 		e.recordLastError(rec, err, now)
-		if !e.apply(rec, driver.Transition{Cursor: activeCursor(rec, stepID, sr.ForwardAttempts)}) {
+		if !e.apply(rec, driver.Transition{Cursor: activeCursor(rec, stepID, sr.Forward.Attempts)}) {
 			return false, time.Second, true
 		}
-		e.attemptResolved(rec, stepID, durable.PhaseForward, sr.ForwardAttempts, now.Sub(opStart), observe.AttemptRetrying, err, d, panicked)
+		e.attemptResolved(rec, stepID, durable.PhaseForward, sr.Forward.Attempts, now.Sub(opStart), observe.AttemptRetrying, err, d, panicked)
 		return false, d, true
 	}
 }
@@ -1237,18 +1243,18 @@ func (e *Engine) runUnwind(rec *driver.RunRecord, def *boundDef, stepID durable.
 	sc := def.step(stepID)
 	sr := rec.Step(stepID)
 
-	sr.UnwindStatus = driver.OpUnresolved
-	sr.UnwindAttempts++
+	sr.Unwind.Status = driver.OpUnresolved
+	sr.Unwind.Attempts++
 	rec.NextAttemptAt = time.Time{}
-	if !e.apply(rec, driver.Transition{Cursor: activeCursor(rec, stepID, sr.UnwindAttempts)}) {
+	if !e.apply(rec, driver.Transition{Cursor: activeCursor(rec, stepID, sr.Unwind.Attempts)}) {
 		return false, time.Second, true
 	}
 
-	inv := e.invocation(rec, def, stepID, sr.UnwindAttempts, durable.PhaseUnwind)
+	inv := e.invocation(rec, def, stepID, sr.Unwind.Attempts, durable.PhaseUnwind)
 	inv.awaited = rec.Awaited.Clone()
 	// A fresh copy per attempt: the handler owns what it reads.
 	inv.failure = &durable.Failure{
-		UnwindFailures: append([]durable.UnwindFailure(nil), rec.UnwindFailures...),
+		UnwindFailures: rec.UnwindFailures(),
 	}
 	if rec.RootFailure != nil {
 		inv.failure.Root = *rec.RootFailure
@@ -1263,7 +1269,7 @@ func (e *Engine) runUnwind(rec *driver.RunRecord, def *boundDef, stepID durable.
 	}
 
 	if park, ok := durable.AwaitRequest(err); ok {
-		return e.parkAwait(rec, stepID, sr.UnwindAttempts, &park, durable.AwaitTimeout(err), e.clock.Now().Sub(opStart))
+		return e.parkAwait(rec, stepID, sr.Unwind.Attempts, &park, durable.AwaitTimeout(err), e.clock.Now().Sub(opStart))
 	}
 
 	now := e.clock.Now()
@@ -1271,42 +1277,43 @@ func (e *Engine) runUnwind(rec *driver.RunRecord, def *boundDef, stepID durable.
 	kind, reason, _ := durable.FailureInfo(err)
 	switch {
 	case err == nil:
-		sr.UnwindStatus = driver.OpSucceeded
+		sr.Unwind.Status = driver.OpSucceeded
+		sr.Unwind.Order = rec.NextOrder()
 		rec.Awaited = nil
 		clearLastError(rec)
-		if !e.apply(rec, driver.Transition{Cursor: idleCursor(rec), Steps: []driver.StepWrite{{StepID: stepID, Record: *sr}}}) {
+		if !e.apply(rec, driver.Transition{Cursor: idleCursor(rec), Ops: []driver.OpWrite{{StepID: stepID, Phase: durable.PhaseUnwind, Record: sr.Unwind}}}) {
 			return false, time.Second, true
 		}
-		e.attemptResolved(rec, stepID, durable.PhaseUnwind, sr.UnwindAttempts, now.Sub(opStart), observe.AttemptSucceeded, nil, 0, false)
+		e.attemptResolved(rec, stepID, durable.PhaseUnwind, sr.Unwind.Attempts, now.Sub(opStart), observe.AttemptSucceeded, nil, 0, false)
 		return true, 0, false
 
 	case permanent:
-		sr.UnwindStatus = driver.OpFailed
-		rec.UnwindFailures = append(rec.UnwindFailures, durable.UnwindFailure{
+		sr.Unwind.Status = driver.OpFailed
+		sr.Unwind.Failure = &durable.FailureRecord{
 			StepID:  stepID,
 			Phase:   durable.PhaseUnwind,
-			Attempt: sr.UnwindAttempts,
+			Attempt: sr.Unwind.Attempts,
 			Message: e.boundText(cause.Error()),
 			At:      now,
 			Kind:    kind,
-			Reason:  e.boundText(reason)})
+			Reason:  e.boundText(reason)}
+		sr.Unwind.Order = rec.NextOrder()
 		rec.Awaited = nil
 		clearLastError(rec)
-		uf := rec.UnwindFailures[len(rec.UnwindFailures)-1]
-		if !e.apply(rec, driver.Transition{Cursor: idleCursor(rec), Steps: []driver.StepWrite{{StepID: stepID, Record: *sr}}, UnwindFailure: &uf}) {
+		if !e.apply(rec, driver.Transition{Cursor: idleCursor(rec), Ops: []driver.OpWrite{{StepID: stepID, Phase: durable.PhaseUnwind, Record: sr.Unwind}}}) {
 			return false, time.Second, true
 		}
-		e.attemptResolved(rec, stepID, durable.PhaseUnwind, sr.UnwindAttempts, now.Sub(opStart), observe.AttemptFailed, cause, 0, false)
+		e.attemptResolved(rec, stepID, durable.PhaseUnwind, sr.Unwind.Attempts, now.Sub(opStart), observe.AttemptFailed, cause, 0, false)
 		return true, 0, false
 
 	default:
-		d := e.backoff(sr.UnwindAttempts)
+		d := e.backoff(sr.Unwind.Attempts)
 		rec.NextAttemptAt = now.Add(d)
 		e.recordLastError(rec, err, now)
-		if !e.apply(rec, driver.Transition{Cursor: activeCursor(rec, stepID, sr.UnwindAttempts)}) {
+		if !e.apply(rec, driver.Transition{Cursor: activeCursor(rec, stepID, sr.Unwind.Attempts)}) {
 			return false, time.Second, true
 		}
-		e.attemptResolved(rec, stepID, durable.PhaseUnwind, sr.UnwindAttempts, now.Sub(opStart), observe.AttemptRetrying, err, d, panicked)
+		e.attemptResolved(rec, stepID, durable.PhaseUnwind, sr.Unwind.Attempts, now.Sub(opStart), observe.AttemptRetrying, err, d, panicked)
 		return false, d, true
 	}
 }
@@ -1376,8 +1383,8 @@ func (e *Engine) debugLog() bool {
 func committedStates(rec *driver.RunRecord) map[durable.StepID][]byte {
 	states := make(map[durable.StepID][]byte)
 	for id, sr := range rec.Steps {
-		if sr.ForwardStatus == driver.OpSucceeded && sr.State != nil {
-			states[id] = sr.State
+		if sr.Forward.Status == driver.OpSucceeded && sr.Forward.State != nil {
+			states[id] = sr.Forward.State
 		}
 	}
 	return states
@@ -1458,18 +1465,21 @@ func (e *Engine) apply(rec *driver.RunRecord, t driver.Transition) bool {
 		if id == t.Cursor.StepID {
 			continue
 		}
-		if sr.ForwardStatus != driver.OpUnresolved && sr.UnwindStatus != driver.OpUnresolved {
-			continue
-		}
-		covered := false
-		for _, sw := range t.Steps {
-			if sw.StepID == id {
-				covered = true
-				break
+		for _, phase := range []durable.Phase{durable.PhaseForward, durable.PhaseUnwind} {
+			op := sr.Op(phase)
+			if op.Status != driver.OpUnresolved {
+				continue
 			}
-		}
-		if !covered {
-			t.Steps = append(t.Steps, driver.StepWrite{StepID: id, Record: *sr})
+			covered := false
+			for _, ow := range t.Ops {
+				if ow.StepID == id && ow.Phase == phase {
+					covered = true
+					break
+				}
+			}
+			if !covered {
+				t.Ops = append(t.Ops, driver.OpWrite{StepID: id, Phase: phase, Record: *op})
+			}
 		}
 	}
 	if err := e.store.ApplyTransition(e.baseCtx, rec.RunID, t); err != nil {
@@ -1538,8 +1548,8 @@ func factsOf(rec *driver.RunRecord) ledger.Facts {
 		Unwind:  make(map[string]ledger.OpState, len(rec.Steps)),
 	}
 	for id, sr := range rec.Steps {
-		f.Forward[string(id)] = opState(sr.ForwardStatus)
-		f.Unwind[string(id)] = opState(sr.UnwindStatus)
+		f.Forward[string(id)] = opState(sr.Forward.Status)
+		f.Unwind[string(id)] = opState(sr.Unwind.Status)
 	}
 	return f
 }

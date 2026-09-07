@@ -16,6 +16,7 @@ import (
 	"github.com/dangra/durable/engine"
 	"github.com/dangra/durable/pipelinedef"
 	"github.com/dangra/durable/store/bbolt"
+	"github.com/dangra/durable/store/driver"
 	"github.com/dangra/durable/store/mem"
 	"google.golang.org/protobuf/proto"
 )
@@ -100,15 +101,24 @@ func TestUnwindFailureAttribution(t *testing.T) {
 			}),
 		},
 	})
-	_, pipes := startEngine(t, mem.New(), def)
+	st := mem.New()
+	_, pipes := startEngine(t, st, def)
 	run, _, _ := pipes[0].Schedule(context.Background(), "r", nil)
 	res, err := run.Wait(context.Background())
 	if err != nil || !res.Failed() {
 		t.Fatalf("Wait = %+v, %v", res, err)
 	}
-	if len(res.UnwindFailures) != 1 || res.UnwindFailures[0].Reason != "release-rejected" ||
-		res.UnwindFailures[0].Kind != durable.FailureKindSystem {
-		t.Fatalf("UnwindFailures = %+v, want system/release-rejected", res.UnwindFailures)
+	// The unwind failure is a fact on the step's own operation record.
+	rec, err := st.GetRun(context.Background(), run.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ufs := rec.UnwindFailures()
+	if len(ufs) != 1 || ufs[0].Reason != "release-rejected" || ufs[0].Kind != durable.FailureKindSystem {
+		t.Fatalf("UnwindFailures = %+v, want system/release-rejected", ufs)
+	}
+	if op := rec.Step("a/v1").Unwind; op.Status != driver.OpFailed || op.Failure == nil || op.Failure.Reason != "release-rejected" || op.Order == 0 {
+		t.Fatalf("a/v1 unwind operation = %+v; want failed, with its failure and an order", op)
 	}
 }
 
@@ -232,7 +242,8 @@ func TestRecordedTextIsBounded(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			release := make(chan struct{})
-			eng := engine.New(mem.New(), append([]engine.Option{fastRetry, engine.WithLogger(discardTestLogger())}, tc.opts...)...)
+			st := mem.New()
+			eng := engine.New(st, append([]engine.Option{fastRetry, engine.WithLogger(discardTestLogger())}, tc.opts...)...)
 			pipe, err := eng.Bind(build(release))
 			if err != nil {
 				t.Fatal(err)
@@ -275,12 +286,17 @@ func TestRecordedTextIsBounded(t *testing.T) {
 			}
 			bounded("RootFailure.Message", res.RootFailure.Message)
 			bounded("RootFailure.Reason", res.RootFailure.Reason)
-			if len(res.UnwindFailures) != 1 {
-				t.Fatalf("UnwindFailures = %+v", res.UnwindFailures)
+			rec, err := st.GetRun(context.Background(), run.ID())
+			if err != nil {
+				t.Fatal(err)
 			}
-			bounded("UnwindFailures[0].Message", res.UnwindFailures[0].Message)
-			if !strings.HasPrefix(res.RootFailure.Message, "root x") || !strings.HasPrefix(res.UnwindFailures[0].Message, "unwind x") {
-				t.Fatalf("messages lost their head: %q / %q", res.RootFailure.Message[:8], res.UnwindFailures[0].Message[:8])
+			ufs := rec.UnwindFailures()
+			if len(ufs) != 1 {
+				t.Fatalf("UnwindFailures = %+v", ufs)
+			}
+			bounded("UnwindFailures[0].Message", ufs[0].Message)
+			if !strings.HasPrefix(res.RootFailure.Message, "root x") || !strings.HasPrefix(ufs[0].Message, "unwind x") {
+				t.Fatalf("messages lost their head: %q / %q", res.RootFailure.Message[:8], ufs[0].Message[:8])
 			}
 		})
 	}

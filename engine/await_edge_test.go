@@ -303,8 +303,8 @@ func TestAwaitUnwindParkThenTransientError(t *testing.T) {
 		t.Fatalf("Schedule parent: %v", err)
 	}
 	res, err := pRun.Wait(context.Background())
-	if err != nil || res.Succeeded() || len(res.UnwindFailures) != 0 {
-		t.Fatalf("parent Wait = %+v, %v; want clean unwind after failure", res, err)
+	if err != nil || res.Succeeded() {
+		t.Fatalf("parent Wait = %+v, %v; want failure after unwind", res, err)
 	}
 	entries := log.all()
 	t.Logf("unwind attempts: %+v", entries)

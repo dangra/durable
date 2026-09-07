@@ -638,19 +638,23 @@ The engine mutates durable state exclusively through atomic transitions:
 
 ```go
 Store.ApplyTransition(ctx, runID, Transition{
-    Cursor:        ...,  // always applied
-    Steps:         ...,  // fact rows upserted at resolution
-    RootFailure:   ...,  // set once
-    UnwindFailure: ...,  // appended
-    Output:        ..., Outcome: ..., // terminality; releases the slot
+    Cursor:      ...,  // always applied
+    Ops:         ...,  // one operation row per resolution, failure included
+    RootFailure: ...,  // set once; a cancellation has no resolving operation
+    Output:      ..., Outcome: ..., // terminality; releases the slot
 })
 ```
 
-Reads assemble the full RunRecord from the components, overlaying the
-cursor's in-flight operation as an unresolved step entry. An unwind
-operation displaced by topology change before resolving is flushed to its
-step row so its attempt count survives (attempt numbers are never
-reused).
+A Step's forward execution and its unwind are two operations with two
+rows, each written once when it resolves: status, attempts, the
+committed State (forward only), the permanent failure that resolved it
+if any, and its resolution order within the Run. An unwind therefore
+never rewrites the State, and the Run's permanent unwind failures are
+the failed unwind rows read back in order. Reads assemble the full
+RunRecord from the components, overlaying the cursor's in-flight
+operation as an unresolved entry. An operation displaced by topology
+change before resolving is flushed to its row so its attempt count
+survives (attempt numbers are never reused).
 
 Cancellation requests live in their own component, written only by
 RequestCancel — the engine worker remains the sole writer of everything

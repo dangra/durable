@@ -635,31 +635,39 @@ func (x *Cursor) GetAwaited() *Wake {
 	return nil
 }
 
-type StepRecord struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	ForwardStatus   OpStatus               `protobuf:"varint,1,opt,name=forward_status,json=forwardStatus,proto3,enum=durable.storage.v1.OpStatus" json:"forward_status,omitempty"`
-	ForwardAttempts uint64                 `protobuf:"varint,2,opt,name=forward_attempts,json=forwardAttempts,proto3" json:"forward_attempts,omitempty"`
-	State           []byte                 `protobuf:"bytes,3,opt,name=state,proto3" json:"state,omitempty"`
-	UnwindStatus    OpStatus               `protobuf:"varint,4,opt,name=unwind_status,json=unwindStatus,proto3,enum=durable.storage.v1.OpStatus" json:"unwind_status,omitempty"`
-	UnwindAttempts  uint64                 `protobuf:"varint,5,opt,name=unwind_attempts,json=unwindAttempts,proto3" json:"unwind_attempts,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+// OperationRecord is one operation of one step — its forward execution
+// or its unwind, told apart by the row key — written when the operation
+// resolves. The failure that resolved it, if any, lives here; the run's
+// root failure is a separate write-once row.
+type OperationRecord struct {
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Status   OpStatus               `protobuf:"varint,1,opt,name=status,proto3,enum=durable.storage.v1.OpStatus" json:"status,omitempty"`
+	Attempts uint64                 `protobuf:"varint,2,opt,name=attempts,proto3" json:"attempts,omitempty"`
+	// Committed step state: forward operations of state-producing steps,
+	// on success.
+	State []byte `protobuf:"bytes,3,opt,name=state,proto3" json:"state,omitempty"`
+	// Set exactly when status is FAILED.
+	Failure *FailureRecord `protobuf:"bytes,4,opt,name=failure,proto3" json:"failure,omitempty"`
+	// Resolution sequence within the run, from 1; 0 while unresolved.
+	Order         uint32 `protobuf:"varint,5,opt,name=order,proto3" json:"order,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
-func (x *StepRecord) Reset() {
-	*x = StepRecord{}
+func (x *OperationRecord) Reset() {
+	*x = OperationRecord{}
 	mi := &file_durable_storage_v1_storage_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *StepRecord) String() string {
+func (x *OperationRecord) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*StepRecord) ProtoMessage() {}
+func (*OperationRecord) ProtoMessage() {}
 
-func (x *StepRecord) ProtoReflect() protoreflect.Message {
+func (x *OperationRecord) ProtoReflect() protoreflect.Message {
 	mi := &file_durable_storage_v1_storage_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -671,42 +679,42 @@ func (x *StepRecord) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use StepRecord.ProtoReflect.Descriptor instead.
-func (*StepRecord) Descriptor() ([]byte, []int) {
+// Deprecated: Use OperationRecord.ProtoReflect.Descriptor instead.
+func (*OperationRecord) Descriptor() ([]byte, []int) {
 	return file_durable_storage_v1_storage_proto_rawDescGZIP(), []int{4}
 }
 
-func (x *StepRecord) GetForwardStatus() OpStatus {
+func (x *OperationRecord) GetStatus() OpStatus {
 	if x != nil {
-		return x.ForwardStatus
+		return x.Status
 	}
 	return OpStatus_OP_STATUS_UNSPECIFIED
 }
 
-func (x *StepRecord) GetForwardAttempts() uint64 {
+func (x *OperationRecord) GetAttempts() uint64 {
 	if x != nil {
-		return x.ForwardAttempts
+		return x.Attempts
 	}
 	return 0
 }
 
-func (x *StepRecord) GetState() []byte {
+func (x *OperationRecord) GetState() []byte {
 	if x != nil {
 		return x.State
 	}
 	return nil
 }
 
-func (x *StepRecord) GetUnwindStatus() OpStatus {
+func (x *OperationRecord) GetFailure() *FailureRecord {
 	if x != nil {
-		return x.UnwindStatus
+		return x.Failure
 	}
-	return OpStatus_OP_STATUS_UNSPECIFIED
+	return nil
 }
 
-func (x *StepRecord) GetUnwindAttempts() uint64 {
+func (x *OperationRecord) GetOrder() uint32 {
 	if x != nil {
-		return x.UnwindAttempts
+		return x.Order
 	}
 	return 0
 }
@@ -803,58 +811,6 @@ func (x *FailureRecord) GetReason() string {
 	return ""
 }
 
-type Failures struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Root          *FailureRecord         `protobuf:"bytes,1,opt,name=root,proto3" json:"root,omitempty"`
-	Unwind        []*FailureRecord       `protobuf:"bytes,2,rep,name=unwind,proto3" json:"unwind,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *Failures) Reset() {
-	*x = Failures{}
-	mi := &file_durable_storage_v1_storage_proto_msgTypes[6]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *Failures) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*Failures) ProtoMessage() {}
-
-func (x *Failures) ProtoReflect() protoreflect.Message {
-	mi := &file_durable_storage_v1_storage_proto_msgTypes[6]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use Failures.ProtoReflect.Descriptor instead.
-func (*Failures) Descriptor() ([]byte, []int) {
-	return file_durable_storage_v1_storage_proto_rawDescGZIP(), []int{6}
-}
-
-func (x *Failures) GetRoot() *FailureRecord {
-	if x != nil {
-		return x.Root
-	}
-	return nil
-}
-
-func (x *Failures) GetUnwind() []*FailureRecord {
-	if x != nil {
-		return x.Unwind
-	}
-	return nil
-}
-
 // Terminal marks a run's committed terminal outcome and output.
 type Terminal struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -866,7 +822,7 @@ type Terminal struct {
 
 func (x *Terminal) Reset() {
 	*x = Terminal{}
-	mi := &file_durable_storage_v1_storage_proto_msgTypes[7]
+	mi := &file_durable_storage_v1_storage_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -878,7 +834,7 @@ func (x *Terminal) String() string {
 func (*Terminal) ProtoMessage() {}
 
 func (x *Terminal) ProtoReflect() protoreflect.Message {
-	mi := &file_durable_storage_v1_storage_proto_msgTypes[7]
+	mi := &file_durable_storage_v1_storage_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -891,7 +847,7 @@ func (x *Terminal) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Terminal.ProtoReflect.Descriptor instead.
 func (*Terminal) Descriptor() ([]byte, []int) {
-	return file_durable_storage_v1_storage_proto_rawDescGZIP(), []int{7}
+	return file_durable_storage_v1_storage_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *Terminal) GetOutcome() Outcome {
@@ -918,7 +874,7 @@ type CancelRequest struct {
 
 func (x *CancelRequest) Reset() {
 	*x = CancelRequest{}
-	mi := &file_durable_storage_v1_storage_proto_msgTypes[8]
+	mi := &file_durable_storage_v1_storage_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -930,7 +886,7 @@ func (x *CancelRequest) String() string {
 func (*CancelRequest) ProtoMessage() {}
 
 func (x *CancelRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_durable_storage_v1_storage_proto_msgTypes[8]
+	mi := &file_durable_storage_v1_storage_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -943,7 +899,7 @@ func (x *CancelRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelRequest.ProtoReflect.Descriptor instead.
 func (*CancelRequest) Descriptor() ([]byte, []int) {
-	return file_durable_storage_v1_storage_proto_rawDescGZIP(), []int{8}
+	return file_durable_storage_v1_storage_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *CancelRequest) GetCause() string {
@@ -1002,14 +958,13 @@ const file_durable_storage_v1_storage_proto_rawDesc = "" +
 	"\x0fawaiting_run_id\x18\t \x01(\tB\x02\x18\x01R\rawaitingRunId\x125\n" +
 	"\bawaiting\x18\n" +
 	" \x01(\v2\x19.durable.storage.v1.AwaitR\bawaiting\x122\n" +
-	"\aawaited\x18\v \x01(\v2\x18.durable.storage.v1.WakeR\aawaited\"\xfe\x01\n" +
-	"\n" +
-	"StepRecord\x12C\n" +
-	"\x0eforward_status\x18\x01 \x01(\x0e2\x1c.durable.storage.v1.OpStatusR\rforwardStatus\x12)\n" +
-	"\x10forward_attempts\x18\x02 \x01(\x04R\x0fforwardAttempts\x12\x14\n" +
-	"\x05state\x18\x03 \x01(\fR\x05state\x12A\n" +
-	"\runwind_status\x18\x04 \x01(\x0e2\x1c.durable.storage.v1.OpStatusR\funwindStatus\x12'\n" +
-	"\x0funwind_attempts\x18\x05 \x01(\x04R\x0eunwindAttempts\"\x86\x02\n" +
+	"\aawaited\x18\v \x01(\v2\x18.durable.storage.v1.WakeR\aawaited\"\xcc\x01\n" +
+	"\x0fOperationRecord\x124\n" +
+	"\x06status\x18\x01 \x01(\x0e2\x1c.durable.storage.v1.OpStatusR\x06status\x12\x1a\n" +
+	"\battempts\x18\x02 \x01(\x04R\battempts\x12\x14\n" +
+	"\x05state\x18\x03 \x01(\fR\x05state\x12;\n" +
+	"\afailure\x18\x04 \x01(\v2!.durable.storage.v1.FailureRecordR\afailure\x12\x14\n" +
+	"\x05order\x18\x05 \x01(\rR\x05order\"\x86\x02\n" +
 	"\rFailureRecord\x12\x17\n" +
 	"\astep_id\x18\x01 \x01(\tR\x06stepId\x12/\n" +
 	"\x05phase\x18\x02 \x01(\x0e2\x19.durable.storage.v1.PhaseR\x05phase\x12\x18\n" +
@@ -1017,10 +972,7 @@ const file_durable_storage_v1_storage_proto_rawDesc = "" +
 	"\amessage\x18\x04 \x01(\tR\amessage\x12*\n" +
 	"\x02at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\x02at\x123\n" +
 	"\x04kind\x18\x06 \x01(\x0e2\x1f.durable.storage.v1.FailureKindR\x04kind\x12\x16\n" +
-	"\x06reason\x18\a \x01(\tR\x06reason\"|\n" +
-	"\bFailures\x125\n" +
-	"\x04root\x18\x01 \x01(\v2!.durable.storage.v1.FailureRecordR\x04root\x129\n" +
-	"\x06unwind\x18\x02 \x03(\v2!.durable.storage.v1.FailureRecordR\x06unwind\"Y\n" +
+	"\x06reason\x18\a \x01(\tR\x06reason\"Y\n" +
 	"\bTerminal\x125\n" +
 	"\aoutcome\x18\x01 \x01(\x0e2\x1b.durable.storage.v1.OutcomeR\aoutcome\x12\x16\n" +
 	"\x06output\x18\x02 \x01(\fR\x06output\"Q\n" +
@@ -1065,7 +1017,7 @@ func file_durable_storage_v1_storage_proto_rawDescGZIP() []byte {
 }
 
 var file_durable_storage_v1_storage_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
-var file_durable_storage_v1_storage_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
+var file_durable_storage_v1_storage_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
 var file_durable_storage_v1_storage_proto_goTypes = []any{
 	(Phase)(0),                    // 0: durable.storage.v1.Phase
 	(Outcome)(0),                  // 1: durable.storage.v1.Outcome
@@ -1076,39 +1028,36 @@ var file_durable_storage_v1_storage_proto_goTypes = []any{
 	(*Await)(nil),                 // 6: durable.storage.v1.Await
 	(*Wake)(nil),                  // 7: durable.storage.v1.Wake
 	(*Cursor)(nil),                // 8: durable.storage.v1.Cursor
-	(*StepRecord)(nil),            // 9: durable.storage.v1.StepRecord
+	(*OperationRecord)(nil),       // 9: durable.storage.v1.OperationRecord
 	(*FailureRecord)(nil),         // 10: durable.storage.v1.FailureRecord
-	(*Failures)(nil),              // 11: durable.storage.v1.Failures
-	(*Terminal)(nil),              // 12: durable.storage.v1.Terminal
-	(*CancelRequest)(nil),         // 13: durable.storage.v1.CancelRequest
-	nil,                           // 14: durable.storage.v1.RunMeta.AnnotationsEntry
-	(*timestamppb.Timestamp)(nil), // 15: google.protobuf.Timestamp
+	(*Terminal)(nil),              // 11: durable.storage.v1.Terminal
+	(*CancelRequest)(nil),         // 12: durable.storage.v1.CancelRequest
+	nil,                           // 13: durable.storage.v1.RunMeta.AnnotationsEntry
+	(*timestamppb.Timestamp)(nil), // 14: google.protobuf.Timestamp
 }
 var file_durable_storage_v1_storage_proto_depIdxs = []int32{
-	15, // 0: durable.storage.v1.RunMeta.created_at:type_name -> google.protobuf.Timestamp
-	14, // 1: durable.storage.v1.RunMeta.annotations:type_name -> durable.storage.v1.RunMeta.AnnotationsEntry
+	14, // 0: durable.storage.v1.RunMeta.created_at:type_name -> google.protobuf.Timestamp
+	13, // 1: durable.storage.v1.RunMeta.annotations:type_name -> durable.storage.v1.RunMeta.AnnotationsEntry
 	4,  // 2: durable.storage.v1.Await.mode:type_name -> durable.storage.v1.AwaitMode
-	15, // 3: durable.storage.v1.Await.deadline:type_name -> google.protobuf.Timestamp
+	14, // 3: durable.storage.v1.Await.deadline:type_name -> google.protobuf.Timestamp
 	0,  // 4: durable.storage.v1.Cursor.phase:type_name -> durable.storage.v1.Phase
-	15, // 5: durable.storage.v1.Cursor.next_attempt_at:type_name -> google.protobuf.Timestamp
-	15, // 6: durable.storage.v1.Cursor.last_error_at:type_name -> google.protobuf.Timestamp
-	15, // 7: durable.storage.v1.Cursor.updated_at:type_name -> google.protobuf.Timestamp
+	14, // 5: durable.storage.v1.Cursor.next_attempt_at:type_name -> google.protobuf.Timestamp
+	14, // 6: durable.storage.v1.Cursor.last_error_at:type_name -> google.protobuf.Timestamp
+	14, // 7: durable.storage.v1.Cursor.updated_at:type_name -> google.protobuf.Timestamp
 	6,  // 8: durable.storage.v1.Cursor.awaiting:type_name -> durable.storage.v1.Await
 	7,  // 9: durable.storage.v1.Cursor.awaited:type_name -> durable.storage.v1.Wake
-	2,  // 10: durable.storage.v1.StepRecord.forward_status:type_name -> durable.storage.v1.OpStatus
-	2,  // 11: durable.storage.v1.StepRecord.unwind_status:type_name -> durable.storage.v1.OpStatus
+	2,  // 10: durable.storage.v1.OperationRecord.status:type_name -> durable.storage.v1.OpStatus
+	10, // 11: durable.storage.v1.OperationRecord.failure:type_name -> durable.storage.v1.FailureRecord
 	0,  // 12: durable.storage.v1.FailureRecord.phase:type_name -> durable.storage.v1.Phase
-	15, // 13: durable.storage.v1.FailureRecord.at:type_name -> google.protobuf.Timestamp
+	14, // 13: durable.storage.v1.FailureRecord.at:type_name -> google.protobuf.Timestamp
 	3,  // 14: durable.storage.v1.FailureRecord.kind:type_name -> durable.storage.v1.FailureKind
-	10, // 15: durable.storage.v1.Failures.root:type_name -> durable.storage.v1.FailureRecord
-	10, // 16: durable.storage.v1.Failures.unwind:type_name -> durable.storage.v1.FailureRecord
-	1,  // 17: durable.storage.v1.Terminal.outcome:type_name -> durable.storage.v1.Outcome
-	15, // 18: durable.storage.v1.CancelRequest.at:type_name -> google.protobuf.Timestamp
-	19, // [19:19] is the sub-list for method output_type
-	19, // [19:19] is the sub-list for method input_type
-	19, // [19:19] is the sub-list for extension type_name
-	19, // [19:19] is the sub-list for extension extendee
-	0,  // [0:19] is the sub-list for field type_name
+	1,  // 15: durable.storage.v1.Terminal.outcome:type_name -> durable.storage.v1.Outcome
+	14, // 16: durable.storage.v1.CancelRequest.at:type_name -> google.protobuf.Timestamp
+	17, // [17:17] is the sub-list for method output_type
+	17, // [17:17] is the sub-list for method input_type
+	17, // [17:17] is the sub-list for extension type_name
+	17, // [17:17] is the sub-list for extension extendee
+	0,  // [0:17] is the sub-list for field type_name
 }
 
 func init() { file_durable_storage_v1_storage_proto_init() }
@@ -1122,7 +1071,7 @@ func file_durable_storage_v1_storage_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_durable_storage_v1_storage_proto_rawDesc), len(file_durable_storage_v1_storage_proto_rawDesc)),
 			NumEnums:      5,
-			NumMessages:   10,
+			NumMessages:   9,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

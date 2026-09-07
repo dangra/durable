@@ -105,12 +105,20 @@ message Cursor {
   Wake awaited = 11;
 }
 
-message StepRecord {
-  OpStatus forward_status = 1;
-  uint64 forward_attempts = 2;
+// OperationRecord is one operation of one step — its forward execution
+// or its unwind, told apart by the row key — written when the operation
+// resolves. The failure that resolved it, if any, lives here; the run's
+// root failure is a separate write-once row.
+message OperationRecord {
+  OpStatus status = 1;
+  uint64 attempts = 2;
+  // Committed step state: forward operations of state-producing steps,
+  // on success.
   bytes state = 3;
-  OpStatus unwind_status = 4;
-  uint64 unwind_attempts = 5;
+  // Set exactly when status is FAILED.
+  FailureRecord failure = 4;
+  // Resolution sequence within the run, from 1; 0 while unresolved.
+  uint32 order = 5;
 }
 
 message FailureRecord {
@@ -121,11 +129,6 @@ message FailureRecord {
   google.protobuf.Timestamp at = 5;
   FailureKind kind = 6;
   string reason = 7;
-}
-
-message Failures {
-  FailureRecord root = 1;
-  repeated FailureRecord unwind = 2;
 }
 
 // Terminal marks a run's committed terminal outcome and output.

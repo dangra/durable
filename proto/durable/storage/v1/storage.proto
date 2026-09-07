@@ -51,8 +51,10 @@ message RunMeta {
   string run_id = 1;
   string pipeline_id = 2;
   string resource_id = 3;
-  // Namespaced slot group ("pipeline/<id>" or "group/<name>").
-  string slot_group = 4;
+  // Field 4 held the persisted exclusion scope until exclusion became an
+  // admission-time rule over the engine's current definitions.
+  reserved 4;
+  reserved "slot_group";
   bytes input = 5;
   google.protobuf.Timestamp created_at = 6;
   // Caller-supplied propagation metadata, immutable after acceptance:

@@ -15,21 +15,18 @@ type boundDef struct {
 	cfg   pipelinedef.Config
 	steps map[durable.StepID]*pipelinedef.Step
 	topo  ledger.Topology
+
+	// exclusive is the pipeline's exclusion group as this deployment sees
+	// it — every bound pipeline sharing its ExclusionGroup, itself
+	// included — resolved at Start. It is passed to the store at each
+	// admission and never persisted, so a later deployment's view applies
+	// to new admissions at once and Runs in flight are never touched.
+	exclusive []durable.PipelineID
 }
 
 func (d *boundDef) ID() durable.PipelineID { return d.cfg.ID }
 
 func (d *boundDef) step(id durable.StepID) *pipelinedef.Step { return d.steps[id] }
-
-// slotGroup returns the namespaced exclusion scope for this pipeline's
-// Runs. The namespaces keep an explicit group name from accidentally
-// colliding with another pipeline's default per-pipeline scope.
-func (d *boundDef) slotGroup() string {
-	if d.cfg.ExclusionGroup != "" {
-		return "group/" + d.cfg.ExclusionGroup
-	}
-	return "pipeline/" + string(d.cfg.ID)
-}
 
 // Bind validates def and registers it with the Engine, returning the
 // Pipeline handle Runs are scheduled through. It is allowed only before

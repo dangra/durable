@@ -11,7 +11,11 @@ lint:
 breaking:
   use:
     - FILE
+    # Deleting a field is fine once its number and name are reserved: the
+    # storage schema is internal and the reservation keeps the wire safe.
+    - FIELD_NO_DELETE_UNLESS_NUMBER_RESERVED
   except:
+    - FIELD_NO_DELETE
     # go_package is a Go build concern, not a wire one: the internal
     # storage schema moved under store/internal. Review catches accidental
     # changes to the public durablepb path.

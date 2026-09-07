@@ -36,16 +36,18 @@ StepID
 The scheduling slot is:
 
 ```text
-(exclusion scope, ResourceID)
+(PipelineID, ResourceID)
 ```
 
-At most one nonterminal Run may occupy a slot.
+At most one nonterminal Run may occupy a slot. The slot is the Run's own
+identity, stamped once at creation and never reinterpreted, so it is the
+one thing about exclusion that persists.
 
-By default a Pipeline's exclusion scope is private to it, so the slot is
-effectively `(PipelineID, ResourceID)` and different Pipelines operate
+By default that is the whole rule: different Pipelines operate
 concurrently on the same `ResourceID`.
 
-A Pipeline MAY instead declare membership in a named **exclusion group**:
+A Pipeline MAY additionally declare membership in a named **exclusion
+group**:
 
 ```proto
 option (durable.v1.pipeline) = {
@@ -55,18 +57,46 @@ option (durable.v1.pipeline) = {
 };
 ```
 
-Pipelines sharing a group share one slot per resource: at most one
-nonterminal Run may exist across the whole group for a `ResourceID`. This
-models resources with multiple mutually exclusive lifecycle workflows
-(provision vs decommission vs migrate on one machine), while pipelines
-that deliberately coexist with them (a monitor) simply stay outside the
-group.
+A group is an **admission rule**, not a slot: when a member schedules on
+a `ResourceID`, the Run is admitted only if no member of the group — as
+the current deployment defines the group — has a nonterminal Run on that
+resource. This models resources with multiple mutually exclusive
+lifecycle workflows (provision vs decommission vs migrate on one
+machine), while pipelines that deliberately coexist with them (a
+monitor) simply stay outside the group.
 
-Scopes are namespaced (`pipeline/<id>` vs `group/<name>`) so a group name
-can never collide with another pipeline's default scope.
+Membership is resolved from the bound definitions at `Engine.Start` and
+handed to the Store at each admission; it is never persisted. That is
+what makes group changes converge on their own, which matters because a
+deployment switches the definition for every resource at once and
+draining per resource is not an option:
 
-Enforcement is atomic in the Store at Run creation — there is no
+- **Forming a group, or a pipeline joining one.** Runs already in flight
+  under the old rule keep executing and keep their own slots; from the
+  first admission under the new deployment, any of them blocks the whole
+  group on its resource. The overlap drains as they finish.
+- **Dissolving a group, or a pipeline leaving.** Its in-flight Runs stop
+  counting against the others from the next admission on.
+- **Renaming a group.** Nothing changes: membership is the same set.
+
+No Run is ever invalidated, aborted, or migrated because of a group
+change. A member's own `(PipelineID, ResourceID)` slot is always
+enforced, group or not, so duplicate scheduling within one pipeline
+behaves identically inside and outside a group.
+
+Enforcement is atomic in the Store at Run creation — the member slots
+are checked and the new Run written in one step; there is no
 check-then-schedule race.
+
+Two consequences worth knowing when composing pipelines:
+
+- A parent that schedules a child in its own group on its own resource
+  conflicts with itself: the `ScheduleConflictError` names the parent's
+  own `RunID`. Children of a grouped parent use a different resource or a
+  pipeline outside the group.
+- `GetActiveRun` is per pipeline even inside a group. When a sibling
+  holds the resource it reports none; `Schedule` is what reports the
+  sibling, through the conflict it returns.
 
 ---
 

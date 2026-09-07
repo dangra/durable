@@ -311,6 +311,7 @@ func (e *Engine) Start(ctx context.Context) error {
 	e.started = true
 	e.pipelines.Freeze()
 	e.stepOwner.Freeze()
+	e.resolveExclusionGroups()
 	e.baseCtx, e.cancel = context.WithCancelCause(context.Background())
 	e.dispCtx, e.drainCancel = context.WithCancel(e.baseCtx)
 	e.disp = dispatcher.New(dispatcher.Config[durable.RunID]{
@@ -1528,4 +1529,32 @@ func opState(s driver.OpStatus) ledger.OpState {
 	default:
 		return ledger.OpNone
 	}
+}
+
+// resolveExclusionGroups computes each bound pipeline's exclusion set
+// from this deployment's definitions: the members of its group, itself
+// included, or itself alone. Exclusion is an admission rule evaluated
+// against these sets, never a persisted fact, so a group change in the
+// next deployment converges by itself: in-flight Runs keep their own
+// (pipeline, resource) slots and finish, and new admissions obey the new
+// membership from the first Schedule on.
+func (e *Engine) resolveExclusionGroups() {
+	groups := map[string][]durable.PipelineID{}
+	e.pipelines.Range(func(id durable.PipelineID, d *boundDef) bool {
+		if g := d.cfg.ExclusionGroup; g != "" {
+			groups[g] = append(groups[g], id)
+		}
+		return true
+	})
+	for _, members := range groups {
+		slices.Sort(members)
+	}
+	e.pipelines.Range(func(id durable.PipelineID, d *boundDef) bool {
+		if g := d.cfg.ExclusionGroup; g != "" {
+			d.exclusive = groups[g]
+		} else {
+			d.exclusive = []durable.PipelineID{id}
+		}
+		return true
+	})
 }

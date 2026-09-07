@@ -139,9 +139,9 @@ func (s *observedStore) op(name string, write bool, start time.Time, err error) 
 	s.engine.emitStoreOp(observe.StoreOpEvent{Op: name, Write: write, Duration: s.engine.clock.Now().Sub(start), Err: err})
 }
 
-func (s *observedStore) CreateRun(ctx context.Context, rec *driver.RunRecord) (*driver.RunRecord, bool, error) {
+func (s *observedStore) CreateRun(ctx context.Context, rec *driver.RunRecord, excluding []durable.PipelineID) (*driver.RunRecord, bool, error) {
 	start := s.engine.clock.Now()
-	existing, created, err := s.inner.CreateRun(ctx, rec)
+	existing, created, err := s.inner.CreateRun(ctx, rec, excluding)
 	s.op("CreateRun", true, start, err)
 	return existing, created, err
 }
@@ -188,9 +188,9 @@ func (s *observedStore) ListRuns(ctx context.Context, pipeline durable.PipelineI
 	return recs, err
 }
 
-func (s *observedStore) GetActiveRunID(ctx context.Context, group string, resource durable.ResourceID) (durable.RunID, bool, error) {
+func (s *observedStore) GetActiveRunID(ctx context.Context, pipeline durable.PipelineID, resource durable.ResourceID) (durable.RunID, bool, error) {
 	start := s.engine.clock.Now()
-	id, ok, err := s.inner.GetActiveRunID(ctx, group, resource)
+	id, ok, err := s.inner.GetActiveRunID(ctx, pipeline, resource)
 	s.op("GetActiveRunID", false, start, err)
 	return id, ok, err
 }

@@ -1143,7 +1143,7 @@ func TestAwaitEmptyParkFromStoreIsInvalid(t *testing.T) {
 		Phase: durable.PhaseForward, Steps: map[durable.StepID]*driver.StepRecord{},
 		CreatedAt: now, UpdatedAt: now,
 	}
-	if _, _, err := store.CreateRun(context.Background(), rec); err != nil {
+	if _, _, err := store.CreateRun(context.Background(), rec, nil); err != nil {
 		t.Fatalf("CreateRun: %v", err)
 	}
 	if err := store.ApplyTransition(context.Background(), rec.RunID, driver.Transition{Cursor: driver.Cursor{

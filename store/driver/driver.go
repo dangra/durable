@@ -108,12 +108,6 @@ type RunRecord struct {
 	PipelineID kernel.PipelineID
 	ResourceID kernel.ResourceID
 
-	// Group is the namespaced exclusion scope this Run's slot belongs to
-	// ("pipeline/<id>" or "group/<name>"), set by the engine at
-	// acceptance. Stores use SlotGroup, which falls back to the
-	// per-pipeline scope for records without one.
-	Group string
-
 	// Annotations are caller-supplied propagation metadata (trace
 	// contexts, tenant tags), set once at acceptance and immutable for
 	// the life of the Run. They are never part of duplicate-scheduling
@@ -162,15 +156,6 @@ type RunRecord struct {
 
 // Terminal reports whether the Run has a committed terminal outcome.
 func (r *RunRecord) Terminal() bool { return r.Outcome != nil }
-
-// SlotGroup returns the exclusion scope of the Run's resource slot. At
-// most one nonterminal Run may occupy (SlotGroup, ResourceID).
-func (r *RunRecord) SlotGroup() string {
-	if r.Group != "" {
-		return r.Group
-	}
-	return "pipeline/" + string(r.PipelineID)
-}
 
 // Step returns the StepRecord for id, creating it if absent.
 func (r *RunRecord) Step(id kernel.StepID) *StepRecord {
@@ -234,15 +219,19 @@ func (r *RunRecord) Clone() *RunRecord {
 // sites enforce it — so implementations may use NUL as a key separator
 // and protobuf string fields for text.
 type Store interface {
-	// CreateRun persists rec if no nonterminal Run occupies its
-	// (SlotGroup, ResourceID) slot, returning (nil, true, nil).
+	// CreateRun persists rec unless a nonterminal Run already occupies
+	// the (PipelineID, ResourceID) slot of rec's own pipeline or of any
+	// pipeline in excluding, for rec.ResourceID — returning (nil, true,
+	// nil) when it persisted, or the occupying record with created=false
+	// when it did not. The check and the write are one atomic step.
+	// excluding is the engine's view of rec's exclusion group at
+	// admission time; it is not persisted, which is what lets a group
+	// change in a later deployment apply to new admissions at once
+	// without touching Runs in flight.
 	// rec.RunID must be fresh: the engine's ULID generation guarantees
 	// it, and behavior on reusing the id of an existing (even terminal)
 	// Run is undefined.
-	// If a nonterminal Run occupies the slot — possibly belonging to a
-	// different pipeline in the same exclusion group — it returns that
-	// record with created=false and does not persist rec.
-	CreateRun(ctx context.Context, rec *RunRecord) (existing *RunRecord, created bool, err error)
+	CreateRun(ctx context.Context, rec *RunRecord, excluding []kernel.PipelineID) (existing *RunRecord, created bool, err error)
 
 	// GetRun returns the record for id, or kernel.ErrRunNotFound.
 	GetRun(ctx context.Context, id kernel.RunID) (*RunRecord, error)
@@ -275,12 +264,12 @@ type Store interface {
 	// scan.
 	ListRuns(ctx context.Context, pipeline kernel.PipelineID, resource kernel.ResourceID) ([]*RunRecord, error)
 
-	// GetActiveRunID returns the RunID occupying the (group, resource)
-	// slot — the one nonterminal Run of that scope — or ok=false when the
-	// slot is free. It is an indexed read: implementations answer it from
-	// the structure CreateRun consults to enforce the slot, never by
-	// scanning. group is RunRecord.SlotGroup's value.
-	GetActiveRunID(ctx context.Context, group string, resource kernel.ResourceID) (kernel.RunID, bool, error)
+	// GetActiveRunID returns the RunID occupying the (pipeline, resource)
+	// slot — the pipeline's one nonterminal Run on the resource — or
+	// ok=false when the slot is free. It is an indexed read:
+	// implementations answer it from the structure CreateRun consults to
+	// enforce the slot, never by scanning.
+	GetActiveRunID(ctx context.Context, pipeline kernel.PipelineID, resource kernel.ResourceID) (kernel.RunID, bool, error)
 
 	Close() error
 }

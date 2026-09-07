@@ -166,7 +166,7 @@ anywhere would have helped) vs the default `system` (page someone) —
 and surface on the `Result`, on log lines, and as metric labels.
 Errors anywhere in the chain can also carry them via the
 `FailureReasoner`/`FailureKinder` interfaces. Runnable:
-[`ExampleFail`](https://pkg.go.dev/github.com/dangra/durable#example-Fail).
+[`ExampleFail`](https://pkg.go.dev/github.com/dangra/durable/engine#example-Fail).
 
 ## Unwind: rollback as a first-class phase
 
@@ -250,7 +250,7 @@ func (h *shiftTraffic) Run(ctx context.Context, inv deploypb.ShiftTrafficInvocat
 }
 ```
 
-Runnable: [`ExampleRun_Cancel`](https://pkg.go.dev/github.com/dangra/durable#example-Run_Cancel).
+Runnable: [`ExampleRun_Cancel`](https://pkg.go.dev/github.com/dangra/durable/engine#example-Run_Cancel).
 
 ### What about context.Context?
 
@@ -362,7 +362,7 @@ attempt returns an ordinary error, or the process restarts while it is
 running, the retry still sees it.
 Awaits must not form a cycle; a cycle-closing park makes the run
 invalid. Runnable:
-[`ExampleAwaitRun`](https://pkg.go.dev/github.com/dangra/durable#example-AwaitRun).
+[`ExampleAwaitRun`](https://pkg.go.dev/github.com/dangra/durable/engine#example-AwaitRun).
 
 **Fan-out.** A step can park on several runs at once. `AwaitAll` wakes
 once, when the last of them is terminal; `AwaitAny` wakes as soon as
@@ -425,7 +425,7 @@ while a run is active on a resource, scheduling the same input again
 returns the *existing* run with `created=false` — safe under
 at-least-once callers like message consumers. Scheduling a *different*
 input on a busy resource is a `*ScheduleConflictError`. Runnable:
-[`ExamplePipeline_Schedule`](https://pkg.go.dev/github.com/dangra/durable#example-Pipeline_Schedule).
+[`ExamplePipeline_Schedule`](https://pkg.go.dev/github.com/dangra/durable/engine#example-Pipeline_Schedule).
 
 **Exclusion groups: one run per resource, across pipelines.** A
 `deploy-service` and a `rollback-service` pipeline must not both act on
@@ -440,7 +440,10 @@ option (durable.v1.pipeline) = {
 ```
 
 Pipelines sharing a group allow at most one nonterminal run per
-resource across the whole group.
+resource across the whole group. Membership is a property of the
+deployment, not of the stored runs: add, remove, or rename a group and
+the new rule applies to the next `Schedule` everywhere at once, while
+runs already in flight simply finish.
 
 **Concurrency classes: bounded parallel work.** At most three deploys
 per cluster touching the load balancer, regardless of how many runs are
@@ -457,7 +460,7 @@ eng := engine.New(store, engine.WithConcurrencyClass("lb", 3))
 Tokens are execution-scoped: held only while a handler runs, never
 across retry waits, parks, or restarts — a parked release train
 consumes nothing. Runnable:
-[`ExampleWithConcurrencyClass`](https://pkg.go.dev/github.com/dangra/durable#example-WithConcurrencyClass).
+[`ExampleWithConcurrencyClass`](https://pkg.go.dev/github.com/dangra/durable/engine#example-WithConcurrencyClass).
 
 ## Time: delayed starts and retention
 
@@ -478,7 +481,7 @@ eng := engine.New(store,
     engine.WithRetention(engine.RetentionPolicy{TerminalAfter: 30 * 24 * time.Hour}))
 ```
 
-Runnable: [`ExampleStartAfter`](https://pkg.go.dev/github.com/dangra/durable#example-StartAfter).
+Runnable: [`ExampleStartAfter`](https://pkg.go.dev/github.com/dangra/durable/engine#example-StartAfter).
 
 ## Evolving a pipeline with runs in flight
 

@@ -22,21 +22,21 @@ import (
 // empty byte slices normalized to nil, and the Steps map as a sorted
 // slice.
 type canonRecord struct {
-	RunID, PipelineID, ResourceID, Group string
-	Annotations                          map[string]string
-	Input                                []byte
-	Phase                                durable.Phase
-	Steps                                []canonStep
-	Root                                 *durable.RootFailure
-	UnwindFailures                       []durable.UnwindFailure
-	Output                               []byte
-	Outcome                              *durable.Outcome
-	NextAttemptAt, LastErrorAt           int64
-	Awaiting                             *canonAwait
-	Awaited                              *kernel.Wake
-	LastError, LastReason                string
-	Cancel                               *canonCancel
-	CreatedAt, UpdatedAt                 int64
+	RunID, PipelineID, ResourceID string
+	Annotations                   map[string]string
+	Input                         []byte
+	Phase                         durable.Phase
+	Steps                         []canonStep
+	Root                          *durable.RootFailure
+	UnwindFailures                []durable.UnwindFailure
+	Output                        []byte
+	Outcome                       *durable.Outcome
+	NextAttemptAt, LastErrorAt    int64
+	Awaiting                      *canonAwait
+	Awaited                       *kernel.Wake
+	LastError, LastReason         string
+	Cancel                        *canonCancel
+	CreatedAt, UpdatedAt          int64
 }
 
 type canonStep struct {
@@ -80,8 +80,8 @@ func canonicalize(rec *driver.RunRecord) *canonRecord {
 	}
 	c := &canonRecord{
 		RunID: string(rec.RunID), PipelineID: string(rec.PipelineID),
-		ResourceID: string(rec.ResourceID), Group: rec.SlotGroup(),
-		Input: normBytes(rec.Input), Phase: rec.Phase,
+		ResourceID: string(rec.ResourceID),
+		Input:      normBytes(rec.Input), Phase: rec.Phase,
 		Annotations:   rec.Annotations,
 		Output:        normBytes(rec.Output),
 		NextAttemptAt: nanos(rec.NextAttemptAt), LastErrorAt: nanos(rec.LastErrorAt),
@@ -136,7 +136,6 @@ func FuzzStoreContract(f *testing.F) {
 		}
 		pipelines := []durable.PipelineID{"p1", "p2"}
 		resources := []durable.ResourceID{"r1", "r2"}
-		groups := []string{"", "group/g1"}
 		steps := []durable.StepID{"s1/v1", "s2/v1"}
 		outcomes := []durable.Outcome{durable.OutcomeSuccess, durable.OutcomeFailure}
 
@@ -177,7 +176,6 @@ func FuzzStoreContract(f *testing.F) {
 					RunID:      id,
 					PipelineID: pipelines[int(arg/4)%len(pipelines)],
 					ResourceID: resources[int(arg/8)%len(resources)],
-					Group:      groups[int(arg/16)%len(groups)],
 					Input:      normBytes([]byte{arg}),
 					Phase:      durable.PhaseForward,
 					Steps:      map[durable.StepID]*driver.StepRecord{},
@@ -194,14 +192,20 @@ func FuzzStoreContract(f *testing.F) {
 				// reusing any existing id — terminal, or live under a
 				// different slot — is undefined. The one in-contract
 				// re-create is the dedup probe: a live id occupying the
-				// same (group, resource) slot.
+				// same (pipeline, resource) slot.
 				if prev, err := ms.GetRun(ctx, id); err == nil {
-					if prev.Terminal() || prev.SlotGroup() != rec.SlotGroup() || prev.ResourceID != rec.ResourceID {
+					if prev.Terminal() || prev.PipelineID != rec.PipelineID || prev.ResourceID != rec.ResourceID {
 						continue
 					}
 				}
-				bex, bcreated, berr := bs.CreateRun(ctx, rec)
-				mex, mcreated, merr := ms.CreateRun(ctx, rec)
+				// Exclusion set: the pipeline alone, or every pipeline as
+				// one group — the two shapes an engine deployment produces.
+				var excluding []durable.PipelineID
+				if arg&0x10 != 0 {
+					excluding = pipelines
+				}
+				bex, bcreated, berr := bs.CreateRun(ctx, rec, excluding)
+				mex, mcreated, merr := ms.CreateRun(ctx, rec, excluding)
 				mustEqual("CreateRun error", berr, merr)
 				mustEqual("CreateRun created", bcreated, mcreated)
 				mustEqual("CreateRun existing", canonicalize(bex), canonicalize(mex))
@@ -305,14 +309,10 @@ func FuzzStoreContract(f *testing.F) {
 				}
 				mustEqual("ListRuns", bc, mc)
 				// GetActiveRunID: the indexed slot read agrees with the
-				// reference for every group the slot could belong to.
-				for _, g := range groups {
-					sg := g // records carry the namespaced group as the engine sets it
-					if sg == "" {
-						sg = "pipeline/" + string(p)
-					}
-					bid, bok, berr := bs.GetActiveRunID(ctx, sg, res)
-					mid, mok, merr := ms.GetActiveRunID(ctx, sg, res)
+				// reference for every pipeline on the resource.
+				for _, pp := range pipelines {
+					bid, bok, berr := bs.GetActiveRunID(ctx, pp, res)
+					mid, mok, merr := ms.GetActiveRunID(ctx, pp, res)
 					mustEqual("GetActiveRunID error", berr, merr)
 					mustEqual("GetActiveRunID ok", bok, mok)
 					mustEqual("GetActiveRunID id", bid, mid)

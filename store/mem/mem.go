@@ -21,7 +21,7 @@ import (
 type Store struct {
 	mu   sync.Mutex
 	runs map[kernel.RunID]*driver.RunRecord
-	// slots indexes the nonterminal Run per (group, resource): the
+	// slots indexes the nonterminal Run per (pipeline, resource): the
 	// structure CreateRun enforces exclusion with and GetActiveRunID
 	// answers from. Released when a Run commits its Outcome.
 	slots map[string]kernel.RunID
@@ -32,26 +32,30 @@ func New() *Store {
 	return &Store{runs: make(map[kernel.RunID]*driver.RunRecord), slots: make(map[string]kernel.RunID)}
 }
 
-func slotKey(group string, resource kernel.ResourceID) string {
-	return group + "\x00" + string(resource)
+func slotKey(pipeline kernel.PipelineID, resource kernel.ResourceID) string {
+	return string(pipeline) + "\x00" + string(resource)
 }
 
-func (s *Store) CreateRun(_ context.Context, rec *driver.RunRecord) (*driver.RunRecord, bool, error) {
+func (s *Store) CreateRun(_ context.Context, rec *driver.RunRecord, excluding []kernel.PipelineID) (*driver.RunRecord, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	key := slotKey(rec.SlotGroup(), rec.ResourceID)
-	if active, ok := s.slots[key]; ok {
+	if active, ok := s.slots[slotKey(rec.PipelineID, rec.ResourceID)]; ok {
 		return s.runs[active].Clone(), false, nil
 	}
+	for _, p := range excluding {
+		if active, ok := s.slots[slotKey(p, rec.ResourceID)]; ok {
+			return s.runs[active].Clone(), false, nil
+		}
+	}
 	s.runs[rec.RunID] = rec.Clone()
-	s.slots[key] = rec.RunID
+	s.slots[slotKey(rec.PipelineID, rec.ResourceID)] = rec.RunID
 	return nil, true, nil
 }
 
-func (s *Store) GetActiveRunID(_ context.Context, group string, resource kernel.ResourceID) (kernel.RunID, bool, error) {
+func (s *Store) GetActiveRunID(_ context.Context, pipeline kernel.PipelineID, resource kernel.ResourceID) (kernel.RunID, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	id, ok := s.slots[slotKey(group, resource)]
+	id, ok := s.slots[slotKey(pipeline, resource)]
 	return id, ok, nil
 }
 
@@ -114,7 +118,7 @@ func (s *Store) ApplyTransition(_ context.Context, id kernel.RunID, t driver.Tra
 		rec.Outcome = &oc
 		rec.Output = append([]byte(nil), t.Output...)
 		// Terminality releases the resource slot.
-		if key := slotKey(rec.SlotGroup(), rec.ResourceID); s.slots[key] == id {
+		if key := slotKey(rec.PipelineID, rec.ResourceID); s.slots[key] == id {
 			delete(s.slots, key)
 		}
 	}

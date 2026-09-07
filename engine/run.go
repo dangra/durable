@@ -130,11 +130,11 @@ func (r Run) Status(ctx context.Context) (Status, error) {
 		st.CancelCause = rec.Cancel.Cause
 	}
 	for id, sr := range rec.Steps {
-		if sr.ForwardStatus == driver.OpUnresolved {
-			st.StepID, st.Attempt = id, sr.ForwardAttempts
+		if sr.Forward.Status == driver.OpUnresolved {
+			st.StepID, st.Attempt = id, sr.Forward.Attempts
 		}
-		if sr.UnwindStatus == driver.OpUnresolved {
-			st.StepID, st.Attempt = id, sr.UnwindAttempts
+		if sr.Unwind.Status == driver.OpUnresolved {
+			st.StepID, st.Attempt = id, sr.Unwind.Attempts
 		}
 	}
 	switch {
@@ -213,7 +213,7 @@ func (r Run) OutputBytes(ctx context.Context) ([]byte, error) {
 // Run, distinguishing a delayed start from a retry wait.
 func started(rec *driver.RunRecord) bool {
 	for _, sr := range rec.Steps {
-		if sr.ForwardAttempts > 0 || sr.UnwindAttempts > 0 {
+		if sr.Forward.Attempts > 0 || sr.Unwind.Attempts > 0 {
 			return true
 		}
 	}
@@ -221,10 +221,7 @@ func started(rec *driver.RunRecord) bool {
 }
 
 func resultOf(rec *driver.RunRecord) Result {
-	res := Result{
-		Outcome:        *rec.Outcome,
-		UnwindFailures: append([]durable.UnwindFailure(nil), rec.UnwindFailures...),
-	}
+	res := Result{Outcome: *rec.Outcome}
 	if rec.RootFailure != nil {
 		rf := *rec.RootFailure
 		res.RootFailure = &rf

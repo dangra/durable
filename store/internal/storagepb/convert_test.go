@@ -123,29 +123,36 @@ func TestCursorDecodesLegacyPark(t *testing.T) {
 	}
 }
 
-func TestStepRecordRoundTrip(t *testing.T) {
-	sr := &driver.StepRecord{
-		ForwardStatus:   driver.OpSucceeded,
-		ForwardAttempts: 3,
-		State:           []byte{1, 2, 3},
-		UnwindStatus:    driver.OpUnresolved,
-		UnwindAttempts:  2,
-	}
-	b, err := MarshalStepRecord(sr)
-	if err != nil {
-		t.Fatalf("MarshalStepRecord: %v", err)
-	}
-	got, err := UnmarshalStepRecord(b)
-	if err != nil {
-		t.Fatalf("UnmarshalStepRecord: %v", err)
-	}
-	if !reflect.DeepEqual(sr, got) {
-		t.Fatalf("round trip mismatch:\n got: %+v\nwant: %+v", got, sr)
+func TestOperationRecordRoundTrip(t *testing.T) {
+	for _, op := range []driver.OperationRecord{
+		{Status: driver.OpSucceeded, Attempts: 3, State: []byte{1, 2, 3}, Order: 7},
+		{Status: driver.OpUnresolved, Attempts: 2},
+		{Status: driver.OpFailed, Attempts: 4, Order: 9, Failure: &kernel.FailureRecord{
+			StepID:  "reserve/v1",
+			Phase:   kernel.PhaseUnwind,
+			Attempt: 4,
+			Message: "release rejected",
+			At:      at(200),
+			Kind:    kernel.FailureKindSystem,
+			Reason:  "release-rejected",
+		}},
+	} {
+		b, err := MarshalOperationRecord(&op)
+		if err != nil {
+			t.Fatalf("MarshalOperationRecord: %v", err)
+		}
+		got, err := UnmarshalOperationRecord(b)
+		if err != nil {
+			t.Fatalf("UnmarshalOperationRecord: %v", err)
+		}
+		if !reflect.DeepEqual(op, got) {
+			t.Fatalf("round trip mismatch:\n got: %+v\nwant: %+v", got, op)
+		}
 	}
 }
 
-func TestFailuresRoundTrip(t *testing.T) {
-	root := &kernel.RootFailure{FailureRecord: kernel.FailureRecord{
+func TestFailureRecordRoundTrip(t *testing.T) {
+	root := kernel.FailureRecord{
 		StepID:  "create/v1",
 		Phase:   kernel.PhaseForward,
 		Attempt: 5,
@@ -153,37 +160,26 @@ func TestFailuresRoundTrip(t *testing.T) {
 		At:      at(100),
 		Kind:    kernel.FailureKindUser,
 		Reason:  "insufficient-capacity",
-	}}
-	unwind := []kernel.UnwindFailure{{FailureRecord: kernel.FailureRecord{
-		StepID:  "reserve/v1",
-		Phase:   kernel.PhaseUnwind,
-		Attempt: 1,
-		Message: "release rejected",
-		At:      at(200),
-		Kind:    kernel.FailureKindSystem,
-		Reason:  "release-rejected",
-	}}}
-	b, err := MarshalFailures(root, unwind)
+	}
+	b, err := MarshalFailureRecord(root)
 	if err != nil {
-		t.Fatalf("MarshalFailures: %v", err)
+		t.Fatalf("MarshalFailureRecord: %v", err)
 	}
-	gotRoot, gotUnwind, err := UnmarshalFailures(b)
+	got, err := UnmarshalFailureRecord(b)
 	if err != nil {
-		t.Fatalf("UnmarshalFailures: %v", err)
+		t.Fatalf("UnmarshalFailureRecord: %v", err)
 	}
-	if !reflect.DeepEqual(root, gotRoot) || !reflect.DeepEqual(unwind, gotUnwind) {
-		t.Fatalf("round trip mismatch:\n got: %+v %+v\nwant: %+v %+v", gotRoot, gotUnwind, root, unwind)
+	if !reflect.DeepEqual(root, got) {
+		t.Fatalf("round trip mismatch:\n got: %+v\nwant: %+v", got, root)
 	}
-	// Cancellation roots have no StepID and no unwind failures yet.
-	b, err = MarshalFailures(&kernel.RootFailure{FailureRecord: kernel.FailureRecord{
-		Message: "canceled", At: at(1), Kind: kernel.FailureKindCanceled,
-	}}, nil)
+	// Cancellation roots have no StepID.
+	b, err = MarshalFailureRecord(kernel.FailureRecord{Message: "canceled", At: at(1), Kind: kernel.FailureKindCanceled})
 	if err != nil {
-		t.Fatalf("MarshalFailures: %v", err)
+		t.Fatalf("MarshalFailureRecord: %v", err)
 	}
-	gotRoot, gotUnwind, err = UnmarshalFailures(b)
-	if err != nil || gotRoot == nil || gotRoot.Kind != kernel.FailureKindCanceled || gotUnwind != nil {
-		t.Fatalf("cancel root round trip = %+v %+v %v", gotRoot, gotUnwind, err)
+	got, err = UnmarshalFailureRecord(b)
+	if err != nil || got.StepID != "" || got.Kind != kernel.FailureKindCanceled {
+		t.Fatalf("cancel root round trip = %+v %v", got, err)
 	}
 }
 

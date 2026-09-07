@@ -79,9 +79,6 @@ func TestSnapshotUnwindsOnCatalogFull(t *testing.T) {
 	if rf.StepID != "register-snapshot/v1" || rf.Kind != durable.FailureKindUser || rf.Reason != "catalog-full" {
 		t.Fatalf("RootFailure = %+v", rf)
 	}
-	if len(result.UnwindFailures) != 0 {
-		t.Fatalf("UnwindFailures = %+v; want a clean unwind", result.UnwindFailures)
-	}
 	if w.uploaded != 1 || len(w.objects) != 0 {
 		t.Fatalf("uploaded = %d, objects = %v; want the one upload deleted by unwind", w.uploaded, w.objects)
 	}

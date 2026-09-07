@@ -52,12 +52,14 @@ func (s RunState) String() string {
 }
 
 // Result is the terminal result of a Run. An invalid nonterminal Run does
-// not produce a Result.
+// not produce a Result. A failed Run carries the RootFailure that started
+// its unwind; what each unwind step did with it is a fact on that step's
+// operation record, read by later unwind handlers through
+// Invocation.Failure, and is not part of the Result.
 type Result struct {
 	Outcome durable.Outcome
 
-	RootFailure    *durable.RootFailure
-	UnwindFailures []durable.UnwindFailure
+	RootFailure *durable.RootFailure
 }
 
 func (r Result) Succeeded() bool { return r.Outcome == durable.OutcomeSuccess }

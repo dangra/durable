@@ -4,8 +4,9 @@
 // to this module's store implementations.
 //
 // A run is stored as components with distinct write cadences: RunMeta
-// (once), StepRecord rows (once per resolution), Failures/Terminal/
-// CancelRequest (rare), and the small Cursor (every attempt).
+// (once), one OperationRecord row per step operation (once, at its
+// resolution, carrying its own failure), the root FailureRecord, Terminal,
+// and CancelRequest (once each), and the small Cursor (every attempt).
 package storagepb
 
 import (
@@ -188,57 +189,51 @@ func awaitModeFromProto(m AwaitMode) kernel.AwaitMode {
 	}
 }
 
-func MarshalStepRecord(sr *driver.StepRecord) ([]byte, error) {
-	return marshal("step record", &StepRecord{
-		ForwardStatus:   opStatusToProto(sr.ForwardStatus),
-		ForwardAttempts: sr.ForwardAttempts,
-		State:           sr.State,
-		UnwindStatus:    opStatusToProto(sr.UnwindStatus),
-		UnwindAttempts:  sr.UnwindAttempts,
-	})
+// MarshalOperationRecord encodes one operation's facts; the row key names
+// the step and phase.
+func MarshalOperationRecord(op *driver.OperationRecord) ([]byte, error) {
+	pb := &OperationRecord{
+		Status:   opStatusToProto(op.Status),
+		Attempts: op.Attempts,
+		State:    op.State,
+		Order:    op.Order,
+	}
+	if op.Failure != nil {
+		pb.Failure = failureRecordToProto(op.Failure)
+	}
+	return marshal("operation record", pb)
 }
 
-func UnmarshalStepRecord(b []byte) (*driver.StepRecord, error) {
-	pb := &StepRecord{}
-	if err := unmarshal("step record", b, pb); err != nil {
-		return nil, err
+func UnmarshalOperationRecord(b []byte) (driver.OperationRecord, error) {
+	pb := &OperationRecord{}
+	if err := unmarshal("operation record", b, pb); err != nil {
+		return driver.OperationRecord{}, err
 	}
-	return &driver.StepRecord{
-		ForwardStatus:   opStatusFromProto(pb.GetForwardStatus()),
-		ForwardAttempts: pb.GetForwardAttempts(),
-		State:           pb.GetState(),
-		UnwindStatus:    opStatusFromProto(pb.GetUnwindStatus()),
-		UnwindAttempts:  pb.GetUnwindAttempts(),
-	}, nil
+	op := driver.OperationRecord{
+		Status:   opStatusFromProto(pb.GetStatus()),
+		Attempts: pb.GetAttempts(),
+		State:    pb.GetState(),
+		Order:    pb.GetOrder(),
+	}
+	if pb.GetFailure() != nil {
+		f := failureRecordFromProto(pb.GetFailure())
+		op.Failure = &f
+	}
+	return op, nil
 }
 
-func MarshalFailures(root *kernel.RootFailure, unwind []kernel.UnwindFailure) ([]byte, error) {
-	pb := &Failures{}
-	if root != nil {
-		f := root.FailureRecord
-		pb.Root = failureRecordToProto(&f)
-	}
-	for _, uf := range unwind {
-		f := uf.FailureRecord
-		pb.Unwind = append(pb.Unwind, failureRecordToProto(&f))
-	}
-	return marshal("failures", pb)
+// MarshalFailureRecord encodes one failure record on its own: the run's
+// write-once root failure row.
+func MarshalFailureRecord(f kernel.FailureRecord) ([]byte, error) {
+	return marshal("failure record", failureRecordToProto(&f))
 }
 
-func UnmarshalFailures(b []byte) (*kernel.RootFailure, []kernel.UnwindFailure, error) {
-	pb := &Failures{}
-	if err := unmarshal("failures", b, pb); err != nil {
-		return nil, nil, err
+func UnmarshalFailureRecord(b []byte) (kernel.FailureRecord, error) {
+	pb := &FailureRecord{}
+	if err := unmarshal("failure record", b, pb); err != nil {
+		return kernel.FailureRecord{}, err
 	}
-	var root *kernel.RootFailure
-	if pb.GetRoot() != nil {
-		root = &kernel.RootFailure{FailureRecord: failureRecordFromProto(pb.GetRoot())}
-	}
-	var unwind []kernel.UnwindFailure
-	for _, f := range pb.GetUnwind() {
-		unwind = append(unwind, kernel.UnwindFailure{FailureRecord: failureRecordFromProto(f)})
-	}
-	return root, unwind, nil
+	return failureRecordFromProto(pb), nil
 }
 
 func MarshalTerminal(outcome kernel.Outcome, output []byte) ([]byte, error) {

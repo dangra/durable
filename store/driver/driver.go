@@ -10,6 +10,7 @@ package driver
 
 import (
 	"context"
+	"sort"
 	"time"
 
 	"github.com/dangra/durable/kernel"
@@ -29,16 +30,38 @@ const (
 	OpFailed
 )
 
-// StepRecord holds the durable execution facts of one Step for one Run.
-type StepRecord struct {
-	ForwardStatus   OpStatus
-	ForwardAttempts uint64
-	// State is the committed Step State, present only when ForwardStatus
-	// is OpSucceeded and the Step is state-producing.
+// OperationRecord holds the durable facts of one operation — a Step's
+// forward execution or its unwind — for one Run. Stores persist each
+// operation as its own row, written when the operation resolves, so an
+// unwind never rewrites the forward row's State.
+type OperationRecord struct {
+	Status   OpStatus
+	Attempts uint64
+	// State is the committed Step State: set on the forward operation of a
+	// state-producing Step once it succeeded, nil otherwise.
 	State []byte
+	// Failure is the permanent failure that resolved the operation, set
+	// exactly when Status is OpFailed.
+	Failure *kernel.FailureRecord
+	// Order is the operation's resolution sequence within the Run, from 1
+	// in the order operations resolved; 0 while unresolved. It is what
+	// puts unwind failures in execution order without the store knowing
+	// the topology.
+	Order uint32
+}
 
-	UnwindStatus   OpStatus
-	UnwindAttempts uint64
+// StepRecord is the pair of operations of one Step for one Run.
+type StepRecord struct {
+	Forward OperationRecord
+	Unwind  OperationRecord
+}
+
+// Op returns the half of the record for phase.
+func (sr *StepRecord) Op(phase kernel.Phase) *OperationRecord {
+	if phase == kernel.PhaseUnwind {
+		return &sr.Unwind
+	}
+	return &sr.Forward
 }
 
 // CancelRequest is a durable request to cancel a Run. The first request
@@ -75,24 +98,28 @@ type Cursor struct {
 	UpdatedAt     time.Time
 }
 
-// StepWrite upserts the durable facts of one Step.
-type StepWrite struct {
+// OpWrite upserts the durable facts of one operation of one Step.
+type OpWrite struct {
 	StepID kernel.StepID
-	Record StepRecord
+	Phase  kernel.Phase
+	Record OperationRecord
 }
 
 // Transition is one atomic durable state change of a Run: the Cursor is
-// always applied; the remaining fields carry the write-once or append-only
-// facts the transition produced, if any.
+// always applied; the remaining fields carry the write-once facts the
+// transition produced, if any.
 type Transition struct {
 	Cursor Cursor
 
-	Steps []StepWrite
+	// Ops are the operations this transition resolved or reserved, each
+	// written whole; a permanent failure rides in the record's Failure.
+	Ops []OpWrite
 
-	// RootFailure is set at most once per Run.
+	// RootFailure is set at most once per Run: the failure that ended the
+	// forward phase. A step's own permanent failure is on its operation
+	// record; a cancellation has no resolving operation, which is why the
+	// root failure is a Run-level fact.
 	RootFailure *kernel.RootFailure
-	// UnwindFailure is appended.
-	UnwindFailure *kernel.UnwindFailure
 
 	// Outcome commits terminality; Output accompanies a successful
 	// outcome for Output-producing pipelines. Committing an Outcome
@@ -119,8 +146,7 @@ type RunRecord struct {
 	Phase kernel.Phase
 	Steps map[kernel.StepID]*StepRecord
 
-	RootFailure    *kernel.RootFailure
-	UnwindFailures []kernel.UnwindFailure
+	RootFailure *kernel.RootFailure
 
 	Output []byte
 	// Outcome is set only once the Run is terminal.
@@ -154,6 +180,15 @@ type RunRecord struct {
 	UpdatedAt time.Time
 }
 
+func (o OperationRecord) clone() OperationRecord {
+	o.State = append([]byte(nil), o.State...)
+	if o.Failure != nil {
+		f := *o.Failure
+		o.Failure = &f
+	}
+	return o
+}
+
 // Terminal reports whether the Run has a committed terminal outcome.
 func (r *RunRecord) Terminal() bool { return r.Outcome != nil }
 
@@ -170,13 +205,54 @@ func (r *RunRecord) Step(id kernel.StepID) *StepRecord {
 	return sr
 }
 
+// UnwindFailures returns the permanent unwind failures of the Run in
+// resolution order, derived from the unwind operations' records.
+func (r *RunRecord) UnwindFailures() []kernel.UnwindFailure {
+	type ordered struct {
+		order uint32
+		f     kernel.FailureRecord
+	}
+	var found []ordered
+	for _, sr := range r.Steps {
+		if sr.Unwind.Status == OpFailed && sr.Unwind.Failure != nil {
+			found = append(found, ordered{sr.Unwind.Order, *sr.Unwind.Failure})
+		}
+	}
+	sort.Slice(found, func(i, j int) bool { return found[i].order < found[j].order })
+	out := make([]kernel.UnwindFailure, len(found))
+	for i, o := range found {
+		out[i] = kernel.UnwindFailure{FailureRecord: o.f}
+	}
+	return out
+}
+
+// NextOrder returns the resolution sequence number for the operation
+// about to resolve: one past the highest Order recorded so far.
+func (r *RunRecord) NextOrder() uint32 {
+	var max uint32
+	for _, sr := range r.Steps {
+		max = maxU32(max, sr.Forward.Order, sr.Unwind.Order)
+	}
+	return max + 1
+}
+
+func maxU32(a uint32, rest ...uint32) uint32 {
+	for _, v := range rest {
+		if v > a {
+			a = v
+		}
+	}
+	return a
+}
+
 // Clone returns a deep copy of the record.
 func (r *RunRecord) Clone() *RunRecord {
 	c := *r
 	c.Steps = make(map[kernel.StepID]*StepRecord, len(r.Steps))
 	for id, sr := range r.Steps {
 		sc := *sr
-		sc.State = append([]byte(nil), sr.State...)
+		sc.Forward = sr.Forward.clone()
+		sc.Unwind = sr.Unwind.clone()
 		c.Steps[id] = &sc
 	}
 	c.Input = append([]byte(nil), r.Input...)
@@ -191,7 +267,6 @@ func (r *RunRecord) Clone() *RunRecord {
 		rf := *r.RootFailure
 		c.RootFailure = &rf
 	}
-	c.UnwindFailures = append([]kernel.UnwindFailure(nil), r.UnwindFailures...)
 	if r.Outcome != nil {
 		o := *r.Outcome
 		c.Outcome = &o

@@ -137,7 +137,7 @@ func TestRetentionReapsOnlyOldTerminalRuns(t *testing.T) {
 	// A nonterminal seeded run belonging to an unregistered pipeline: it
 	// will be invalid under this deployment and must survive any sweep.
 	invalidID := seedRun(t, store, "ghost-pipeline", map[durable.StepID]*driver.StepRecord{
-		"g/v1": {ForwardStatus: driver.OpUnresolved, ForwardAttempts: 1},
+		"g/v1": {Forward: driver.OperationRecord{Status: driver.OpUnresolved, Attempts: 1}},
 	})
 
 	blocked := make(chan struct{})

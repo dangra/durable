@@ -17,6 +17,10 @@ breaking:
     - FIELD_NO_DELETE_UNLESS_NUMBER_RESERVED
   except:
     - FIELD_NO_DELETE
+    # The storage schema is internal and durable owes no on-disk
+    # compatibility: a message may be replaced outright when the row
+    # shape changes (StepRecord and Failures became OperationRecord).
+    - MESSAGE_NO_DELETE
     # go_package is a Go build concern, not a wire one: the internal
     # storage schema moved under store/internal. Review catches accidental
     # changes to the public durablepb path.

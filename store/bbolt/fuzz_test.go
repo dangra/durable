@@ -28,7 +28,6 @@ type canonRecord struct {
 	Phase                         durable.Phase
 	Steps                         []canonStep
 	Root                          *durable.RootFailure
-	UnwindFailures                []durable.UnwindFailure
 	Output                        []byte
 	Outcome                       *durable.Outcome
 	NextAttemptAt, LastErrorAt    int64
@@ -99,16 +98,21 @@ func canonicalize(rec *driver.RunRecord) *canonRecord {
 	if rec.RootFailure != nil {
 		c.Root = &durable.RootFailure{FailureRecord: canonFailure(rec.RootFailure.FailureRecord)}
 	}
-	for _, uf := range rec.UnwindFailures {
-		c.UnwindFailures = append(c.UnwindFailures, durable.UnwindFailure{FailureRecord: canonFailure(uf.FailureRecord)})
-	}
 	if rec.Cancel != nil {
 		c.Cancel = &canonCancel{Cause: rec.Cancel.Cause, At: nanos(rec.Cancel.At)}
 	}
+	canonOp := func(op driver.OperationRecord) driver.OperationRecord {
+		op.State = normBytes(op.State)
+		if op.Failure != nil {
+			f := canonFailure(*op.Failure)
+			op.Failure = &f
+		}
+		return op
+	}
 	for id, sr := range rec.Steps {
-		s := *sr
-		s.State = normBytes(s.State)
-		c.Steps = append(c.Steps, canonStep{ID: string(id), Record: s})
+		c.Steps = append(c.Steps, canonStep{ID: string(id), Record: driver.StepRecord{
+			Forward: canonOp(sr.Forward), Unwind: canonOp(sr.Unwind),
+		}})
 	}
 	sort.Slice(c.Steps, func(i, j int) bool { return c.Steps[i].ID < c.Steps[j].ID })
 	return c
@@ -247,28 +251,32 @@ func FuzzStoreContract(f *testing.F) {
 					tr.Cursor.NextAttemptAt = now.Add(time.Minute)
 				}
 				if arg%4 == 0 {
-					tr.Steps = []driver.StepWrite{{
-						StepID: steps[int(arg/2)%len(steps)],
-						Record: driver.StepRecord{
-							ForwardStatus:   driver.OpStatus(arg % 4),
-							ForwardAttempts: uint64(arg % 7),
-							State:           normBytes([]byte{arg, arg}),
-							UnwindStatus:    driver.OpStatus((arg / 4) % 4),
-							UnwindAttempts:  uint64(arg % 3),
-						},
-					}}
+					// One operation row: a failed status carries its
+					// failure, and a resolved one its order.
+					opPhase := durable.PhaseForward
+					if arg&0x20 != 0 {
+						opPhase = durable.PhaseUnwind
+					}
+					op := driver.OperationRecord{
+						Status:   driver.OpStatus(arg % 4),
+						Attempts: uint64(arg % 7),
+						State:    normBytes([]byte{arg, arg}),
+						Order:    uint32(arg % 5),
+					}
+					if op.Status == driver.OpFailed {
+						op.Failure = &durable.FailureRecord{
+							StepID: steps[int(arg/2)%len(steps)], Phase: opPhase,
+							Attempt: op.Attempts, Message: "op", At: now,
+							Kind: durable.FailureKind(arg % 3), Reason: "r",
+						}
+					}
+					tr.Ops = []driver.OpWrite{{StepID: steps[int(arg/2)%len(steps)], Phase: opPhase, Record: op}}
 				}
 				if arg%5 == 0 {
 					tr.RootFailure = &durable.RootFailure{FailureRecord: durable.FailureRecord{
 						StepID: steps[0], Phase: durable.PhaseForward,
 						Attempt: 1, Message: "root", At: now,
 						Kind: durable.FailureKindUser, Reason: "why",
-					}}
-				}
-				if arg%6 == 0 {
-					tr.UnwindFailure = &durable.UnwindFailure{FailureRecord: durable.FailureRecord{
-						StepID: steps[1], Phase: durable.PhaseUnwind,
-						Attempt: 2, Message: "uw", At: now,
 					}}
 				}
 				if arg%7 == 0 {
@@ -283,21 +291,24 @@ func FuzzStoreContract(f *testing.F) {
 				// reservation are outside the Store contract.
 				if prev, err := ms.GetRun(ctx, id); err == nil {
 					for sid, sr := range prev.Steps {
-						if sr.ForwardStatus != driver.OpUnresolved && sr.UnwindStatus != driver.OpUnresolved {
-							continue
-						}
 						if sid == tr.Cursor.StepID {
 							continue
 						}
-						covered := false
-						for _, sw := range tr.Steps {
-							if sw.StepID == sid {
-								covered = true
-								break
+						for _, ph := range []durable.Phase{durable.PhaseForward, durable.PhaseUnwind} {
+							op := sr.Op(ph)
+							if op.Status != driver.OpUnresolved {
+								continue
 							}
-						}
-						if !covered {
-							tr.Steps = append(tr.Steps, driver.StepWrite{StepID: sid, Record: *sr})
+							covered := false
+							for _, ow := range tr.Ops {
+								if ow.StepID == sid && ow.Phase == ph {
+									covered = true
+									break
+								}
+							}
+							if !covered {
+								tr.Ops = append(tr.Ops, driver.OpWrite{StepID: sid, Phase: ph, Record: *op})
+							}
 						}
 					}
 				}

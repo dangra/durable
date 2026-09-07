@@ -72,27 +72,35 @@ func FuzzRoundTrip(f *testing.F) {
 			}
 		}
 
-		// StepRecord.
-		sr := &driver.StepRecord{
-			ForwardStatus: driver.OpStatus(a % 4), ForwardAttempts: n,
-			State:        append([]byte(nil), blob...),
-			UnwindStatus: driver.OpStatus(b % 4), UnwindAttempts: n / 2,
+		// OperationRecord, with a failure when the status says so.
+		op := driver.OperationRecord{
+			Status: driver.OpStatus(a % 4), Attempts: n,
+			State: append([]byte(nil), blob...), Order: uint32(b),
 		}
-		sb, err := MarshalStepRecord(sr)
+		if op.Status == driver.OpFailed {
+			op.Failure = &kernel.FailureRecord{
+				StepID: kernel.StepID(s2), Phase: phase, Attempt: n / 3, Message: s1, At: when,
+				Kind: kernel.FailureKind(b % 3), Reason: s2,
+			}
+		}
+		ob, err := MarshalOperationRecord(&op)
 		if err != nil {
-			t.Fatalf("MarshalStepRecord: %v", err)
+			t.Fatalf("MarshalOperationRecord: %v", err)
 		}
-		gsr, err := UnmarshalStepRecord(sb)
+		gop, err := UnmarshalOperationRecord(ob)
 		if err != nil {
-			t.Fatalf("UnmarshalStepRecord: %v", err)
+			t.Fatalf("UnmarshalOperationRecord: %v", err)
 		}
-		if gsr.ForwardStatus != sr.ForwardStatus || gsr.ForwardAttempts != sr.ForwardAttempts ||
-			gsr.UnwindStatus != sr.UnwindStatus || gsr.UnwindAttempts != sr.UnwindAttempts ||
-			string(gsr.State) != string(sr.State) {
-			t.Fatalf("step record round trip: %+v != %+v", gsr, sr)
+		if gop.Status != op.Status || gop.Attempts != op.Attempts || gop.Order != op.Order ||
+			string(gop.State) != string(op.State) || (gop.Failure == nil) != (op.Failure == nil) {
+			t.Fatalf("operation record round trip: %+v != %+v", gop, op)
+		}
+		if op.Failure != nil && (gop.Failure.StepID != op.Failure.StepID || gop.Failure.Kind != op.Failure.Kind ||
+			gop.Failure.Message != op.Failure.Message || !sameTime(gop.Failure.At, op.Failure.At)) {
+			t.Fatalf("operation failure round trip: %+v != %+v", gop.Failure, op.Failure)
 		}
 
-		// Failures.
+		// Root FailureRecord.
 		var root *kernel.RootFailure
 		if a%2 == 0 {
 			root = &kernel.RootFailure{FailureRecord: kernel.FailureRecord{
@@ -100,19 +108,17 @@ func FuzzRoundTrip(f *testing.F) {
 				Message: s2, At: when, Kind: kernel.FailureKind(b % 3), Reason: s1,
 			}}
 		}
-		unwind := []kernel.UnwindFailure{{FailureRecord: kernel.FailureRecord{
-			StepID: kernel.StepID(s2), Phase: phase, Attempt: n / 3, Message: s1, At: when,
-		}}}
-		fb, err := MarshalFailures(root, unwind)
-		if err != nil {
-			t.Fatalf("MarshalFailures: %v", err)
-		}
-		groot, gunwind, err := UnmarshalFailures(fb)
-		if err != nil {
-			t.Fatalf("UnmarshalFailures: %v", err)
-		}
-		if (root == nil) != (groot == nil) || len(gunwind) != len(unwind) {
-			t.Fatalf("failures round trip shape: root %v/%v unwind %d/%d", root, groot, len(unwind), len(gunwind))
+		var groot *kernel.RootFailure
+		if root != nil {
+			fb, err := MarshalFailureRecord(root.FailureRecord)
+			if err != nil {
+				t.Fatalf("MarshalFailureRecord: %v", err)
+			}
+			f, err := UnmarshalFailureRecord(fb)
+			if err != nil {
+				t.Fatalf("UnmarshalFailureRecord: %v", err)
+			}
+			groot = &kernel.RootFailure{FailureRecord: f}
 		}
 		if root != nil && (groot.StepID != root.StepID || groot.Kind != root.Kind ||
 			groot.Message != root.Message || !sameTime(groot.At, root.At)) {
@@ -178,8 +184,8 @@ func FuzzRoundTrip(f *testing.F) {
 		// Arbitrary input: decoding may succeed or error; it must not
 		// panic.
 		_, _ = UnmarshalCursor(blob)
-		_, _ = UnmarshalStepRecord(blob)
-		_, _, _ = UnmarshalFailures(blob)
+		_, _ = UnmarshalOperationRecord(blob)
+		_, _ = UnmarshalFailureRecord(blob)
 		_, _, _ = UnmarshalTerminal(blob)
 		_, _ = UnmarshalCancel(blob)
 		_ = UnmarshalRunMetaInto(blob, &driver.RunRecord{})

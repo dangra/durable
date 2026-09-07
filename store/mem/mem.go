@@ -77,11 +77,15 @@ func (s *Store) ApplyTransition(_ context.Context, id kernel.RunID, t driver.Tra
 		return kernel.ErrRunNotFound
 	}
 
-	// Step fact rows.
-	for _, sw := range t.Steps {
-		sr := sw.Record
-		sr.State = append([]byte(nil), sw.Record.State...)
-		*rec.Step(sw.StepID) = sr
+	// Operation rows: each write replaces one half of a step's record.
+	for _, ow := range t.Ops {
+		op := ow.Record
+		op.State = append([]byte(nil), ow.Record.State...)
+		if ow.Record.Failure != nil {
+			f := *ow.Record.Failure
+			op.Failure = &f
+		}
+		*rec.Step(ow.StepID).Op(ow.Phase) = op
 	}
 
 	// Cursor: scheduling state plus the single in-flight operation. The
@@ -97,21 +101,18 @@ func (s *Store) ApplyTransition(_ context.Context, id kernel.RunID, t driver.Tra
 	rec.UpdatedAt = c.UpdatedAt
 	if c.StepID != "" {
 		sr := rec.Step(c.StepID)
-		if c.Phase == kernel.PhaseUnwind && sr.ForwardStatus == driver.OpSucceeded {
-			sr.UnwindStatus = driver.OpUnresolved
-			sr.UnwindAttempts = c.Attempts
+		if c.Phase == kernel.PhaseUnwind && sr.Forward.Status == driver.OpSucceeded {
+			sr.Unwind.Status = driver.OpUnresolved
+			sr.Unwind.Attempts = c.Attempts
 		} else {
-			sr.ForwardStatus = driver.OpUnresolved
-			sr.ForwardAttempts = c.Attempts
+			sr.Forward.Status = driver.OpUnresolved
+			sr.Forward.Attempts = c.Attempts
 		}
 	}
 
 	if t.RootFailure != nil {
 		rf := *t.RootFailure
 		rec.RootFailure = &rf
-	}
-	if t.UnwindFailure != nil {
-		rec.UnwindFailures = append(rec.UnwindFailures, *t.UnwindFailure)
 	}
 	if t.Outcome != nil {
 		oc := *t.Outcome

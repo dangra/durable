@@ -93,9 +93,6 @@ func TestProvisionMachineFailureUnwindsReservation(t *testing.T) {
 	if result.Output() != nil {
 		t.Fatalf("Output = %+v, want nil for failed run", result.Output())
 	}
-	if len(result.UnwindFailures) != 0 {
-		t.Fatalf("UnwindFailures = %+v, want none", result.UnwindFailures)
-	}
 
 	// reserve-capacity unwound: the reservation was released.
 	c.mu.Lock()

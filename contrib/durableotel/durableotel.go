@@ -42,23 +42,32 @@ const ScopeName = "github.com/dangra/durable/contrib/durableotel"
 // except AttrRunID and AttrResource, which appear only on spans, never
 // on metrics.
 const (
-	AttrPipeline     attribute.Key = "durable.pipeline"
-	AttrResource     attribute.Key = "durable.resource"
-	AttrRunID        attribute.Key = "durable.run_id"
-	AttrStep         attribute.Key = "durable.step"
-	AttrPhase        attribute.Key = "durable.phase"
-	AttrAttempt      attribute.Key = "durable.attempt"
-	AttrResult       attribute.Key = "durable.result"
-	AttrOutcome      attribute.Key = "durable.outcome"
-	AttrFailureKind  attribute.Key = "durable.failure_kind"
-	AttrReason       attribute.Key = "durable.reason"
-	AttrClass        attribute.Key = "durable.class"
-	AttrAwaitTargets attribute.Key = "durable.await_targets"
-	AttrAwaitMode    attribute.Key = "durable.await_mode"
-	AttrPanicked     attribute.Key = "durable.panicked"
-	AttrStoreOp      attribute.Key = "durable.store.op"
-	AttrStoreWrite   attribute.Key = "durable.store.write"
-	AttrError        attribute.Key = "durable.error"
+	AttrPipeline    attribute.Key = "durable.pipeline"
+	AttrResource    attribute.Key = "durable.resource"
+	AttrRunID       attribute.Key = "durable.run_id"
+	AttrStep        attribute.Key = "durable.step"
+	AttrPhase       attribute.Key = "durable.phase"
+	AttrAttempt     attribute.Key = "durable.attempt"
+	AttrResult      attribute.Key = "durable.result"
+	AttrOutcome     attribute.Key = "durable.outcome"
+	AttrFailureKind attribute.Key = "durable.failure_kind"
+	AttrReason      attribute.Key = "durable.reason"
+	// The unwind-only attributes describe what an unwind attempt is
+	// unwinding (Invocation.Failure), distinct from the attempt's own
+	// outcome above: the root failure that ended the forward phase, and
+	// how many unwind steps had already failed permanently when the
+	// attempt started.
+	AttrRootStep        attribute.Key = "durable.root_failure.step"
+	AttrRootFailureKind attribute.Key = "durable.root_failure.kind"
+	AttrRootReason      attribute.Key = "durable.root_failure.reason"
+	AttrUnwindFailures  attribute.Key = "durable.unwind_failures"
+	AttrClass           attribute.Key = "durable.class"
+	AttrAwaitTargets    attribute.Key = "durable.await_targets"
+	AttrAwaitMode       attribute.Key = "durable.await_mode"
+	AttrPanicked        attribute.Key = "durable.panicked"
+	AttrStoreOp         attribute.Key = "durable.store.op"
+	AttrStoreWrite      attribute.Key = "durable.store.write"
+	AttrError           attribute.Key = "durable.error"
 )
 
 // Option configures this package's constructors.

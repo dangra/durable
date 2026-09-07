@@ -157,6 +157,20 @@ func TestMiddlewareSpansLinkToOrigin(t *testing.T) {
 		} else if hasKind || hasReason {
 			t.Fatalf("span %q claims failure attribution %q/%q", key, kind, reason)
 		}
+		// Only the unwind attempt says what it is unwinding.
+		rootStep, hasRoot := attr(sp, string(durableotel.AttrRootStep))
+		rootKind, _ := attr(sp, string(durableotel.AttrRootFailureKind))
+		rootReason, _ := attr(sp, string(durableotel.AttrRootReason))
+		if key == "prepare/v1 unwind|1" {
+			if rootStep != "explode/v1" || rootKind != "user" || rootReason != "invalid-input" {
+				t.Fatalf("unwind span root failure = %q %q/%q, want explode/v1 user/invalid-input", rootStep, rootKind, rootReason)
+			}
+			if n, ok := attr(sp, string(durableotel.AttrUnwindFailures)); !ok || n != "0" {
+				t.Fatalf("unwind span unwind_failures = %q, %v; want 0", n, ok)
+			}
+		} else if hasRoot {
+			t.Fatalf("forward span %q carries a root failure %q", key, rootStep)
+		}
 		if sp.SpanContext().TraceID() == origin.TraceID() {
 			t.Fatalf("span %q lives in the origin trace; the shape is links, not a parent", key)
 		}
@@ -426,5 +440,81 @@ func TestWithTraceContextRoundTrip(t *testing.T) {
 	want := "00-" + span.SpanContext().TraceID().String() + "-" + span.SpanContext().SpanID().String() + "-01"
 	if got["traceparent"] != want {
 		t.Fatalf("traceparent = %q, want %q", got["traceparent"], want)
+	}
+}
+
+// TestMiddlewareUnwindSpansCountPriorFailures runs a three-step saga
+// whose middle unwind fails permanently: the first unwind attempt starts
+// with zero prior unwind failures and records its own attribution; the
+// next one starts with one.
+func TestMiddlewareUnwindSpansCountPriorFailures(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	defer tp.Shutdown(t.Context())
+
+	ok := func(ctx context.Context, inv durable.Invocation) (proto.Message, error) { return nil, nil }
+	def := pipelinedef.New(pipelinedef.Config{
+		ID: "saga3",
+		Steps: []pipelinedef.Step{
+			{ID: "a/v1", Unwind: true, Run: ok,
+				UnwindFunc: func(ctx context.Context, inv durable.Invocation) error { return nil }},
+			{ID: "b/v1", Unwind: true, Run: ok,
+				UnwindFunc: func(ctx context.Context, inv durable.Invocation) error {
+					return durable.Fail(errors.New("release rejected"), durable.WithReason("stuck"))
+				}},
+			{ID: "c/v1", Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
+				return nil, durable.Fail(errors.New("boom"))
+			}},
+		},
+	})
+	eng := engine.New(mem.New(), fastRetry, quietLogger(),
+		engine.WithMiddleware(durableotel.Middleware(durableotel.WithTracerProvider(tp))))
+	pipe, err := eng.Bind(def)
+	if err != nil {
+		t.Fatalf("Bind: %v", err)
+	}
+	if err := eng.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer eng.Stop(t.Context())
+	run, _, err := pipe.Schedule(t.Context(), "res-1", nil)
+	if err != nil {
+		t.Fatalf("Schedule: %v", err)
+	}
+	if res, err := run.Wait(t.Context()); err != nil || len(res.UnwindFailures) != 1 {
+		t.Fatalf("Wait = %+v, %v; want one unwind failure", res, err)
+	}
+
+	want := map[string]struct{ prior, kind, reason string }{
+		"b/v1 unwind": {"0", "system", "stuck"}, // its own permanent failure
+		"a/v1 unwind": {"1", "", ""},            // after b's failure; succeeded
+	}
+	seen := 0
+	for _, sp := range recorder.Ended() {
+		w, ok := want[sp.Name()]
+		if !ok {
+			continue
+		}
+		seen++
+		if step, _ := attr(sp, string(durableotel.AttrRootStep)); step != "c/v1" {
+			t.Fatalf("%s root step = %q, want c/v1", sp.Name(), step)
+		}
+		if kind, _ := attr(sp, string(durableotel.AttrRootFailureKind)); kind != "system" {
+			t.Fatalf("%s root kind = %q, want system", sp.Name(), kind)
+		}
+		if _, has := attr(sp, string(durableotel.AttrRootReason)); has {
+			t.Fatalf("%s carries a root reason; the root Fail declared none", sp.Name())
+		}
+		if prior, _ := attr(sp, string(durableotel.AttrUnwindFailures)); prior != w.prior {
+			t.Fatalf("%s unwind_failures = %q, want %q", sp.Name(), prior, w.prior)
+		}
+		kind, _ := attr(sp, string(durableotel.AttrFailureKind))
+		reason, _ := attr(sp, string(durableotel.AttrReason))
+		if kind != w.kind || reason != w.reason {
+			t.Fatalf("%s own attribution = %q/%q, want %q/%q", sp.Name(), kind, reason, w.kind, w.reason)
+		}
+	}
+	if seen != len(want) {
+		t.Fatalf("unwind spans seen = %d, want %d", seen, len(want))
 	}
 }

@@ -165,6 +165,25 @@ func FuzzStoreContract(f *testing.F) {
 			mustEqual(fmt.Sprintf("GetRun(%s) error", id), berr, merr)
 			mustEqual(fmt.Sprintf("GetRun(%s)", id), canonicalize(br), canonicalize(mr))
 		}
+		// The slot index is load-bearing twice over: CreateRun admits
+		// against it and ListNonterminal (recovery) walks it. The model
+		// derives the nonterminal set from record facts, so agreeing with
+		// it after every operation pins "slot keys == runs without an
+		// outcome" in both directions.
+		compareNonterminal := func() {
+			t.Helper()
+			bn, berr := bs.ListNonterminal(ctx)
+			mn, merr := ms.ListNonterminal(ctx)
+			mustEqual("ListNonterminal error", berr, merr)
+			key := func(rs []*driver.RunRecord) map[string]*canonRecord {
+				out := map[string]*canonRecord{}
+				for _, rr := range rs {
+					out[string(rr.RunID)] = canonicalize(rr)
+				}
+				return out
+			}
+			mustEqual("ListNonterminal", key(bn), key(mn))
+		}
 
 		for op := byteOr0(); r.Len() > 0; op = byteOr0() {
 			arg := byteOr0()
@@ -324,22 +343,12 @@ func FuzzStoreContract(f *testing.F) {
 				mustEqual("ReapTerminal error", berr, merr)
 				mustEqual("ReapTerminal count", bn, mn)
 			}
+			compareNonterminal()
 		}
 
-		// Final sweep: every run and the nonterminal set must agree.
+		// Final sweep: every run must agree.
 		for _, id := range runIDs {
 			compareRun(id)
 		}
-		bn, berr := bs.ListNonterminal(ctx)
-		mn, merr := ms.ListNonterminal(ctx)
-		mustEqual("ListNonterminal error", berr, merr)
-		key := func(rs []*driver.RunRecord) map[string]*canonRecord {
-			out := map[string]*canonRecord{}
-			for _, rr := range rs {
-				out[string(rr.RunID)] = canonicalize(rr)
-			}
-			return out
-		}
-		mustEqual("ListNonterminal", key(bn), key(mn))
 	})
 }

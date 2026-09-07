@@ -188,8 +188,7 @@ func (h *runMigrations) Unwind(ctx context.Context, inv deploypb.RunMigrationsIn
 `inv.Failure()` carries the failure that started the unwind (step,
 message, kind, reason); `Failure()` is non-nil exactly during unwind. Unwind handlers have the same at-least-once/retry
 semantics as forward ones; a *permanent* unwind failure (a `Fail` from
-an unwind handler) is recorded on that step's operation record, shows
-up in `inv.Failure().UnwindFailures` for the unwind steps after it, and
+an unwind handler) is recorded on that step's operation record and
 does **not** stop the remaining unwind — the environment still gets
 torn down even if the migration rollback is beyond saving. The run
 terminates with `OutcomeFailure` and the run failure's attribution.

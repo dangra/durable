@@ -92,7 +92,7 @@ Part of the [`durable` specification](README.md). This list is append-only; inva
 
 45. Permanent Unwind failure is recorded and unwind continues.
 
-46. `Failure.UnwindFailures` contains permanent unwind failures accumulated so far in execution order.
+46. A permanent unwind failure is recorded on its operation record and does not stop the remaining unwind; the Run's unwind failures are those records in resolution order.
 
 47. Attempt numbers are durably reserved before handler invocation.
 

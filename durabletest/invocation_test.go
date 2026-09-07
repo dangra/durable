@@ -74,19 +74,17 @@ func TestFakeInvocationStateLookup(t *testing.T) {
 func TestFakeInvocationCopiesAndMemory(t *testing.T) {
 	wake := &durable.Wake{Targets: []durable.RunID{"child"}, Done: []durable.RunID{"child"}}
 	failure := &durable.Failure{StepID: "ship/v1", Message: "boom"}
-	unwound := []durable.Failure{{StepID: "t/v1"}}
 	inv := durabletest.NewInvocation(durabletest.InvocationConfig{
-		PipelineID:     "p",
-		ResourceID:     "r",
-		RunID:          "run",
-		StepID:         "s/v1",
-		Attempt:        3,
-		Phase:          durable.PhaseUnwind,
-		Input:          wrapperspb.String("in"),
-		Annotations:    map[string]string{"traceparent": "00-abc"},
-		Awaited:        wake,
-		Failure:        failure,
-		UnwindFailures: unwound,
+		PipelineID:  "p",
+		ResourceID:  "r",
+		RunID:       "run",
+		StepID:      "s/v1",
+		Attempt:     3,
+		Phase:       durable.PhaseUnwind,
+		Input:       wrapperspb.String("in"),
+		Annotations: map[string]string{"traceparent": "00-abc"},
+		Awaited:     wake,
+		Failure:     failure,
 	})
 	if inv.PipelineID() != "p" || inv.ResourceID() != "r" || inv.RunID() != "run" || inv.StepID() != "s/v1" || inv.Attempt() != 3 || inv.Phase() != durable.PhaseUnwind {
 		t.Fatal("identity accessors must echo the config")
@@ -105,14 +103,14 @@ func TestFakeInvocationCopiesAndMemory(t *testing.T) {
 	if !ok || len(w.Done) != 1 {
 		t.Fatalf("Awaited = %+v, %v", w, ok)
 	}
-	f, ufs := inv.Failure(), inv.UnwindFailures()
-	if f == nil || f.StepID != "ship/v1" || len(ufs) != 1 || ufs[0].StepID != "t/v1" {
-		t.Fatalf("Failure = %+v, UnwindFailures = %+v", f, ufs)
+	f := inv.Failure()
+	if f == nil || f.StepID != "ship/v1" {
+		t.Fatalf("Failure = %+v", f)
 	}
-	f.StepID, ufs[0].StepID = "mutated", "mutated"
-	failure.Message, unwound[0].Message = "mutated", "mutated"
-	if g, gu := inv.Failure(), inv.UnwindFailures(); g.StepID != "ship/v1" || g.Message != "boom" || gu[0].StepID != "t/v1" || gu[0].Message != "" {
-		t.Fatalf("Failure and UnwindFailures must be copies on both sides: %+v %+v", g, gu)
+	f.StepID = "mutated"
+	failure.Message = "mutated"
+	if g := inv.Failure(); g.StepID != "ship/v1" || g.Message != "boom" {
+		t.Fatalf("Failure must be a copy on both sides: %+v", g)
 	}
 	w.Done[0] = "mutated"
 	if wake.Done[0] != "child" {

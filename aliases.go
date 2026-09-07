@@ -80,6 +80,6 @@ const (
 // execution location, attempt, phase, timestamp, message, and
 // informational kind/reason attribution. The same type is a Run's
 // failure (the one that ended its forward phase, read through
-// Result.Failure, Status.Failure, and Invocation.Failure), an
-// operation's failure, and each entry of Invocation.UnwindFailures.
+// Result.Failure, Status.Failure, and Invocation.Failure) and an
+// operation's failure on its store record.
 type Failure = kernel.Failure

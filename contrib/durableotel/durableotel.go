@@ -55,12 +55,10 @@ const (
 	AttrReason      attribute.Key = "durable.reason"
 	// The unwind-only attributes describe the Run's failure an unwind
 	// attempt is unwinding (Invocation.Failure), distinct from the
-	// attempt's own outcome above, and how many unwind operations had
-	// already failed permanently when the attempt started.
+	// attempt's own outcome above.
 	AttrRunFailureStep   attribute.Key = "durable.run_failure.step"
 	AttrRunFailureKind   attribute.Key = "durable.run_failure.kind"
 	AttrRunFailureReason attribute.Key = "durable.run_failure.reason"
-	AttrUnwindFailures   attribute.Key = "durable.unwind_failures"
 	AttrClass            attribute.Key = "durable.class"
 	AttrAwaitTargets     attribute.Key = "durable.await_targets"
 	AttrAwaitMode        attribute.Key = "durable.await_mode"

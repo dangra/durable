@@ -3,7 +3,6 @@ package durabletest
 import (
 	"log/slog"
 	"maps"
-	"slices"
 	"sync"
 
 	"google.golang.org/protobuf/proto"
@@ -43,10 +42,6 @@ type InvocationConfig struct {
 	// that pairing.
 	Failure *durable.Failure
 
-	// UnwindFailures are the permanent unwind failures recorded before
-	// the attempt under test, in execution order.
-	UnwindFailures []durable.Failure
-
 	// Logger backs Invocation.Logger; nil discards.
 	Logger *slog.Logger
 }
@@ -85,7 +80,6 @@ func NewInvocation(cfg InvocationConfig) *Invocation {
 		f := *cfg.Failure
 		cfg.Failure = &f
 	}
-	cfg.UnwindFailures = slices.Clone(cfg.UnwindFailures)
 	if cfg.Phase == 0 {
 		cfg.Phase = durable.PhaseForward
 	}
@@ -151,11 +145,6 @@ func (inv *Invocation) Failure() *durable.Failure {
 	}
 	f := *inv.cfg.Failure
 	return &f
-}
-
-// UnwindFailures returns a copy of the configured unwind failures.
-func (inv *Invocation) UnwindFailures() []durable.Failure {
-	return slices.Clone(inv.cfg.UnwindFailures)
 }
 
 // AwaitedRunID reports the configured park memory when it has exactly one

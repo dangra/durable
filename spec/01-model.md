@@ -599,8 +599,7 @@ Run's `Failure` is the one that ended its forward phase (a step's
 permanent forward failure, or a cancellation, which has no `StepID`),
 read through `Result.Failure`, `Status.Failure`, and
 `Invocation.Failure`; an operation's failure is the one that resolved
-it; `Invocation.UnwindFailures` lists the failures of the Run's unwind
-operations so far.
+it, kept on its operation record in the Store.
 
 Arbitrary Go error chains are intentionally flattened.
 
@@ -675,7 +674,8 @@ resolution.
 
 ## Failure during Unwind
 
-`Invocation.UnwindFailures` grows as unwind operations fail permanently.
+A permanent unwind failure resolves that one operation and does not stop
+the remaining unwind.
 
 Suppose:
 
@@ -686,16 +686,14 @@ B.Unwind    -> permanent failure
 A.Unwind    -> current
 ```
 
-A reads:
+A reads `inv.Failure()` and gets D's failure, the Run's. C's and B's
+failures are on their operation records in the Store, in resolution
+order; the handler contract does not expose them, and the failure
+reducer (future work) is where they become part of a typed account of
+the failed Run.
 
-```go
-inv.Failure()        // -> &dFailure, the Run's failure
-inv.UnwindFailures() // -> []Failure{cFailure, bFailure}
-```
-
-Permanent unwind failures appear in unwind execution order.
-
-Ordinary retry errors are operational history and are not added to `UnwindFailures`.
+Ordinary retry errors are operational history and are not recorded as
+failures.
 
 ---
 
@@ -724,11 +722,10 @@ type Result struct {
 }
 ```
 
-A `Result` carries the run failure only. What each unwind step did with
-it is a fact on that step's operation record, visible to later unwind
-handlers through `Failure.UnwindFailures`; a typed account of a failed
-Run for callers is the failure reducer's job (future work), the way the
-Output is the reducer's account of a successful one.
+A `Result` carries the Run's failure only. What each unwind step did
+with it is a fact on that step's operation record in the Store; a typed
+account of a failed Run for callers is the failure reducer's job (future
+work), the way the Output is the reducer's account of a successful one.
 
 Convenience methods SHOULD include:
 

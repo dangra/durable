@@ -1252,12 +1252,11 @@ func (e *Engine) runUnwind(rec *driver.RunRecord, def *boundDef, stepID durable.
 
 	inv := e.invocation(rec, def, stepID, sr.Unwind.Attempts, durable.PhaseUnwind)
 	inv.awaited = rec.Awaited.Clone()
-	// Fresh copies per attempt: the handler owns what it reads.
+	// A fresh copy per attempt: the handler owns what it reads.
 	if rec.Failure != nil {
 		f := *rec.Failure
 		inv.failure = &f
 	}
-	inv.unwindFailures = rec.UnwindFailures()
 	opStart := e.clock.Now()
 	panicked, err := e.invokeUnwind(sc, inv)
 	e.takePreempted(rec.RunID) // clear evidence; yields attribute only forward

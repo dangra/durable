@@ -26,7 +26,6 @@ type attemptInvocation struct {
 	cancelRequested bool
 	awaited         *durable.Wake
 	failure         *durable.Failure
-	unwindFailures  []durable.Failure
 
 	baseLogger *slog.Logger
 
@@ -74,10 +73,6 @@ func (inv *attemptInvocation) Awaited() (w durable.Wake, ok bool) {
 }
 
 func (inv *attemptInvocation) Failure() *durable.Failure { return inv.failure }
-
-func (inv *attemptInvocation) UnwindFailures() []durable.Failure {
-	return append([]durable.Failure(nil), inv.unwindFailures...)
-}
 
 func (inv *attemptInvocation) Annotations() map[string]string {
 	if len(inv.annotations) == 0 {

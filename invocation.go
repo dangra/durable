@@ -75,13 +75,6 @@ type Invocation interface {
 	// value is built per attempt and owned by the caller.
 	Failure() *Failure
 
-	// UnwindFailures are the permanent failures of this Run's unwind
-	// operations resolved so far, in execution order; empty on the first
-	// unwind operation and always empty in forward. Ordinary retry errors
-	// are not included. The slice is built per attempt and owned by the
-	// caller.
-	UnwindFailures() []Failure
-
 	// Logger returns a logger scoped to this invocation: the Engine's
 	// WithLogger logger with the canonical keys (pipeline, resource, run,
 	// step, phase, attempt) pre-attached, so handler and middleware lines

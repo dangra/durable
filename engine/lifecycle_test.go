@@ -129,7 +129,6 @@ func TestPermanentFailureUnwinds(t *testing.T) {
 	var mu sync.Mutex
 	var unwoundSteps []durable.StepID
 	var failureSeenByA durable.Failure
-	var unwoundSeenByA []durable.Failure
 
 	def := pipelinedef.New(pipelinedef.Config{
 		ID: "failing",
@@ -144,7 +143,6 @@ func TestPermanentFailureUnwinds(t *testing.T) {
 					mu.Lock()
 					unwoundSteps = append(unwoundSteps, inv.StepID())
 					failureSeenByA = *inv.Failure()
-					unwoundSeenByA = inv.UnwindFailures()
 					mu.Unlock()
 					return nil
 				},
@@ -198,9 +196,6 @@ func TestPermanentFailureUnwinds(t *testing.T) {
 	// A unwinds after reserve permanently failed: it must see that failure.
 	if failureSeenByA.StepID != "create/v1" {
 		t.Fatalf("Failure().StepID = %q", failureSeenByA.StepID)
-	}
-	if len(unwoundSeenByA) != 1 || unwoundSeenByA[0].StepID != "reserve/v1" {
-		t.Fatalf("UnwindFailures() = %+v, want reserve/v1", unwoundSeenByA)
 	}
 	// Failed Runs have no Pipeline Output.
 	if b, _ := run.OutputBytes(context.Background()); b != nil {

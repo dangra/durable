@@ -94,10 +94,9 @@ func inject(ctx context.Context, cfg config) propagation.MapCarrier {
 // durable.failure_kind and durable.reason the engine will commit
 // (FailureInfo). An unwind attempt additionally starts with the failure
 // it is unwinding (Invocation.Failure): durable.run_failure.step, .kind,
-// and .reason name the run failure that ended the forward phase, and
-// durable.unwind_failures counts the unwind steps that had already
-// failed permanently; these are set at span start so sampling can key
-// on them. A park resolution (AwaitRun, AwaitAll, AwaitAny) is not
+// and .reason name the Run failure that ended the forward phase, set at
+// span start so sampling can key on them. A park resolution (AwaitRun,
+// AwaitAll, AwaitAny) is not
 // a failure and becomes durable.await_targets and durable.await_mode
 // attributes instead. A handler panic is
 // recorded on the span — exception event with stack trace, Error
@@ -122,12 +121,11 @@ func Middleware(opts ...Option) durable.Middleware {
 			}
 			// An unwind attempt says what it is unwinding, at start so
 			// samplers and processors see it: the Run failure's step,
-			// kind, and reason, and the permanent unwind failures so far.
+			// kind, and reason.
 			if f := inv.Failure(); f != nil {
 				attrs = append(attrs,
 					AttrRunFailureStep.String(string(f.StepID)),
-					AttrRunFailureKind.String(f.Kind.String()),
-					AttrUnwindFailures.Int64(int64(len(inv.UnwindFailures()))))
+					AttrRunFailureKind.String(f.Kind.String()))
 				if f.Reason != "" {
 					attrs = append(attrs, AttrRunFailureReason.String(f.Reason))
 				}

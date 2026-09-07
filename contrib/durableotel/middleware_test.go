@@ -165,9 +165,6 @@ func TestMiddlewareSpansLinkToOrigin(t *testing.T) {
 			if rootStep != "explode/v1" || rootKind != "user" || rootReason != "invalid-input" {
 				t.Fatalf("unwind span run failure = %q %q/%q, want explode/v1 user/invalid-input", rootStep, rootKind, rootReason)
 			}
-			if n, ok := attr(sp, string(durableotel.AttrUnwindFailures)); !ok || n != "0" {
-				t.Fatalf("unwind span unwind_failures = %q, %v; want 0", n, ok)
-			}
 		} else if hasRoot {
 			t.Fatalf("forward span %q carries a run failure %q", key, rootStep)
 		}
@@ -443,11 +440,11 @@ func TestWithTraceContextRoundTrip(t *testing.T) {
 	}
 }
 
-// TestMiddlewareUnwindSpansCountPriorFailures runs a three-step saga
-// whose middle unwind fails permanently: the first unwind attempt starts
-// with zero prior unwind failures and records its own attribution; the
-// next one starts with one.
-func TestMiddlewareUnwindSpansCountPriorFailures(t *testing.T) {
+// TestMiddlewareUnwindSpansCarryRunAndOwnFailure runs a three-step saga
+// whose middle unwind fails permanently: every unwind span names the Run
+// failure, and the one that fails itself records its own attribution
+// beside it.
+func TestMiddlewareUnwindSpansCarryRunAndOwnFailure(t *testing.T) {
 	recorder := tracetest.NewSpanRecorder()
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
 	defer tp.Shutdown(t.Context())
@@ -485,9 +482,9 @@ func TestMiddlewareUnwindSpansCountPriorFailures(t *testing.T) {
 		t.Fatalf("Wait = %+v, %v; want the scripted failure", res, err)
 	}
 
-	want := map[string]struct{ prior, kind, reason string }{
-		"b/v1 unwind": {"0", "system", "stuck"}, // its own permanent failure
-		"a/v1 unwind": {"1", "", ""},            // after b's failure; succeeded
+	want := map[string]struct{ kind, reason string }{
+		"b/v1 unwind": {"system", "stuck"}, // its own permanent failure
+		"a/v1 unwind": {"", ""},            // after b's failure; succeeded
 	}
 	seen := 0
 	for _, sp := range recorder.Ended() {
@@ -497,16 +494,13 @@ func TestMiddlewareUnwindSpansCountPriorFailures(t *testing.T) {
 		}
 		seen++
 		if step, _ := attr(sp, string(durableotel.AttrRunFailureStep)); step != "c/v1" {
-			t.Fatalf("%s root step = %q, want c/v1", sp.Name(), step)
+			t.Fatalf("%s run failure step = %q, want c/v1", sp.Name(), step)
 		}
 		if kind, _ := attr(sp, string(durableotel.AttrRunFailureKind)); kind != "system" {
-			t.Fatalf("%s root kind = %q, want system", sp.Name(), kind)
+			t.Fatalf("%s run failure kind = %q, want system", sp.Name(), kind)
 		}
 		if _, has := attr(sp, string(durableotel.AttrRunFailureReason)); has {
-			t.Fatalf("%s carries a root reason; the root Fail declared none", sp.Name())
-		}
-		if prior, _ := attr(sp, string(durableotel.AttrUnwindFailures)); prior != w.prior {
-			t.Fatalf("%s unwind_failures = %q, want %q", sp.Name(), prior, w.prior)
+			t.Fatalf("%s carries a run failure reason; the Fail declared none", sp.Name())
 		}
 		kind, _ := attr(sp, string(durableotel.AttrFailureKind))
 		reason, _ := attr(sp, string(durableotel.AttrReason))

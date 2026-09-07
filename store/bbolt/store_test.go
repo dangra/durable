@@ -38,13 +38,13 @@ func TestSlotSemantics(t *testing.T) {
 		Phase:      durable.PhaseForward,
 		CreatedAt:  time.Now(),
 	}
-	if _, created, err := s.CreateRun(ctx, rec); err != nil || !created {
+	if _, created, err := s.CreateRun(ctx, rec, nil); err != nil || !created {
 		t.Fatalf("CreateRun = created=%v err=%v", created, err)
 	}
 
 	// The slot is occupied.
 	dup := &driver.RunRecord{RunID: "run-2", PipelineID: "p", ResourceID: "r", Phase: durable.PhaseForward}
-	existing, created, err := s.CreateRun(ctx, dup)
+	existing, created, err := s.CreateRun(ctx, dup, nil)
 	if err != nil || created {
 		t.Fatalf("second CreateRun = created=%v err=%v", created, err)
 	}
@@ -86,7 +86,7 @@ func TestSlotSemantics(t *testing.T) {
 	if runs, err := s.ListNonterminal(ctx); err != nil || len(runs) != 0 {
 		t.Fatalf("ListNonterminal after terminal = %v, %v", runs, err)
 	}
-	if _, created, err := s.CreateRun(ctx, dup); err != nil || !created {
+	if _, created, err := s.CreateRun(ctx, dup, nil); err != nil || !created {
 		t.Fatalf("CreateRun after slot freed = created=%v err=%v", created, err)
 	}
 
@@ -182,7 +182,7 @@ func TestRequestCancel(t *testing.T) {
 	ctx := context.Background()
 
 	rec := &driver.RunRecord{RunID: "run-c", PipelineID: "p", ResourceID: "r", Phase: durable.PhaseForward}
-	if _, created, err := s.CreateRun(ctx, rec); err != nil || !created {
+	if _, created, err := s.CreateRun(ctx, rec, nil); err != nil || !created {
 		t.Fatalf("CreateRun = created=%v err=%v", created, err)
 	}
 
@@ -233,19 +233,20 @@ func TestExclusionGroupSlot(t *testing.T) {
 	s := open(t, filepath.Join(t.TempDir(), "durable.db"))
 	ctx := context.Background()
 
-	recA := &driver.RunRecord{RunID: "ga-1", PipelineID: "pa", ResourceID: "r", Group: "group/g", Phase: durable.PhaseForward}
-	if _, created, err := s.CreateRun(ctx, recA); err != nil || !created {
+	recA := &driver.RunRecord{RunID: "ga-1", PipelineID: "pa", ResourceID: "r", Phase: durable.PhaseForward}
+	if _, created, err := s.CreateRun(ctx, recA, nil); err != nil || !created {
 		t.Fatalf("CreateRun = created=%v err=%v", created, err)
 	}
 	// A different pipeline in the same group hits the occupied slot.
-	recB := &driver.RunRecord{RunID: "gb-1", PipelineID: "pb", ResourceID: "r", Group: "group/g", Phase: durable.PhaseForward}
-	existing, created, err := s.CreateRun(ctx, recB)
+	recB := &driver.RunRecord{RunID: "gb-1", PipelineID: "pb", ResourceID: "r", Phase: durable.PhaseForward}
+	group := []durable.PipelineID{"pa", "pb"}
+	existing, created, err := s.CreateRun(ctx, recB, group)
 	if err != nil || created || existing.RunID != "ga-1" {
 		t.Fatalf("group CreateRun = %+v created=%v err=%v", existing, created, err)
 	}
 	// A pipeline outside the group is unaffected.
 	recC := &driver.RunRecord{RunID: "gc-1", PipelineID: "pc", ResourceID: "r", Phase: durable.PhaseForward}
-	if _, created, err := s.CreateRun(ctx, recC); err != nil || !created {
+	if _, created, err := s.CreateRun(ctx, recC, nil); err != nil || !created {
 		t.Fatalf("non-group CreateRun = created=%v err=%v", created, err)
 	}
 	// Terminal completion frees the group slot.
@@ -256,7 +257,7 @@ func TestExclusionGroupSlot(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("terminal ApplyTransition: %v", err)
 	}
-	if _, created, err := s.CreateRun(ctx, recB); err != nil || !created {
+	if _, created, err := s.CreateRun(ctx, recB, group); err != nil || !created {
 		t.Fatalf("post-terminal group CreateRun = created=%v err=%v", created, err)
 	}
 }
@@ -272,7 +273,7 @@ func TestReapTerminal(t *testing.T) {
 			RunID: id, PipelineID: "p", ResourceID: resource,
 			Phase: durable.PhaseForward, CreatedAt: base,
 		}
-		if _, created, err := s.CreateRun(ctx, rec); err != nil || !created {
+		if _, created, err := s.CreateRun(ctx, rec, nil); err != nil || !created {
 			t.Fatalf("CreateRun %s: created=%v err=%v", id, created, err)
 		}
 		tr := driver.Transition{
@@ -353,25 +354,25 @@ func TestGetActiveRunIDFollowsTheSlot(t *testing.T) {
 	}
 	defer s.Close()
 	rec := func(id durable.RunID) *driver.RunRecord {
-		return &driver.RunRecord{RunID: id, PipelineID: "p", ResourceID: "r", Group: "group/g", Phase: durable.PhaseForward, CreatedAt: time.Unix(1, 0), UpdatedAt: time.Unix(1, 0)}
+		return &driver.RunRecord{RunID: id, PipelineID: "p", ResourceID: "r", Phase: durable.PhaseForward, CreatedAt: time.Unix(1, 0), UpdatedAt: time.Unix(1, 0)}
 	}
-	if _, ok, err := s.GetActiveRunID(ctx, "group/g", "r"); err != nil || ok {
+	if _, ok, err := s.GetActiveRunID(ctx, "p", "r"); err != nil || ok {
 		t.Fatalf("empty store: ok=%v err=%v", ok, err)
 	}
-	if _, created, err := s.CreateRun(ctx, rec("a")); err != nil || !created {
+	if _, created, err := s.CreateRun(ctx, rec("a"), nil); err != nil || !created {
 		t.Fatal(err)
 	}
-	if id, ok, _ := s.GetActiveRunID(ctx, "group/g", "r"); !ok || id != "a" {
+	if id, ok, _ := s.GetActiveRunID(ctx, "p", "r"); !ok || id != "a" {
 		t.Fatalf("after create: %q %v", id, ok)
 	}
 	oc := durable.OutcomeSuccess
 	if err := s.ApplyTransition(ctx, "a", driver.Transition{Cursor: driver.Cursor{Phase: durable.PhaseDone}, Outcome: &oc}); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok, _ := s.GetActiveRunID(ctx, "group/g", "r"); ok {
+	if _, ok, _ := s.GetActiveRunID(ctx, "p", "r"); ok {
 		t.Fatal("terminal outcome must release the slot")
 	}
-	if _, created, err := s.CreateRun(ctx, rec("c")); err != nil || !created {
+	if _, created, err := s.CreateRun(ctx, rec("c"), nil); err != nil || !created {
 		t.Fatalf("slot must be reusable: created=%v err=%v", created, err)
 	}
 }

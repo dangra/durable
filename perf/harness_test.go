@@ -278,7 +278,7 @@ func seedPopulation(b *testing.B, v *env, nonterminal, terminal int) []durable.R
 				ForwardStatus: driver.OpSucceeded, ForwardAttempts: 1, State: state,
 			}
 		}
-		if _, created, err := v.store.CreateRun(context.Background(), rec); err != nil || !created {
+		if _, created, err := v.store.CreateRun(context.Background(), rec, nil); err != nil || !created {
 			b.Errorf("seed CreateRun: created=%v err=%v", created, err)
 			return
 		}

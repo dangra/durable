@@ -39,7 +39,6 @@ func MarshalRunMeta(rec *driver.RunRecord) ([]byte, error) {
 		RunId:       string(rec.RunID),
 		PipelineId:  string(rec.PipelineID),
 		ResourceId:  string(rec.ResourceID),
-		SlotGroup:   rec.Group,
 		Input:       rec.Input,
 		CreatedAt:   ts(rec.CreatedAt),
 		Annotations: rec.Annotations,
@@ -55,7 +54,6 @@ func UnmarshalRunMetaInto(b []byte, rec *driver.RunRecord) error {
 	rec.RunID = kernel.RunID(pb.GetRunId())
 	rec.PipelineID = kernel.PipelineID(pb.GetPipelineId())
 	rec.ResourceID = kernel.ResourceID(pb.GetResourceId())
-	rec.Group = pb.GetSlotGroup()
 	rec.Input = pb.GetInput()
 	rec.CreatedAt = fromTS(pb.GetCreatedAt())
 	if len(pb.GetAnnotations()) > 0 {

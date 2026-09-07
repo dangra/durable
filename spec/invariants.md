@@ -4,7 +4,7 @@ Part of the [`durable` specification](README.md). This list is append-only; inva
 
 1. `RunID` identifies one exact execution.
 
-2. At most one nonterminal Run exists per resource slot: `(PipelineID, ResourceID)` by default, or `(exclusion group, ResourceID)` for group members.
+2. At most one nonterminal Run exists per resource slot `(PipelineID, ResourceID)`; an exclusion group additionally refuses admission while any member has a nonterminal Run on the resource.
 
 3. Pipeline Input is immutable.
 
@@ -207,3 +207,7 @@ Part of the [`durable` specification](README.md). This list is append-only; inva
 102. `Engine.Bind` is the single validator of a definition: a malformed definition is a `Bind` error, never a construction panic, and `Bind` after `Start` returns `ErrStarted`.
 
 103. Handler code depends only on the `durable` package, and the Engine reads a handler's result through the same exported classifiers middleware uses; the handler contract carries no engine-only plumbing.
+
+104. Exclusion-group membership is resolved from the current deployment's definitions at `Engine.Start` and applied at admission; it is never persisted, and a Run's slot is always its own `(PipelineID, ResourceID)`.
+
+105. A change of exclusion-group membership between deployments never invalidates, aborts, or migrates a Run in flight; it governs new admissions from the first `Schedule` under the new deployment.

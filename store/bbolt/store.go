@@ -85,11 +85,11 @@ func Open(path string) (*Store, error) {
 // guarantees appears in no identifier — otherwise distinct
 // (group, resource) pairs could alias one key.
 func slotKey(rec *driver.RunRecord) []byte {
-	return slotKeyFor(rec.SlotGroup(), rec.ResourceID)
+	return slotKeyFor(rec.PipelineID, rec.ResourceID)
 }
 
-func slotKeyFor(group string, resource kernel.ResourceID) []byte {
-	return []byte(group + "\x00" + string(resource))
+func slotKeyFor(pipeline kernel.PipelineID, resource kernel.ResourceID) []byte {
+	return []byte(string(pipeline) + "\x00" + string(resource))
 }
 
 func stepKey(id kernel.RunID, step kernel.StepID) []byte {
@@ -109,22 +109,34 @@ func (s *Store) groupCommit() (commit func(func(*bolt.Tx) error) error, done fun
 	return commit, func() { s.pending.Add(-1) }
 }
 
-func (s *Store) CreateRun(_ context.Context, rec *driver.RunRecord) (*driver.RunRecord, bool, error) {
+func (s *Store) CreateRun(_ context.Context, rec *driver.RunRecord, excluding []kernel.PipelineID) (*driver.RunRecord, bool, error) {
 	var existing *driver.RunRecord
 	created := false
 	commit, done := s.groupCommit()
 	defer done()
 	err := commit(func(tx *bolt.Tx) error {
-		key := slotKey(rec)
-		if activeID := tx.Bucket(slotsBucket).Get(key); activeID != nil {
+		slots := tx.Bucket(slotsBucket)
+		// rec's own slot first, then every group member's: the first
+		// occupant found is the blocker reported to the caller.
+		if activeID := slots.Get(slotKey(rec)); activeID != nil {
 			var err error
 			existing, err = getRun(tx, kernel.RunID(activeID))
 			return err
 		}
+		for _, p := range excluding {
+			if p == rec.PipelineID {
+				continue
+			}
+			if activeID := slots.Get(slotKeyFor(p, rec.ResourceID)); activeID != nil {
+				var err error
+				existing, err = getRun(tx, kernel.RunID(activeID))
+				return err
+			}
+		}
 		if err := putRun(tx, rec); err != nil {
 			return err
 		}
-		if err := tx.Bucket(slotsBucket).Put(key, []byte(rec.RunID)); err != nil {
+		if err := slots.Put(slotKey(rec), []byte(rec.RunID)); err != nil {
 			return err
 		}
 		created = true
@@ -468,11 +480,11 @@ func (s *Store) ListRuns(_ context.Context, pipeline kernel.PipelineID, resource
 
 // GetActiveRunID answers from the slots bucket: one point read, the same
 // index CreateRun enforces the slot with.
-func (s *Store) GetActiveRunID(_ context.Context, group string, resource kernel.ResourceID) (kernel.RunID, bool, error) {
+func (s *Store) GetActiveRunID(_ context.Context, pipeline kernel.PipelineID, resource kernel.ResourceID) (kernel.RunID, bool, error) {
 	var id kernel.RunID
 	var ok bool
 	err := s.db.View(func(tx *bolt.Tx) error {
-		if v := tx.Bucket(slotsBucket).Get(slotKeyFor(group, resource)); v != nil {
+		if v := tx.Bucket(slotsBucket).Get(slotKeyFor(pipeline, resource)); v != nil {
 			id, ok = kernel.RunID(v), true
 		}
 		return nil

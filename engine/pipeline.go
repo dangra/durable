@@ -78,7 +78,6 @@ func (p *Pipeline) Schedule(ctx context.Context, resource durable.ResourceID, in
 		RunID:       newRunID(now),
 		PipelineID:  p.def.ID(),
 		ResourceID:  resource,
-		Group:       p.def.slotGroup(),
 		Annotations: so.Annotations,
 		Input:       inputBytes,
 		Phase:       durable.PhaseForward,
@@ -91,7 +90,7 @@ func (p *Pipeline) Schedule(ctx context.Context, resource durable.ResourceID, in
 	case so.StartAfter > 0:
 		rec.NextAttemptAt = now.Add(so.StartAfter)
 	}
-	existing, created, err := e.store.CreateRun(ctx, rec)
+	existing, created, err := e.store.CreateRun(ctx, rec, p.def.exclusive)
 	if err != nil {
 		return Run{}, false, err
 	}
@@ -151,18 +150,9 @@ func (p *Pipeline) GetRun(ctx context.Context, id durable.RunID) (Run, error) {
 // Input); claiming the slot atomically remains Schedule's job. It is one
 // indexed store read.
 func (p *Pipeline) GetActiveRun(ctx context.Context, resource durable.ResourceID) (Run, bool, error) {
-	id, ok, err := p.engine.store.GetActiveRunID(ctx, p.def.slotGroup(), resource)
+	id, ok, err := p.engine.store.GetActiveRunID(ctx, p.def.ID(), resource)
 	if err != nil || !ok {
 		return Run{}, false, err
-	}
-	rec, err := p.engine.store.GetRun(ctx, id)
-	if err != nil {
-		return Run{}, false, err
-	}
-	if rec.PipelineID != p.def.ID() {
-		// The slot is held by another pipeline of the same exclusion
-		// group: not this pipeline's active Run.
-		return Run{}, false, nil
 	}
 	return Run{id: id, engine: p.engine}, true, nil
 }

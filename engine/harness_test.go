@@ -79,7 +79,7 @@ func seedRun(t *testing.T, store driver.Store, pipeline durable.PipelineID, step
 		CreatedAt:  time.Now(),
 		UpdatedAt:  time.Now(),
 	}
-	if _, created, err := store.CreateRun(context.Background(), rec); err != nil || !created {
+	if _, created, err := store.CreateRun(context.Background(), rec, nil); err != nil || !created {
 		t.Fatalf("seeding run: created=%v err=%v", created, err)
 	}
 	return rec.RunID

@@ -149,8 +149,8 @@ func FuzzRoundTrip(f *testing.F) {
 		// RunMeta.
 		rec := &driver.RunRecord{
 			RunID: kernel.RunID(s1), PipelineID: kernel.PipelineID(s2),
-			ResourceID: kernel.ResourceID(s1), Group: s2,
-			Input: append([]byte(nil), blob...), CreatedAt: when,
+			ResourceID: kernel.ResourceID(s1),
+			Input:      append([]byte(nil), blob...), CreatedAt: when,
 		}
 		if a%2 == 0 {
 			rec.Annotations = map[string]string{s1: s2}
@@ -164,7 +164,7 @@ func FuzzRoundTrip(f *testing.F) {
 			t.Fatalf("UnmarshalRunMetaInto: %v", err)
 		}
 		if grec.RunID != rec.RunID || grec.PipelineID != rec.PipelineID ||
-			grec.ResourceID != rec.ResourceID || grec.Group != rec.Group ||
+			grec.ResourceID != rec.ResourceID ||
 			string(grec.Input) != string(rec.Input) || !sameTime(grec.CreatedAt, rec.CreatedAt) ||
 			len(grec.Annotations) != len(rec.Annotations) {
 			t.Fatalf("run meta round trip: %+v != %+v", grec, rec)

@@ -99,6 +99,13 @@ type Status struct {
 	// Outcome is set only for terminal Runs.
 	Outcome *durable.Outcome
 
+	// RootFailure is the failure that ended the forward phase, set from
+	// the moment the Run starts unwinding and kept on the terminal
+	// failure; nil while the Run is executing forward and on success.
+	// It is the same value Result carries, observable before Wait
+	// returns.
+	RootFailure *durable.RootFailure
+
 	// InvalidReason is set when State is RunStateInvalid.
 	InvalidReason string
 

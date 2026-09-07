@@ -305,6 +305,9 @@ type Status struct {
     LastErrorAt time.Time
 
     Outcome *Outcome
+    // Set from the start of unwind; on a terminal failure it equals
+    // Result.RootFailure. Nil while executing forward and on success.
+    RootFailure *RootFailure
 
     CancelRequested bool
     CancelCause     string

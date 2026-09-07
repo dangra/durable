@@ -137,6 +137,10 @@ func (r Run) Status(ctx context.Context) (Status, error) {
 			st.StepID, st.Attempt = id, sr.Unwind.Attempts
 		}
 	}
+	if rec.RootFailure != nil {
+		rf := *rec.RootFailure
+		st.RootFailure = &rf
+	}
 	switch {
 	case rec.Terminal():
 		st.State = RunStateDone

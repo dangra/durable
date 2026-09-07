@@ -213,3 +213,5 @@ Part of the [`durable` specification](README.md). This list is append-only; inva
 105. A change of mutexes between deployments never invalidates, aborts, or migrates a Run in flight; it governs new admissions from the first `Schedule` under the new deployment.
 
 106. Mutexes compose pairwise, not transitively: two pipelines exclude each other exactly when they share a name, so a pipeline holding several mutexes is blocked by any holder of any of them while pipelines sharing no name run together.
+
+107. Free text recorded on a Run (failure messages and reasons, last-error fields, cancel causes) never exceeds the Engine's text limit; longer text is cut at a rune boundary and marked.

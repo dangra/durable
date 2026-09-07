@@ -96,14 +96,14 @@ func (r Run) Cancel(ctx context.Context, cause string) error {
 	if !e.isStarted() {
 		return ErrNotStarted
 	}
-	accepted, err := e.store.RequestCancel(ctx, r.id, driver.CancelRequest{Cause: sanitizeText(cause), At: e.clock.Now()})
+	accepted, err := e.store.RequestCancel(ctx, r.id, driver.CancelRequest{Cause: e.boundText(cause), At: e.clock.Now()})
 	if err != nil {
 		return err
 	}
 	if accepted && e.debugLog() {
 		e.logger.Debug("durable: cancel requested", "run", string(r.id), "cause", cause)
 	}
-	e.preemptAttempt(r.id, sanitizeText(cause))
+	e.preemptAttempt(r.id, e.boundText(cause))
 	e.disp.Wake(r.id)
 	e.disp.Dispatch(r.id, 0)
 	return nil

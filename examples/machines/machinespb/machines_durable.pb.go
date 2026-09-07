@@ -12,6 +12,7 @@ import (
 	engine "github.com/dangra/durable/engine"
 	pipelinedef "github.com/dangra/durable/pipelinedef"
 	proto "google.golang.org/protobuf/proto"
+	slog "log/slog"
 	sync "sync"
 )
 
@@ -56,6 +57,14 @@ func (inv ValidateInvocation) Awaited() (durable.Wake, bool) { return inv.core.A
 // Annotations returns a caller-owned copy of the run's immutable
 // acceptance-time annotations (trace contexts, tenant tags).
 func (inv ValidateInvocation) Annotations() map[string]string { return inv.core.Annotations() }
+
+// Failure is the failure this run is unwinding: non-nil exactly in
+// durable.PhaseUnwind, nil during forward attempts.
+func (inv ValidateInvocation) Failure() *durable.Failure { return inv.core.Failure() }
+
+// Logger returns a logger scoped to this invocation, with the canonical
+// pipeline, resource, run, step, phase, and attempt keys attached.
+func (inv ValidateInvocation) Logger() *slog.Logger { return inv.core.Logger() }
 
 // Input returns a defensive caller-owned copy of the immutable pipeline input.
 func (inv ValidateInvocation) Input() *ProvisionMachineInput {
@@ -108,6 +117,14 @@ func (inv SelectHostInvocation) Awaited() (durable.Wake, bool) { return inv.core
 // Annotations returns a caller-owned copy of the run's immutable
 // acceptance-time annotations (trace contexts, tenant tags).
 func (inv SelectHostInvocation) Annotations() map[string]string { return inv.core.Annotations() }
+
+// Failure is the failure this run is unwinding: non-nil exactly in
+// durable.PhaseUnwind, nil during forward attempts.
+func (inv SelectHostInvocation) Failure() *durable.Failure { return inv.core.Failure() }
+
+// Logger returns a logger scoped to this invocation, with the canonical
+// pipeline, resource, run, step, phase, and attempt keys attached.
+func (inv SelectHostInvocation) Logger() *slog.Logger { return inv.core.Logger() }
 
 // Input returns a defensive caller-owned copy of the immutable pipeline input.
 func (inv SelectHostInvocation) Input() *ProvisionMachineInput {
@@ -164,6 +181,14 @@ func (inv ReserveCapacityInvocation) Awaited() (durable.Wake, bool) { return inv
 // Annotations returns a caller-owned copy of the run's immutable
 // acceptance-time annotations (trace contexts, tenant tags).
 func (inv ReserveCapacityInvocation) Annotations() map[string]string { return inv.core.Annotations() }
+
+// Failure is the failure this run is unwinding: non-nil exactly in
+// durable.PhaseUnwind, nil during forward attempts.
+func (inv ReserveCapacityInvocation) Failure() *durable.Failure { return inv.core.Failure() }
+
+// Logger returns a logger scoped to this invocation, with the canonical
+// pipeline, resource, run, step, phase, and attempt keys attached.
+func (inv ReserveCapacityInvocation) Logger() *slog.Logger { return inv.core.Logger() }
 
 // Input returns a defensive caller-owned copy of the immutable pipeline input.
 func (inv ReserveCapacityInvocation) Input() *ProvisionMachineInput {
@@ -228,6 +253,14 @@ func (inv CreateMachineInvocation) Awaited() (durable.Wake, bool) { return inv.c
 // Annotations returns a caller-owned copy of the run's immutable
 // acceptance-time annotations (trace contexts, tenant tags).
 func (inv CreateMachineInvocation) Annotations() map[string]string { return inv.core.Annotations() }
+
+// Failure is the failure this run is unwinding: non-nil exactly in
+// durable.PhaseUnwind, nil during forward attempts.
+func (inv CreateMachineInvocation) Failure() *durable.Failure { return inv.core.Failure() }
+
+// Logger returns a logger scoped to this invocation, with the canonical
+// pipeline, resource, run, step, phase, and attempt keys attached.
+func (inv CreateMachineInvocation) Logger() *slog.Logger { return inv.core.Logger() }
 
 // Input returns a defensive caller-owned copy of the immutable pipeline input.
 func (inv CreateMachineInvocation) Input() *ProvisionMachineInput {
@@ -495,6 +528,14 @@ func (inv ReleaseMachineInvocation) Awaited() (durable.Wake, bool) { return inv.
 // Annotations returns a caller-owned copy of the run's immutable
 // acceptance-time annotations (trace contexts, tenant tags).
 func (inv ReleaseMachineInvocation) Annotations() map[string]string { return inv.core.Annotations() }
+
+// Failure is the failure this run is unwinding: non-nil exactly in
+// durable.PhaseUnwind, nil during forward attempts.
+func (inv ReleaseMachineInvocation) Failure() *durable.Failure { return inv.core.Failure() }
+
+// Logger returns a logger scoped to this invocation, with the canonical
+// pipeline, resource, run, step, phase, and attempt keys attached.
+func (inv ReleaseMachineInvocation) Logger() *slog.Logger { return inv.core.Logger() }
 
 // State returns the committed state of the referenced step for this run.
 // ok is false when no committed state exists.

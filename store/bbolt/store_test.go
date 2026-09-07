@@ -3,9 +3,11 @@ package bbolt
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"github.com/dangra/durable/store/driver"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -375,4 +377,101 @@ func TestGetActiveRunIDFollowsTheSlot(t *testing.T) {
 	if _, created, err := s.CreateRun(ctx, rec("c"), nil); err != nil || !created {
 		t.Fatalf("slot must be reusable: created=%v err=%v", created, err)
 	}
+}
+
+// TestFailureRowsAppendAndReap pins the failures bucket layout: the root
+// failure under the run id, each permanent unwind failure under its own
+// ordinal key written once, read back in execution order, and all of
+// them swept by ReapTerminal. Seeded records take the same shape.
+func TestFailureRowsAppendAndReap(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(filepath.Join(t.TempDir(), "failures.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	now := time.Unix(1_700_000_000, 0).UTC()
+	rec := &driver.RunRecord{
+		RunID: "run-f", PipelineID: "p", ResourceID: "r", Phase: durable.PhaseForward,
+		Steps: map[durable.StepID]*driver.StepRecord{}, CreatedAt: now, UpdatedAt: now,
+	}
+	if _, created, err := s.CreateRun(ctx, rec, nil); err != nil || !created {
+		t.Fatalf("CreateRun = %v, %v", created, err)
+	}
+	failure := func(step string, attempt uint64) durable.FailureRecord {
+		return durable.FailureRecord{StepID: durable.StepID(step), Phase: durable.PhaseUnwind, Attempt: attempt, Message: "failed " + step, At: now}
+	}
+	root := &durable.RootFailure{FailureRecord: failure("c/v1", 1)}
+	root.Phase = durable.PhaseForward
+	if err := s.ApplyTransition(ctx, "run-f", driver.Transition{Cursor: driver.Cursor{Phase: durable.PhaseUnwind, UpdatedAt: now}, RootFailure: root}); err != nil {
+		t.Fatal(err)
+	}
+	for i, step := range []string{"b/v1", "a/v1", "z/v1"} { // execution order, not key order of the step ids
+		uf := &durable.UnwindFailure{FailureRecord: failure(step, uint64(i+1))}
+		if err := s.ApplyTransition(ctx, "run-f", driver.Transition{Cursor: driver.Cursor{Phase: durable.PhaseUnwind, UpdatedAt: now}, UnwindFailure: uf}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	keys := func() (root bool, ordinals []uint64) {
+		s.db.View(func(tx *bolt.Tx) error {
+			return tx.Bucket(failuresBucket).ForEach(func(k, _ []byte) error {
+				if string(k) == "run-f" {
+					root = true
+					return nil
+				}
+				if !bytes.HasPrefix(k, []byte("run-f\x00")) || len(k) != len("run-f")+1+8 {
+					t.Fatalf("unexpected failures key %q", k)
+				}
+				ordinals = append(ordinals, binary.BigEndian.Uint64(k[len("run-f")+1:]))
+				return nil
+			})
+		})
+		return root, ordinals
+	}
+	if hasRoot, ordinals := keys(); !hasRoot || !slices.Equal(ordinals, []uint64{0, 1, 2}) {
+		t.Fatalf("layout: root=%v ordinals=%v; want root and 0,1,2", hasRoot, ordinals)
+	}
+	got, err := s.GetRun(ctx, "run-f")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.RootFailure == nil || got.RootFailure.StepID != "c/v1" {
+		t.Fatalf("RootFailure = %+v", got.RootFailure)
+	}
+	var order []string
+	for _, uf := range got.UnwindFailures {
+		order = append(order, string(uf.StepID))
+	}
+	if !slices.Equal(order, []string{"b/v1", "a/v1", "z/v1"}) {
+		t.Fatalf("UnwindFailures order = %v; want execution order", order)
+	}
+
+	// A seeded record with failures round-trips through the same rows.
+	seed := *got
+	seed.RunID, seed.ResourceID = "run-s", "r2"
+	if _, created, err := s.CreateRun(ctx, &seed, nil); err != nil || !created {
+		t.Fatalf("seed CreateRun = %v, %v", created, err)
+	}
+	if back, err := s.GetRun(ctx, "run-s"); err != nil || len(back.UnwindFailures) != 3 || back.UnwindFailures[2].StepID != "z/v1" {
+		t.Fatalf("seeded round trip = %+v, %v", back, err)
+	}
+
+	// Terminal, then reaped: every failure row goes with the run.
+	oc := durable.OutcomeFailure
+	for _, id := range []durable.RunID{"run-f", "run-s"} {
+		if err := s.ApplyTransition(ctx, id, driver.Transition{Cursor: driver.Cursor{Phase: durable.PhaseDone, UpdatedAt: now}, Outcome: &oc}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n, err := s.ReapTerminal(ctx, now.Add(time.Second), 10); err != nil || n != 2 {
+		t.Fatalf("ReapTerminal = %d, %v", n, err)
+	}
+	s.db.View(func(tx *bolt.Tx) error {
+		if k, _ := tx.Bucket(failuresBucket).Cursor().First(); k != nil {
+			t.Fatalf("failures bucket still holds %q after reap", k)
+		}
+		return nil
+	})
 }

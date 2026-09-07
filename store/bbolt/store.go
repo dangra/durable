@@ -10,17 +10,20 @@
 // implementation stores each run as components with distinct write
 // cadences (the internal durable.storage.v1 protobuf schema): write-once
 // meta (identity + input), step-fact rows written at operation resolution,
-// rarely-written failures/terminal/cancel records, and the small cursor
+// a root failure row and one append-only row per permanent unwind
+// failure, write-once terminal and cancel records, and the small cursor
 // rewritten per attempt. Per-attempt write volume is therefore independent
-// of input and state sizes. An active-slot index keyed by (PipelineID,
-// ResourceID) holds every nonterminal run: CreateRun admits against it,
-// GetActiveRunID reads it, and ListNonterminal walks it, so recovery cost
-// follows the runs in flight rather than the retained history.
+// of input and state sizes, and no row is ever read back to be
+// rewritten. An active-slot index keyed by (PipelineID, ResourceID) holds
+// every nonterminal run: CreateRun admits against it, GetActiveRunID
+// reads it, and ListNonterminal walks it, so recovery cost follows the
+// runs in flight rather than the retained history.
 package bbolt
 
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"fmt"
 	"github.com/dangra/durable/store/driver"
 	"sort"
@@ -96,6 +99,18 @@ func slotKeyFor(pipeline kernel.PipelineID, resource kernel.ResourceID) []byte {
 
 func stepKey(id kernel.RunID, step kernel.StepID) []byte {
 	return []byte(string(id) + "\x00" + string(step))
+}
+
+// unwindFailureKey addresses the n-th permanent unwind failure of a run
+// (0-based, in unwind execution order). The fixed-width big-endian
+// ordinal keeps byte order equal to execution order, so a prefix scan
+// reads them back in sequence. The run's root failure lives under the
+// bare run id in the same bucket; the NUL keeps the two apart.
+func unwindFailureKey(id kernel.RunID, n uint64) []byte {
+	k := make([]byte, 0, len(id)+1+8)
+	k = append(k, id...)
+	k = append(k, 0)
+	return binary.BigEndian.AppendUint64(k, n)
 }
 
 // groupCommit picks the adaptive commit strategy for one write call: a
@@ -185,12 +200,13 @@ func putRun(tx *bolt.Tx, rec *driver.RunRecord) error {
 			return err
 		}
 	}
-	if rec.RootFailure != nil || len(rec.UnwindFailures) > 0 {
-		b, err := storagepb.MarshalFailures(rec.RootFailure, rec.UnwindFailures)
-		if err != nil {
+	if rec.RootFailure != nil {
+		if err := putRootFailure(tx, rec.RunID, rec.RootFailure); err != nil {
 			return err
 		}
-		if err := tx.Bucket(failuresBucket).Put([]byte(rec.RunID), b); err != nil {
+	}
+	for i, uf := range rec.UnwindFailures {
+		if err := putUnwindFailure(tx, rec.RunID, uint64(i), uf); err != nil {
 			return err
 		}
 	}
@@ -231,23 +247,16 @@ func (s *Store) ApplyTransition(_ context.Context, id kernel.RunID, t driver.Tra
 				return err
 			}
 		}
-		if t.RootFailure != nil || t.UnwindFailure != nil {
-			root, unwind, err := readFailures(tx, id)
-			if err != nil {
+		if t.RootFailure != nil {
+			if err := putRootFailure(tx, id, t.RootFailure); err != nil {
 				return err
 			}
-			if t.RootFailure != nil {
-				rf := *t.RootFailure
-				root = &rf
-			}
-			if t.UnwindFailure != nil {
-				unwind = append(unwind, *t.UnwindFailure)
-			}
-			b, err := storagepb.MarshalFailures(root, unwind)
-			if err != nil {
-				return err
-			}
-			if err := tx.Bucket(failuresBucket).Put([]byte(id), b); err != nil {
+		}
+		if t.UnwindFailure != nil {
+			// Append-only: the next ordinal is the count of rows already
+			// there, found by a key walk with no decode. Nothing is
+			// re-read or rewritten.
+			if err := putUnwindFailure(tx, id, countUnwindFailures(tx, id), *t.UnwindFailure); err != nil {
 				return err
 			}
 		}
@@ -273,12 +282,57 @@ func (s *Store) ApplyTransition(_ context.Context, id kernel.RunID, t driver.Tra
 	})
 }
 
-func readFailures(tx *bolt.Tx, id kernel.RunID) (*kernel.RootFailure, []kernel.UnwindFailure, error) {
-	b := tx.Bucket(failuresBucket).Get([]byte(id))
-	if b == nil {
-		return nil, nil, nil
+func putRootFailure(tx *bolt.Tx, id kernel.RunID, rf *kernel.RootFailure) error {
+	b, err := storagepb.MarshalFailureRecord(rf.FailureRecord)
+	if err != nil {
+		return err
 	}
-	return storagepb.UnmarshalFailures(b)
+	return tx.Bucket(failuresBucket).Put([]byte(id), b)
+}
+
+func putUnwindFailure(tx *bolt.Tx, id kernel.RunID, n uint64, uf kernel.UnwindFailure) error {
+	b, err := storagepb.MarshalFailureRecord(uf.FailureRecord)
+	if err != nil {
+		return err
+	}
+	return tx.Bucket(failuresBucket).Put(unwindFailureKey(id, n), b)
+}
+
+// countUnwindFailures walks the run's unwind failure keys without
+// decoding a value.
+func countUnwindFailures(tx *bolt.Tx, id kernel.RunID) uint64 {
+	prefix := unwindFailureKey(id, 0)[:len(id)+1]
+	c := tx.Bucket(failuresBucket).Cursor()
+	var n uint64
+	for k, _ := c.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, _ = c.Next() {
+		n++
+	}
+	return n
+}
+
+// readFailures assembles the root failure from its own row and the
+// unwind failures from their ordinal rows, in execution order.
+func readFailures(tx *bolt.Tx, id kernel.RunID) (*kernel.RootFailure, []kernel.UnwindFailure, error) {
+	fb := tx.Bucket(failuresBucket)
+	var root *kernel.RootFailure
+	if b := fb.Get([]byte(id)); b != nil {
+		f, err := storagepb.UnmarshalFailureRecord(b)
+		if err != nil {
+			return nil, nil, err
+		}
+		root = &kernel.RootFailure{FailureRecord: f}
+	}
+	var unwind []kernel.UnwindFailure
+	prefix := unwindFailureKey(id, 0)[:len(id)+1]
+	c := fb.Cursor()
+	for k, v := c.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, v = c.Next() {
+		f, err := storagepb.UnmarshalFailureRecord(v)
+		if err != nil {
+			return nil, nil, err
+		}
+		unwind = append(unwind, kernel.UnwindFailure{FailureRecord: f})
+	}
+	return root, unwind, nil
 }
 
 // getRun assembles the read model from the run's components: meta, step
@@ -386,14 +440,11 @@ func (s *Store) ReapTerminal(_ context.Context, before time.Time, limit int) (in
 			}
 		}
 		for _, id := range victims {
+			// Step rows and unwind failure rows hang off the run id with
+			// a NUL; both buckets are swept by prefix.
 			prefix := stepKey(kernel.RunID(id), "")
-			sc := tx.Bucket(stepsBucket).Cursor()
-			var stepKeys [][]byte
-			for k, _ := sc.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, _ = sc.Next() {
-				stepKeys = append(stepKeys, bytes.Clone(k))
-			}
-			for _, k := range stepKeys {
-				if err := tx.Bucket(stepsBucket).Delete(k); err != nil {
+			for _, bucket := range [][]byte{stepsBucket, failuresBucket} {
+				if err := deletePrefix(tx.Bucket(bucket), prefix); err != nil {
 					return err
 				}
 			}
@@ -410,6 +461,22 @@ func (s *Store) ReapTerminal(_ context.Context, before time.Time, limit int) (in
 		return 0, err
 	}
 	return deleted, nil
+}
+
+// deletePrefix removes every key under prefix, collecting first: bbolt
+// forbids mutating a bucket while iterating it.
+func deletePrefix(b *bolt.Bucket, prefix []byte) error {
+	var keys [][]byte
+	c := b.Cursor()
+	for k, _ := c.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, _ = c.Next() {
+		keys = append(keys, bytes.Clone(k))
+	}
+	for _, k := range keys {
+		if err := b.Delete(k); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Store) RequestCancel(_ context.Context, id kernel.RunID, req driver.CancelRequest) (bool, error) {

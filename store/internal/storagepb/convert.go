@@ -241,6 +241,20 @@ func UnmarshalFailures(b []byte) (*kernel.RootFailure, []kernel.UnwindFailure, e
 	return root, unwind, nil
 }
 
+// MarshalFailureRecord encodes one failure record on its own, for stores
+// that keep the root failure and each unwind failure as separate rows.
+func MarshalFailureRecord(f kernel.FailureRecord) ([]byte, error) {
+	return marshal("failure record", failureRecordToProto(&f))
+}
+
+func UnmarshalFailureRecord(b []byte) (kernel.FailureRecord, error) {
+	pb := &FailureRecord{}
+	if err := unmarshal("failure record", b, pb); err != nil {
+		return kernel.FailureRecord{}, err
+	}
+	return failureRecordFromProto(pb), nil
+}
+
 func MarshalTerminal(outcome kernel.Outcome, output []byte) ([]byte, error) {
 	return marshal("terminal", &Terminal{Outcome: outcomeToProto(outcome), Output: output})
 }

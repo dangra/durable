@@ -378,29 +378,29 @@ func (p *ProvisionMachinePipeline) Schedule(ctx context.Context, resource durabl
 	return ProvisionMachineRun{run: run}, created, nil
 }
 
-// Run returns a handle to an existing run of this pipeline.
-func (p *ProvisionMachinePipeline) Run(ctx context.Context, id durable.RunID) (ProvisionMachineRun, error) {
-	run, err := p.pipeline.Run(ctx, id)
+// GetRun returns a handle to an existing run of this pipeline.
+func (p *ProvisionMachinePipeline) GetRun(ctx context.Context, id durable.RunID) (ProvisionMachineRun, error) {
+	run, err := p.pipeline.GetRun(ctx, id)
 	if err != nil {
 		return ProvisionMachineRun{}, err
 	}
 	return ProvisionMachineRun{run: run}, nil
 }
 
-// ActiveRun returns a handle to this pipeline's nonterminal run for a
+// GetActiveRun returns a handle to this pipeline's nonterminal run for a
 // resource, if one exists — a read-only observation for wait/inspect
 // flows; claiming the slot atomically remains Schedule's job.
-func (p *ProvisionMachinePipeline) ActiveRun(ctx context.Context, resource durable.ResourceID) (ProvisionMachineRun, bool, error) {
-	run, ok, err := p.pipeline.ActiveRun(ctx, resource)
+func (p *ProvisionMachinePipeline) GetActiveRun(ctx context.Context, resource durable.ResourceID) (ProvisionMachineRun, bool, error) {
+	run, ok, err := p.pipeline.GetActiveRun(ctx, resource)
 	if err != nil || !ok {
 		return ProvisionMachineRun{}, ok, err
 	}
 	return ProvisionMachineRun{run: run}, true, nil
 }
 
-// Active returns handles for this pipeline's nonterminal runs.
-func (p *ProvisionMachinePipeline) Active(ctx context.Context) ([]ProvisionMachineRun, error) {
-	runs, err := p.pipeline.Active(ctx)
+// ListActiveRuns returns handles for this pipeline's nonterminal runs.
+func (p *ProvisionMachinePipeline) ListActiveRuns(ctx context.Context) ([]ProvisionMachineRun, error) {
+	runs, err := p.pipeline.ListActiveRuns(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -411,10 +411,10 @@ func (p *ProvisionMachinePipeline) Active(ctx context.Context) ([]ProvisionMachi
 	return out, nil
 }
 
-// Runs returns handles for all runs of this pipeline against a resource,
-// oldest first.
-func (p *ProvisionMachinePipeline) Runs(ctx context.Context, resource durable.ResourceID) ([]ProvisionMachineRun, error) {
-	runs, err := p.pipeline.Runs(ctx, resource)
+// GetRuns returns handles for all runs of this pipeline against a resource,
+// terminal and nonterminal, oldest first.
+func (p *ProvisionMachinePipeline) GetRuns(ctx context.Context, resource durable.ResourceID) ([]ProvisionMachineRun, error) {
+	runs, err := p.pipeline.GetRuns(ctx, resource)
 	if err != nil {
 		return nil, err
 	}
@@ -603,29 +603,29 @@ func (p *DecommissionMachinePipeline) Schedule(ctx context.Context, resource dur
 	return run, created, err
 }
 
-// Run returns a handle to an existing run of this pipeline.
-func (p *DecommissionMachinePipeline) Run(ctx context.Context, id durable.RunID) (engine.Run, error) {
-	run, err := p.pipeline.Run(ctx, id)
+// GetRun returns a handle to an existing run of this pipeline.
+func (p *DecommissionMachinePipeline) GetRun(ctx context.Context, id durable.RunID) (engine.Run, error) {
+	run, err := p.pipeline.GetRun(ctx, id)
 	return run, err
 }
 
-// ActiveRun returns a handle to this pipeline's nonterminal run for a
+// GetActiveRun returns a handle to this pipeline's nonterminal run for a
 // resource, if one exists — a read-only observation for wait/inspect
 // flows; claiming the slot atomically remains Schedule's job.
-func (p *DecommissionMachinePipeline) ActiveRun(ctx context.Context, resource durable.ResourceID) (engine.Run, bool, error) {
-	run, ok, err := p.pipeline.ActiveRun(ctx, resource)
+func (p *DecommissionMachinePipeline) GetActiveRun(ctx context.Context, resource durable.ResourceID) (engine.Run, bool, error) {
+	run, ok, err := p.pipeline.GetActiveRun(ctx, resource)
 	return run, ok, err
 }
 
-// Active returns handles for this pipeline's nonterminal runs.
-func (p *DecommissionMachinePipeline) Active(ctx context.Context) ([]engine.Run, error) {
-	runs, err := p.pipeline.Active(ctx)
+// ListActiveRuns returns handles for this pipeline's nonterminal runs.
+func (p *DecommissionMachinePipeline) ListActiveRuns(ctx context.Context) ([]engine.Run, error) {
+	runs, err := p.pipeline.ListActiveRuns(ctx)
 	return runs, err
 }
 
-// Runs returns handles for all runs of this pipeline against a resource,
-// oldest first.
-func (p *DecommissionMachinePipeline) Runs(ctx context.Context, resource durable.ResourceID) ([]engine.Run, error) {
-	runs, err := p.pipeline.Runs(ctx, resource)
+// GetRuns returns handles for all runs of this pipeline against a resource,
+// terminal and nonterminal, oldest first.
+func (p *DecommissionMachinePipeline) GetRuns(ctx context.Context, resource durable.ResourceID) ([]engine.Run, error) {
+	runs, err := p.pipeline.GetRuns(ctx, resource)
 	return runs, err
 }

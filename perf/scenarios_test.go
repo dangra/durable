@@ -136,7 +136,7 @@ func BenchmarkRecovery(b *testing.B) {
 		startDur := time.Since(startBegin)
 
 		for _, id := range ids {
-			run, err := v.pipe.Run(context.Background(), id)
+			run, err := v.pipe.GetRun(context.Background(), id)
 			if err != nil {
 				b.Fatal(err)
 			}

@@ -50,7 +50,7 @@ func TestWaitInsideHandlerFailsFast(t *testing.T) {
 		Steps: []pipelinedef.Step{
 			stateless("ship/v1", func(ctx context.Context, inv durable.Invocation) error {
 				if awaited, woken := inv.AwaitedRunID(); woken {
-					run, err := childPipe.Run(ctx, awaited)
+					run, err := childPipe.GetRun(ctx, awaited)
 					if err != nil {
 						return durable.Fail(err)
 					}
@@ -151,7 +151,7 @@ func TestAwaitRunParksUntilTargetCompletes(t *testing.T) {
 		Steps: []pipelinedef.Step{
 			stateless("w/v1", func(ctx context.Context, inv durable.Invocation) error {
 				waiterAttempts.Store(inv.Attempt())
-				run, ok, err := targetPipe.ActiveRun(ctx, "res")
+				run, ok, err := targetPipe.GetActiveRun(ctx, "res")
 				if err != nil {
 					return err
 				}
@@ -247,7 +247,7 @@ func TestAwaitedRunIDPreventsChildRespawn(t *testing.T) {
 		t.Fatal("wake attempt did not observe AwaitedRunID")
 	}
 	// Exactly one child was ever created.
-	children, err := childPipe.Runs(context.Background(), "child-res")
+	children, err := childPipe.GetRuns(context.Background(), "child-res")
 	if err != nil {
 		t.Fatalf("Runs: %v", err)
 	}
@@ -289,7 +289,7 @@ func TestAwaitCycleIsInvalid(t *testing.T) {
 					if _, ok := inv.AwaitedRunID(); ok {
 						return nil
 					}
-					run, ok, err := (*other).ActiveRun(ctx, otherRes)
+					run, ok, err := (*other).GetActiveRun(ctx, otherRes)
 					if err != nil {
 						return err
 					}
@@ -365,7 +365,7 @@ func TestCancelCutsThroughAwait(t *testing.T) {
 				if inv.CancelRequested() {
 					return nil
 				}
-				run, ok, err := targetPipe.ActiveRun(ctx, "res")
+				run, ok, err := targetPipe.GetActiveRun(ctx, "res")
 				if err != nil {
 					return err
 				}

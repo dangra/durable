@@ -209,7 +209,7 @@ eng := engine.New(store)
 deploy, _ := deploypb.NewDeployService(...).Bind(eng)
 eng.Start(ctx)
 
-run, err := deploy.Run(ctx, runID) // recover a handle by RunID
+run, err := deploy.GetRun(ctx, runID) // recover a handle by RunID
 result, err := run.Wait(ctx)
 ```
 
@@ -375,7 +375,9 @@ targets terminal or missing at wake time), and `Pending()` for the rest
 func (h *shipServices) Run(ctx context.Context, inv releasepb.ShipServicesInvocation) (*releasepb.ShipServices, error) {
     if w, woken := inv.Awaited(); woken {
         for _, id := range w.Done {              // all of them, under AwaitAll
-            res, err := deploy.Run(ctx, id).Wait(ctx) // terminal → returns immediately
+            run, err := deploy.GetRun(ctx, id)
+            if err != nil { return nil, err }
+            res, err := run.Wait(ctx)                 // terminal → returns immediately
             if err != nil { return nil, err }
             if !res.Succeeded() { return nil, durable.Fail(fmt.Errorf("deploy %s failed", id)) }
         }

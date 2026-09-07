@@ -85,7 +85,7 @@ func TestDrainLetsAttemptFinish(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 	defer e2.Stop(context.Background())
-	run2, err := pipe3.Run(context.Background(), run.ID())
+	run2, err := pipe3.GetRun(context.Background(), run.ID())
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}

@@ -167,7 +167,7 @@ func TestEngineSurvivesRestart(t *testing.T) {
 	}
 	defer e2.Stop(context.Background())
 
-	run2, err := p2.Run(context.Background(), run.ID())
+	run2, err := p2.GetRun(context.Background(), run.ID())
 	if err != nil {
 		t.Fatalf("Run lookup: %v", err)
 	}

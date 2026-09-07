@@ -106,7 +106,7 @@ For wait/inspect flows that know the resource but cannot reproduce the
 exact Input, a pipeline exposes a read-only lookup:
 
 ```go
-run, ok, err := provision.ActiveRun(ctx, resourceID)
+run, ok, err := provision.GetActiveRun(ctx, resourceID)
 ```
 
 Observation never claims the slot; Schedule remains the only atomic way
@@ -433,7 +433,7 @@ cancel what it spawned before resolving. The park survives restart.
 Canonical shapes:
 
 ```text
-wait-for-existing:   ActiveRun -> found? AwaitRun : proceed
+wait-for-existing:   GetActiveRun -> found? AwaitRun : proceed
 create-then-wait:    Awaited? proceed : Schedule -> AwaitRun
 drain-then-start:    Schedule -> conflict? AwaitRun(blocker) : done
                      (waking re-executes; Schedule retries the freed slot)

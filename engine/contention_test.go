@@ -159,14 +159,14 @@ func TestActiveRun(t *testing.T) {
 	_, pipes := startEngine(t, mem.New(), def)
 	p := pipes[0]
 
-	if _, ok, err := p.ActiveRun(context.Background(), "r"); err != nil || ok {
+	if _, ok, err := p.GetActiveRun(context.Background(), "r"); err != nil || ok {
 		t.Fatalf("ActiveRun before schedule = ok=%v err=%v", ok, err)
 	}
 	run, _, err := p.Schedule(context.Background(), "r", nil)
 	if err != nil {
 		t.Fatalf("Schedule: %v", err)
 	}
-	got, ok, err := p.ActiveRun(context.Background(), "r")
+	got, ok, err := p.GetActiveRun(context.Background(), "r")
 	if err != nil || !ok || got.ID() != run.ID() {
 		t.Fatalf("ActiveRun = %s ok=%v err=%v, want %s", got.ID(), ok, err, run.ID())
 	}
@@ -174,7 +174,7 @@ func TestActiveRun(t *testing.T) {
 	if res, err := run.Wait(context.Background()); err != nil || !res.Succeeded() {
 		t.Fatalf("Wait = %+v, %v", res, err)
 	}
-	if _, ok, err := p.ActiveRun(context.Background(), "r"); err != nil || ok {
+	if _, ok, err := p.GetActiveRun(context.Background(), "r"); err != nil || ok {
 		t.Fatalf("ActiveRun after terminal = ok=%v err=%v", ok, err)
 	}
 }
@@ -235,7 +235,7 @@ func TestSupersedeReconcile(t *testing.T) {
 	}
 
 	// Inspect the blocker: is it doing older or newer work?
-	blocker, err := p.Run(context.Background(), conflict.RunID)
+	blocker, err := p.GetRun(context.Background(), conflict.RunID)
 	if err != nil {
 		t.Fatalf("Run lookup: %v", err)
 	}

@@ -326,29 +326,29 @@ func (p *DeployServicePipeline) Schedule(ctx context.Context, resource durable.R
 	return DeployServiceRun{run: run}, created, nil
 }
 
-// Run returns a handle to an existing run of this pipeline.
-func (p *DeployServicePipeline) Run(ctx context.Context, id durable.RunID) (DeployServiceRun, error) {
-	run, err := p.pipeline.Run(ctx, id)
+// GetRun returns a handle to an existing run of this pipeline.
+func (p *DeployServicePipeline) GetRun(ctx context.Context, id durable.RunID) (DeployServiceRun, error) {
+	run, err := p.pipeline.GetRun(ctx, id)
 	if err != nil {
 		return DeployServiceRun{}, err
 	}
 	return DeployServiceRun{run: run}, nil
 }
 
-// ActiveRun returns a handle to this pipeline's nonterminal run for a
+// GetActiveRun returns a handle to this pipeline's nonterminal run for a
 // resource, if one exists — a read-only observation for wait/inspect
 // flows; claiming the slot atomically remains Schedule's job.
-func (p *DeployServicePipeline) ActiveRun(ctx context.Context, resource durable.ResourceID) (DeployServiceRun, bool, error) {
-	run, ok, err := p.pipeline.ActiveRun(ctx, resource)
+func (p *DeployServicePipeline) GetActiveRun(ctx context.Context, resource durable.ResourceID) (DeployServiceRun, bool, error) {
+	run, ok, err := p.pipeline.GetActiveRun(ctx, resource)
 	if err != nil || !ok {
 		return DeployServiceRun{}, ok, err
 	}
 	return DeployServiceRun{run: run}, true, nil
 }
 
-// Active returns handles for this pipeline's nonterminal runs.
-func (p *DeployServicePipeline) Active(ctx context.Context) ([]DeployServiceRun, error) {
-	runs, err := p.pipeline.Active(ctx)
+// ListActiveRuns returns handles for this pipeline's nonterminal runs.
+func (p *DeployServicePipeline) ListActiveRuns(ctx context.Context) ([]DeployServiceRun, error) {
+	runs, err := p.pipeline.ListActiveRuns(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -359,10 +359,10 @@ func (p *DeployServicePipeline) Active(ctx context.Context) ([]DeployServiceRun,
 	return out, nil
 }
 
-// Runs returns handles for all runs of this pipeline against a resource,
-// oldest first.
-func (p *DeployServicePipeline) Runs(ctx context.Context, resource durable.ResourceID) ([]DeployServiceRun, error) {
-	runs, err := p.pipeline.Runs(ctx, resource)
+// GetRuns returns handles for all runs of this pipeline against a resource,
+// terminal and nonterminal, oldest first.
+func (p *DeployServicePipeline) GetRuns(ctx context.Context, resource durable.ResourceID) ([]DeployServiceRun, error) {
+	runs, err := p.pipeline.GetRuns(ctx, resource)
 	if err != nil {
 		return nil, err
 	}

@@ -111,7 +111,7 @@ func BenchmarkSupersedeCycle(b *testing.B) {
 					b.Errorf("expected conflict, got %v", err)
 					return
 				}
-				blocker, err := v.pipe.Run(context.Background(), conflict.RunID)
+				blocker, err := v.pipe.GetRun(context.Background(), conflict.RunID)
 				if err != nil {
 					b.Error(err)
 					return

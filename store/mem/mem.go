@@ -21,23 +21,38 @@ import (
 type Store struct {
 	mu   sync.Mutex
 	runs map[kernel.RunID]*driver.RunRecord
+	// slots indexes the nonterminal Run per (group, resource): the
+	// structure CreateRun enforces exclusion with and GetActiveRunID
+	// answers from. Released when a Run commits its Outcome.
+	slots map[string]kernel.RunID
 }
 
 // New constructs an empty Store.
 func New() *Store {
-	return &Store{runs: make(map[kernel.RunID]*driver.RunRecord)}
+	return &Store{runs: make(map[kernel.RunID]*driver.RunRecord), slots: make(map[string]kernel.RunID)}
+}
+
+func slotKey(group string, resource kernel.ResourceID) string {
+	return group + "\x00" + string(resource)
 }
 
 func (s *Store) CreateRun(_ context.Context, rec *driver.RunRecord) (*driver.RunRecord, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, r := range s.runs {
-		if r.SlotGroup() == rec.SlotGroup() && r.ResourceID == rec.ResourceID && !r.Terminal() {
-			return r.Clone(), false, nil
-		}
+	key := slotKey(rec.SlotGroup(), rec.ResourceID)
+	if active, ok := s.slots[key]; ok {
+		return s.runs[active].Clone(), false, nil
 	}
 	s.runs[rec.RunID] = rec.Clone()
+	s.slots[key] = rec.RunID
 	return nil, true, nil
+}
+
+func (s *Store) GetActiveRunID(_ context.Context, group string, resource kernel.ResourceID) (kernel.RunID, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	id, ok := s.slots[slotKey(group, resource)]
+	return id, ok, nil
 }
 
 func (s *Store) GetRun(_ context.Context, id kernel.RunID) (*driver.RunRecord, error) {
@@ -98,6 +113,10 @@ func (s *Store) ApplyTransition(_ context.Context, id kernel.RunID, t driver.Tra
 		oc := *t.Outcome
 		rec.Outcome = &oc
 		rec.Output = append([]byte(nil), t.Output...)
+		// Terminality releases the resource slot.
+		if key := slotKey(rec.SlotGroup(), rec.ResourceID); s.slots[key] == id {
+			delete(s.slots, key)
+		}
 	}
 	return nil
 }

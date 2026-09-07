@@ -93,7 +93,8 @@ func TestAwaitWokenAttemptTransientErrorKeepsMemory(t *testing.T) {
 			})),
 		},
 	})
-	_, pipes := startEngine(t, mem.New(), trivialChild("edge-child"), parent)
+	store := mem.New()
+	_, pipes := startEngine(t, store, trivialChild("edge-child"), parent)
 	childPipe = pipes[0]
 
 	pRun, _, err := pipes[1].Schedule(context.Background(), "parent-res", nil)
@@ -104,10 +105,7 @@ func TestAwaitWokenAttemptTransientErrorKeepsMemory(t *testing.T) {
 		t.Fatalf("parent Wait = %+v, %v", res, err)
 	}
 
-	children, err := childPipe.GetRuns(context.Background(), "child-res")
-	if err != nil {
-		t.Fatalf("Runs: %v", err)
-	}
+	children := runsFor(t, store, childPipe, "child-res")
 	entries := log.all()
 	t.Logf("attempts: %+v", entries)
 	if len(children) != 1 {
@@ -146,7 +144,8 @@ func TestAwaitWokenAttemptPermanentFailureUnwinds(t *testing.T) {
 			},
 		},
 	})
-	_, pipes := startEngine(t, mem.New(), trivialChild("edge-child-fail"), parent)
+	store := mem.New()
+	_, pipes := startEngine(t, store, trivialChild("edge-child-fail"), parent)
 	childPipe = pipes[0]
 
 	pRun, _, err := pipes[1].Schedule(context.Background(), "parent-res", nil)
@@ -160,7 +159,7 @@ func TestAwaitWokenAttemptPermanentFailureUnwinds(t *testing.T) {
 	if res.RootFailure == nil || res.RootFailure.StepID != "p/v1" || res.RootFailure.Attempt != 2 || res.RootFailure.Phase != durable.PhaseForward {
 		t.Errorf("RootFailure = %+v; want p/v1 forward attempt 2", res.RootFailure)
 	}
-	children, _ := childPipe.GetRuns(context.Background(), "child-res")
+	children := runsFor(t, store, childPipe, "child-res")
 	if len(children) != 1 {
 		t.Errorf("children = %d, want 1", len(children))
 	}
@@ -192,7 +191,8 @@ func TestAwaitTransientErrorBeforePark(t *testing.T) {
 			}),
 		},
 	})
-	_, pipes := startEngine(t, mem.New(), trivialChild("edge-child-pre"), parent)
+	store := mem.New()
+	_, pipes := startEngine(t, store, trivialChild("edge-child-pre"), parent)
 	childPipe = pipes[0]
 
 	pRun, _, err := pipes[1].Schedule(context.Background(), "parent-res", nil)
@@ -211,7 +211,7 @@ func TestAwaitTransientErrorBeforePark(t *testing.T) {
 	if st.LastError != "" {
 		t.Errorf("LastError = %q after success; want cleared", st.LastError)
 	}
-	children, _ := childPipe.GetRuns(context.Background(), "child-res")
+	children := runsFor(t, store, childPipe, "child-res")
 	if len(children) != 1 {
 		t.Errorf("children = %d, want 1", len(children))
 	}
@@ -294,7 +294,8 @@ func TestAwaitUnwindParkThenTransientError(t *testing.T) {
 			}),
 		},
 	})
-	_, pipes := startEngine(t, mem.New(), trivialChild("edge-child-unwind"), parent)
+	store := mem.New()
+	_, pipes := startEngine(t, store, trivialChild("edge-child-unwind"), parent)
 	childPipe = pipes[0]
 
 	pRun, _, err := pipes[1].Schedule(context.Background(), "parent-res", nil)
@@ -307,7 +308,7 @@ func TestAwaitUnwindParkThenTransientError(t *testing.T) {
 	}
 	entries := log.all()
 	t.Logf("unwind attempts: %+v", entries)
-	children, _ := childPipe.GetRuns(context.Background(), "child-res")
+	children := runsFor(t, store, childPipe, "child-res")
 	if len(children) != 1 {
 		t.Errorf("children = %d, want 1: the retried unwind attempt respawned the cleanup child", len(children))
 	}
@@ -467,7 +468,7 @@ func testAwaitRestartDuringWokenAttempt(t *testing.T, store driver.Store) {
 		t.Fatalf("parent Wait after restart = %+v, %v", res, err)
 	}
 	entries := log.all()
-	children, _ := childPipe.GetRuns(context.Background(), "child-res")
+	children := runsFor(t, store, childPipe, "child-res")
 	if len(children) != 1 {
 		t.Errorf("children = %d, want 1: the attempt resumed after restart respawned the child (attempts %+v)", len(children), entries)
 	}
@@ -515,7 +516,8 @@ func TestAwaitAllWakesOnceEveryTargetIsDone(t *testing.T) {
 			}),
 		},
 	})
-	_, pipes := startEngine(t, mem.New(), gatedChild("all-child", &g), parent)
+	store := mem.New()
+	_, pipes := startEngine(t, store, gatedChild("all-child", &g), parent)
 	childPipe = pipes[0]
 
 	pRun, _, err := pipes[1].Schedule(context.Background(), "parent-res", nil)
@@ -557,12 +559,12 @@ func TestAwaitAllWakesOnceEveryTargetIsDone(t *testing.T) {
 			t.Errorf("Wake = %+v; want all 3 targets done", w)
 		}
 	}
-	children, _ := childPipe.ListActiveRuns(context.Background())
+	children := activeRunsFor(t, store, childPipe)
 	if len(children) != 0 {
 		t.Errorf("active children after completion = %d", len(children))
 	}
 	for i := 0; i < 3; i++ {
-		runs, _ := childPipe.GetRuns(context.Background(), durable.ResourceID(fmt.Sprintf("child-%d", i)))
+		runs := runsFor(t, store, childPipe, durable.ResourceID(fmt.Sprintf("child-%d", i)))
 		if len(runs) != 1 {
 			t.Errorf("child-%d has %d runs; want 1 (no respawn)", i, len(runs))
 		}
@@ -862,7 +864,8 @@ func TestAwaitAllScheduleIsIdempotentAcrossRetry(t *testing.T) {
 			}),
 		},
 	})
-	_, pipes := startEngine(t, mem.New(), gatedChild("idem-child", &g), parent)
+	store := mem.New()
+	_, pipes := startEngine(t, store, gatedChild("idem-child", &g), parent)
 	childPipe = pipes[0]
 	pRun, _, err := pipes[1].Schedule(context.Background(), "parent-res", nil)
 	if err != nil {
@@ -878,7 +881,7 @@ func TestAwaitAllScheduleIsIdempotentAcrossRetry(t *testing.T) {
 		t.Fatalf("parent Wait = %+v, %v", res, err)
 	}
 	for i := 0; i < 3; i++ {
-		runs, _ := childPipe.GetRuns(context.Background(), durable.ResourceID(fmt.Sprintf("child-%d", i)))
+		runs := runsFor(t, store, childPipe, durable.ResourceID(fmt.Sprintf("child-%d", i)))
 		if len(runs) != 1 {
 			t.Errorf("child-%d has %d runs; want 1", i, len(runs))
 		}

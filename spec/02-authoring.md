@@ -617,9 +617,13 @@ A bound Pipeline exposes:
 Schedule
 GetRun
 GetActiveRun
-ListActiveRuns
-GetRuns
 ```
+
+`GetActiveRun` is one indexed read against the store's slot index (the
+structure `CreateRun` enforces exclusion with), never a scan. There is
+deliberately no listing or history API on a Pipeline: the engine is not
+a dashboard, and fleet-wide or historical views belong to the
+application's own records.
 
 Example:
 
@@ -737,12 +741,11 @@ func (r Run) OutputBytes(context.Context) ([]byte, error)  // for generated code
 ```
 
 A handle is obtained from a bound Pipeline (`Schedule`, `GetRun`,
-`GetActiveRun`, `ListActiveRuns`, `GetRuns`) or from the Engine, for
-callers that hold only a `RunID` or want the view across pipelines:
+`GetActiveRun`) or from the Engine, for callers that hold only a
+`RunID` — an API client polling an operation id:
 
 ```go
 func (e *Engine) GetRun(context.Context, durable.RunID) (Run, error)
-func (e *Engine) ListActiveRuns(context.Context) ([]Run, error)
 ```
 
 `Engine.GetRun` returns the untyped handle whatever pipeline owns the

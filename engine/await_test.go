@@ -233,7 +233,8 @@ func TestAwaitedRunIDPreventsChildRespawn(t *testing.T) {
 			}),
 		},
 	})
-	_, pipes := startEngine(t, mem.New(), child, parent)
+	store := mem.New()
+	_, pipes := startEngine(t, store, child, parent)
 	childPipe = pipes[0]
 
 	pRun, _, err := pipes[1].Schedule(context.Background(), "parent-res", nil)
@@ -247,10 +248,7 @@ func TestAwaitedRunIDPreventsChildRespawn(t *testing.T) {
 		t.Fatal("wake attempt did not observe AwaitedRunID")
 	}
 	// Exactly one child was ever created.
-	children, err := childPipe.GetRuns(context.Background(), "child-res")
-	if err != nil {
-		t.Fatalf("Runs: %v", err)
-	}
+	children := runsFor(t, store, childPipe, "child-res")
 	if len(children) != 1 {
 		t.Fatalf("children = %d, want exactly 1 (no respawn loop)", len(children))
 	}

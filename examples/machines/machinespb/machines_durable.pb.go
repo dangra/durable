@@ -398,33 +398,6 @@ func (p *ProvisionMachinePipeline) GetActiveRun(ctx context.Context, resource du
 	return ProvisionMachineRun{run: run}, true, nil
 }
 
-// ListActiveRuns returns handles for this pipeline's nonterminal runs.
-func (p *ProvisionMachinePipeline) ListActiveRuns(ctx context.Context) ([]ProvisionMachineRun, error) {
-	runs, err := p.pipeline.ListActiveRuns(ctx)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]ProvisionMachineRun, 0, len(runs))
-	for _, run := range runs {
-		out = append(out, ProvisionMachineRun{run: run})
-	}
-	return out, nil
-}
-
-// GetRuns returns handles for all runs of this pipeline against a resource,
-// terminal and nonterminal, oldest first.
-func (p *ProvisionMachinePipeline) GetRuns(ctx context.Context, resource durable.ResourceID) ([]ProvisionMachineRun, error) {
-	runs, err := p.pipeline.GetRuns(ctx, resource)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]ProvisionMachineRun, 0, len(runs))
-	for _, run := range runs {
-		out = append(out, ProvisionMachineRun{run: run})
-	}
-	return out, nil
-}
-
 // ProvisionMachineRun is a typed handle to one run of the pipeline.
 type ProvisionMachineRun struct {
 	run engine.Run
@@ -615,17 +588,4 @@ func (p *DecommissionMachinePipeline) GetRun(ctx context.Context, id durable.Run
 func (p *DecommissionMachinePipeline) GetActiveRun(ctx context.Context, resource durable.ResourceID) (engine.Run, bool, error) {
 	run, ok, err := p.pipeline.GetActiveRun(ctx, resource)
 	return run, ok, err
-}
-
-// ListActiveRuns returns handles for this pipeline's nonterminal runs.
-func (p *DecommissionMachinePipeline) ListActiveRuns(ctx context.Context) ([]engine.Run, error) {
-	runs, err := p.pipeline.ListActiveRuns(ctx)
-	return runs, err
-}
-
-// GetRuns returns handles for all runs of this pipeline against a resource,
-// terminal and nonterminal, oldest first.
-func (p *DecommissionMachinePipeline) GetRuns(ctx context.Context, resource durable.ResourceID) ([]engine.Run, error) {
-	runs, err := p.pipeline.GetRuns(ctx, resource)
-	return runs, err
 }

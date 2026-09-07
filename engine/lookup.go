@@ -18,18 +18,3 @@ func (e *Engine) GetRun(ctx context.Context, id durable.RunID) (Run, error) {
 	}
 	return Run{id: id, engine: e}, nil
 }
-
-// ListActiveRuns returns handles for every nonterminal Run across all
-// pipelines — the host-level view for draining and dashboards.
-// Pipeline.ListActiveRuns is the same listing filtered to one pipeline.
-func (e *Engine) ListActiveRuns(ctx context.Context) ([]Run, error) {
-	recs, err := e.store.ListNonterminal(ctx)
-	if err != nil {
-		return nil, err
-	}
-	runs := make([]Run, 0, len(recs))
-	for _, rec := range recs {
-		runs = append(runs, Run{id: rec.RunID, engine: e})
-	}
-	return runs, nil
-}

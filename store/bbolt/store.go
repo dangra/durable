@@ -85,7 +85,11 @@ func Open(path string) (*Store, error) {
 // guarantees appears in no identifier — otherwise distinct
 // (group, resource) pairs could alias one key.
 func slotKey(rec *driver.RunRecord) []byte {
-	return []byte(rec.SlotGroup() + "\x00" + string(rec.ResourceID))
+	return slotKeyFor(rec.SlotGroup(), rec.ResourceID)
+}
+
+func slotKeyFor(group string, resource kernel.ResourceID) []byte {
+	return []byte(group + "\x00" + string(resource))
 }
 
 func stepKey(id kernel.RunID, step kernel.StepID) []byte {
@@ -460,6 +464,20 @@ func (s *Store) ListRuns(_ context.Context, pipeline kernel.PipelineID, resource
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
 	return out, nil
+}
+
+// GetActiveRunID answers from the slots bucket: one point read, the same
+// index CreateRun enforces the slot with.
+func (s *Store) GetActiveRunID(_ context.Context, group string, resource kernel.ResourceID) (kernel.RunID, bool, error) {
+	var id kernel.RunID
+	var ok bool
+	err := s.db.View(func(tx *bolt.Tx) error {
+		if v := tx.Bucket(slotsBucket).Get(slotKeyFor(group, resource)); v != nil {
+			id, ok = kernel.RunID(v), true
+		}
+		return nil
+	})
+	return id, ok, err
 }
 
 func (s *Store) Close() error { return s.db.Close() }

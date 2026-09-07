@@ -304,6 +304,19 @@ func FuzzStoreContract(f *testing.F) {
 					mc = append(mc, canonicalize(rr))
 				}
 				mustEqual("ListRuns", bc, mc)
+				// GetActiveRunID: the indexed slot read agrees with the
+				// reference for every group the slot could belong to.
+				for _, g := range groups {
+					sg := g // records carry the namespaced group as the engine sets it
+					if sg == "" {
+						sg = "pipeline/" + string(p)
+					}
+					bid, bok, berr := bs.GetActiveRunID(ctx, sg, res)
+					mid, mok, merr := ms.GetActiveRunID(ctx, sg, res)
+					mustEqual("GetActiveRunID error", berr, merr)
+					mustEqual("GetActiveRunID ok", bok, mok)
+					mustEqual("GetActiveRunID id", bid, mid)
+				}
 			case 5: // ReapTerminal with a limit covering everything
 				before := base.Add(time.Duration(int(arg)) * 10 * time.Millisecond)
 				bn, berr := bs.ReapTerminal(ctx, before, 1000)

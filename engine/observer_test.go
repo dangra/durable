@@ -754,7 +754,7 @@ func TestObserverReapedPerBatch(t *testing.T) {
 	var reaps []int
 	reaper := engine.New(store,
 		engine.WithRecoveryBackoff(0), engine.WithLogger(discardTestLogger()),
-		engine.WithRetention(engine.RetentionPolicy{TerminalAfter: time.Nanosecond, Interval: time.Hour}),
+		engine.WithRetentionPolicy(engine.RetentionPolicy{TerminalAfter: time.Nanosecond, Interval: time.Hour}),
 		engine.WithObserver(observe.Observer{RunsReaped: func(n int) {
 			log.mu.Lock()
 			reaps = append(reaps, n)

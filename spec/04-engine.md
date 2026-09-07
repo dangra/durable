@@ -657,7 +657,7 @@ Retention is off by default: without configuration, terminal Runs
 accumulate indefinitely (the Engine logs this at Start).
 
 ```go
-engine.WithRetention(engine.RetentionPolicy{
+engine.WithRetentionPolicy(engine.RetentionPolicy{
     TerminalAfter: 7 * 24 * time.Hour, // keep terminal Runs this long
     Interval:      10 * time.Minute,   // jittered sweep cadence (default)
 })

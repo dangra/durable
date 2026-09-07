@@ -160,7 +160,7 @@ func TestRetentionReapsOnlyOldTerminalRuns(t *testing.T) {
 	e := engine.New(store, fastRetry,
 		engine.WithClock(fake),
 		engine.WithRecoveryBackoff(0),
-		engine.WithRetention(engine.RetentionPolicy{
+		engine.WithRetentionPolicy(engine.RetentionPolicy{
 			TerminalAfter: time.Hour,
 			Interval:      time.Minute,
 		}),

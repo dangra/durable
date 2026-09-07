@@ -25,8 +25,10 @@ message PipelineOptions {
   string input = 2;
   string output = 3;
   repeated string steps = 4;
-  string exclusion_group = 5;
   string concurrency_class = 6;
+  repeated string mutexes = 7;
+  reserved 5;
+  reserved "exclusion_group";
 }
 
 extend google.protobuf.MessageOptions {

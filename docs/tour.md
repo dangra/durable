@@ -18,7 +18,7 @@ deploy daemon restarting, and must be able to roll back.
 - [Durability: crash, restart, continue](#durability-crash-restart-continue)
 - [Cancellation](#cancellation)
 - [Composing runs: AwaitRun](#composing-runs-awaitrun)
-- [Contention: dedup, exclusion groups, concurrency classes](#contention-dedup-exclusion-groups-concurrency-classes)
+- [Contention: dedup, mutexes, concurrency classes](#contention-dedup-mutexes-concurrency-classes)
 - [Time: delayed starts and retention](#time-delayed-starts-and-retention)
 - [Evolving a pipeline with runs in flight](#evolving-a-pipeline-with-runs-in-flight)
 - [Observability](#observability)
@@ -114,7 +114,7 @@ the file that starts the daemon imports `engine`.
 
 `"service-web"` is the **resource**: the thing the run is about. At
 most one run of a pipeline is active per resource at a time — more on
-that [below](#contention-dedup-exclusion-groups-concurrency-classes).
+that [below](#contention-dedup-mutexes-concurrency-classes).
 
 ## Handlers: at-least-once, retries, permanent failure
 
@@ -416,7 +416,7 @@ pending children" is the same loop under every mode. Cycle detection is
 conservative: a cycle through any edge invalidates the run, even under
 `AwaitAny` where another target might have let it escape.
 
-## Contention: dedup, exclusion groups, concurrency classes
+## Contention: dedup, mutexes, concurrency classes
 
 Three different problems, three different tools.
 
@@ -427,23 +427,69 @@ at-least-once callers like message consumers. Scheduling a *different*
 input on a busy resource is a `*ScheduleConflictError`. Runnable:
 [`ExamplePipeline_Schedule`](https://pkg.go.dev/github.com/dangra/durable/engine#example-Pipeline_Schedule).
 
-**Exclusion groups: one run per resource, across pipelines.** A
-`deploy-service` and a `rollback-service` pipeline must not both act on
-`service-web` at once:
+**Mutexes: one run per resource, across pipelines.** A run holds the
+mutexes its pipeline names, on its resource, from admission to
+terminality. A `deploy-service` and a `rollback-service` pipeline must
+not both act on `service-web` at once, so both name the same mutex:
 
 ```proto
-option (durable.v1.pipeline) = {
-  id: "deploy-service"
-  exclusion_group: "service-lifecycle"
-  // ...
-};
+message DeployService {
+  option (durable.v1.pipeline) = {
+    id: "deploy-service"
+    mutexes: "service-lifecycle"
+    steps: ".deploy.v1.ProvisionEnv"
+    steps: ".deploy.v1.ShiftTraffic"
+  };
+}
+
+message RollbackService {
+  option (durable.v1.pipeline) = {
+    id: "rollback-service"
+    mutexes: "service-lifecycle"
+    steps: ".deploy.v1.RestorePrevious"
+  };
+}
 ```
 
-Pipelines sharing a group allow at most one nonterminal run per
-resource across the whole group. Membership is a property of the
-deployment, not of the stored runs: add, remove, or rename a group and
-the new rule applies to the next `Schedule` everywhere at once, while
-runs already in flight simply finish.
+While a deploy run is in flight on `service-web`, scheduling a rollback
+there is refused with a `*ScheduleConflictError` naming the deploy run;
+the caller parks on it or gives up. Nothing queues.
+
+A pipeline can name several mutexes, and two pipelines exclude each
+other exactly when they share a name. That makes exclusion a graph, not
+a partition. A `snapshot-service` that must not overlap a deploy *or* a
+backup, when deploys and backups are fine together:
+
+```proto
+message SnapshotService {
+  option (durable.v1.pipeline) = {
+    id: "snapshot-service"
+    mutexes: ["service-lifecycle", "backup-window"]
+    steps: ".deploy.v1.FreezeAndCopy"
+  };
+}
+
+message ScheduledBackup {
+  option (durable.v1.pipeline) = {
+    id: "scheduled-backup"
+    mutexes: "backup-window"
+    steps: ".deploy.v1.CopyOffsite"
+  };
+}
+```
+
+Snapshot is blocked by a deploy, a rollback, or a backup on the same
+service; a deploy and a backup run side by side. Pipelines that name no
+mutex, a monitor say, coexist with all of them. Every pipeline always
+excludes with itself.
+
+Mutexes are a property of the deployment, not of the stored runs: add,
+remove, or rename one and the new rule applies to the next `Schedule`
+everywhere at once, while runs already in flight simply finish. Two
+consequences when composing: a parent that schedules a child sharing one
+of its mutexes on its own resource conflicts with itself, and mutexes
+never reach across resources, so a pipeline over machines and one over
+volumes never interact whatever names they share.
 
 **Concurrency classes: bounded parallel work.** At most three deploys
 per cluster touching the load balancer, regardless of how many runs are

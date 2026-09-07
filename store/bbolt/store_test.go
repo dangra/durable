@@ -229,7 +229,7 @@ func TestRequestCancel(t *testing.T) {
 	}
 }
 
-func TestExclusionGroupSlot(t *testing.T) {
+func TestMutexSlot(t *testing.T) {
 	s := open(t, filepath.Join(t.TempDir(), "durable.db"))
 	ctx := context.Background()
 

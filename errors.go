@@ -45,8 +45,8 @@ var ErrRunTerminal = kernel.ErrRunTerminal
 
 // ScheduleConflictError is returned by Schedule when a nonterminal Run
 // already occupies the resource slot: a Run of the same pipeline with
-// different Input, or a Run of another pipeline in the same exclusion
-// group. RunID and PipelineID identify the blocking Run so the caller can
+// different Input, or a Run of another pipeline holding a shared mutex.
+// RunID and PipelineID identify the blocking Run so the caller can
 // route to its handle — or, from inside a handler, park on it with
 // AwaitRun.
 type ScheduleConflictError struct {

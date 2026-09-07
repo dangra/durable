@@ -165,10 +165,10 @@ func TestFuncAdapters(t *testing.T) {
 	}
 }
 
-// TestExclusionGroup shows the machine-lifecycle group: while a provision
+// TestLifecycleMutex shows the machine-lifecycle mutex: while a provision
 // run is in flight for a machine, decommission is rejected with a conflict
-// naming the blocker — and vice versa once the slot frees.
-func TestExclusionGroup(t *testing.T) {
+// naming the blocker — and vice versa once the mutex is released.
+func TestLifecycleMutex(t *testing.T) {
 	c := newCloud()
 	c.createGate = make(chan struct{})
 
@@ -193,7 +193,7 @@ func TestExclusionGroup(t *testing.T) {
 		t.Fatalf("Schedule provision: %v", err)
 	}
 
-	// The group slot is held: decommission is rejected, naming the blocker.
+	// The mutex is held: decommission is rejected, naming the blocker.
 	_, created, err := decommission.Schedule(context.Background(), "machine-9")
 	var conflict *durable.ScheduleConflictError
 	if !errors.As(err, &conflict) || created {
@@ -232,7 +232,7 @@ func TestExclusionGroup(t *testing.T) {
 		t.Fatalf("other-machine Wait = %+v, %v", res, err)
 	}
 
-	// Once provisioning finishes, the group slot frees.
+	// Once provisioning finishes, the mutex is released.
 	close(c.createGate)
 	if res, err := run.Wait(context.Background()); err != nil || !res.Succeeded() {
 		t.Fatalf("provision Wait = %+v, %v", res, err)

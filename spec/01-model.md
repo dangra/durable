@@ -46,65 +46,76 @@ one thing about exclusion that persists.
 By default that is the whole rule: different Pipelines operate
 concurrently on the same `ResourceID`.
 
-A Pipeline MAY additionally declare membership in a named **exclusion
-group**:
+A Pipeline MAY additionally name one or more **mutexes**:
 
 ```proto
 option (durable.v1.pipeline) = {
   id: "provision-machine"
-  exclusion_group: "machine-lifecycle"
+  mutexes: "machine-lifecycle"
   ...
 };
 ```
 
-A group is an **admission rule**, not a slot: when a member schedules on
-a `ResourceID`, the Run is admitted only if no member of the group — as
-the current deployment defines the group — has a nonterminal Run on that
-resource. This models resources with multiple mutually exclusive
-lifecycle workflows (provision vs decommission vs migrate on one
-machine), while pipelines that deliberately coexist with them (a
-monitor) simply stay outside the group.
+A Run holds every mutex its Pipeline names, on its `ResourceID`, from
+admission to terminality. A mutex is an **admission rule**, not a slot:
+when a Pipeline schedules on a `ResourceID`, the Run is admitted only if
+no Pipeline sharing at least one of its mutexes — as the current
+deployment defines them — has a nonterminal Run on that resource. Two
+Pipelines exclude each other exactly when they share a name; the
+relation is pairwise, not transitive, so a Pipeline naming several
+mutexes is blocked by any holder of any of them while Pipelines sharing
+no name run together. This models resources with multiple mutually
+exclusive lifecycle workflows (provision vs decommission vs migrate on
+one machine), finer-grained overlap rules (a snapshot that must not
+overlap a deploy or a backup, while deploys and backups coexist), and
+pipelines that deliberately coexist with all of them (a monitor), which
+simply name no mutex.
 
-Membership is resolved from the bound definitions at `Engine.Start` and
+Mutexes never reach across resources: two Pipelines interacting through
+a shared name do so only for Runs on the same `ResourceID`.
+
+The exclusion set — a Pipeline plus every Pipeline sharing one of its
+mutexes — is resolved from the bound definitions at `Engine.Start` and
 handed to the Store at each admission; it is never persisted. That is
-what makes group changes converge on their own, which matters because a
+what makes mutex changes converge on their own, which matters because a
 deployment switches the definition for every resource at once and
 draining per resource is not an option:
 
-- **Forming a group, or a pipeline joining one.** Runs already in flight
-  under the old rule keep executing and keep their own slots; from the
-  first admission under the new deployment, any of them blocks the whole
-  group on its resource. The overlap drains as they finish.
-- **Dissolving a group, or a pipeline leaving.** Its in-flight Runs stop
-  counting against the others from the next admission on.
-- **Renaming a group.** Nothing changes: membership is the same set.
+- **Adding a mutex, or a pipeline naming an existing one.** Runs already
+  in flight under the old rule keep executing and keep their own slots;
+  from the first admission under the new deployment, any of them blocks
+  every new holder on its resource. The overlap drains as they finish.
+- **Removing a mutex, or a pipeline dropping one.** Its in-flight Runs
+  stop counting against the others from the next admission on.
+- **Renaming a mutex** everywhere it appears. Nothing changes: the
+  exclusion sets are the same.
 
-No Run is ever invalidated, aborted, or migrated because of a group
-change. A member's own `(PipelineID, ResourceID)` slot is always
-enforced, group or not, so duplicate scheduling within one pipeline
-behaves identically inside and outside a group.
+No Run is ever invalidated, aborted, or migrated because of a mutex
+change. A Pipeline's own `(PipelineID, ResourceID)` slot is always
+enforced, mutexes or not, so duplicate scheduling within one pipeline
+behaves identically with and without them.
 
-Enforcement is atomic in the Store at Run creation — the member slots
-are checked and the new Run written in one step; there is no
-check-then-schedule race.
+Enforcement is atomic in the Store at Run creation — every slot in the
+exclusion set is checked and the new Run written in one step; there is
+no check-then-schedule race.
 
 Two consequences worth knowing when composing pipelines:
 
-- A parent that schedules a child in its own group on its own resource
-  conflicts with itself: the `ScheduleConflictError` names the parent's
-  own `RunID`. Children of a grouped parent use a different resource or a
-  pipeline outside the group.
-- `GetActiveRun` is per pipeline even inside a group. When a sibling
-  holds the resource it reports none; `Schedule` is what reports the
-  sibling, through the conflict it returns.
+- A parent that schedules a child sharing one of its mutexes on its own
+  resource conflicts with itself: the `ScheduleConflictError` names the
+  parent's own `RunID`. Children use a different resource or a pipeline
+  sharing no mutex with the parent.
+- `GetActiveRun` is per pipeline whatever mutexes it holds. When another
+  holder occupies the resource it reports none; `Schedule` is what
+  reports the holder, through the conflict it returns.
 
 ---
 
 ## Cross-pipeline conflicts
 
 Duplicate-scheduling equivalence (see Duplicate scheduling) applies only
-within one Pipeline. A slot occupied by a Run of *another* Pipeline in
-the group is always a conflict:
+within one Pipeline. A mutex held by a Run of *another* Pipeline is
+always a conflict:
 
 ```go
 type ScheduleConflictError struct {

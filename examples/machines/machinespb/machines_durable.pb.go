@@ -372,9 +372,9 @@ func NewProvisionMachine(
 	reduce ProvisionMachineReducer,
 ) *ProvisionMachineDefinition {
 	return &ProvisionMachineDefinition{def: pipelinedef.New(pipelinedef.Config{
-		ID:             "provision-machine",
-		ExclusionGroup: "machine-lifecycle",
-		NewInput:       func() proto.Message { return &ProvisionMachineInput{} },
+		ID:       "provision-machine",
+		Mutexes:  []string{"machine-lifecycle"},
+		NewInput: func() proto.Message { return &ProvisionMachineInput{} },
 		Reduce: func(view durable.ReduceView) proto.Message {
 			return reduce.Reduce(view)
 		},
@@ -631,8 +631,8 @@ func NewDecommissionMachine(
 	releaseMachine ReleaseMachineHandler,
 ) *DecommissionMachineDefinition {
 	return &DecommissionMachineDefinition{def: pipelinedef.New(pipelinedef.Config{
-		ID:             "decommission-machine",
-		ExclusionGroup: "machine-lifecycle",
+		ID:      "decommission-machine",
+		Mutexes: []string{"machine-lifecycle"},
 		Steps: []pipelinedef.Step{
 			{
 				ID: "release-machine/v1",

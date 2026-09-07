@@ -1,0 +1,64 @@
+// The snapshot example: a pipeline whose handlers are plain functions
+// wired through the generated http.HandlerFunc-style adapters.
+syntax = "proto3";
+
+package snapshots.v1;
+
+import "durable/v1/options.proto";
+
+option go_package = "github.com/dangra/durable/examples/snapshots/snapshotspb;snapshotspb";
+
+message CreateSnapshotInput {
+  string bucket = 1;
+}
+
+message CreateSnapshotOutput {
+  string snapshot_id = 1;
+  string object_key = 2;
+}
+
+// FreezeVolume quiesces the volume so the upload reads a consistent
+// image. Its unwind thaws; the ThawVolume step thaws on the happy path.
+message FreezeVolume {
+  option (durable.v1.step) = {
+    id: "freeze-volume/v1"
+    unwind: true
+  };
+
+  string freeze_token = 1;
+}
+
+// UploadSnapshot copies the frozen image to object storage. Its unwind
+// deletes the object so a failed run leaves no orphan behind.
+message UploadSnapshot {
+  option (durable.v1.step) = {
+    id: "upload-snapshot/v1"
+    unwind: true
+  };
+
+  string object_key = 1;
+  uint64 bytes = 2;
+}
+
+message ThawVolume {
+  option (durable.v1.step) = {id: "thaw-volume/v1"};
+}
+
+message RegisterSnapshot {
+  option (durable.v1.step) = {id: "register-snapshot/v1"};
+
+  string snapshot_id = 1;
+}
+
+message CreateSnapshot {
+  option (durable.v1.pipeline) = {
+    id: "create-snapshot"
+    input: ".snapshots.v1.CreateSnapshotInput"
+    output: ".snapshots.v1.CreateSnapshotOutput"
+
+    steps: ".snapshots.v1.FreezeVolume"
+    steps: ".snapshots.v1.UploadSnapshot"
+    steps: ".snapshots.v1.ThawVolume"
+    steps: ".snapshots.v1.RegisterSnapshot"
+  };
+}

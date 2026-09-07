@@ -69,6 +69,7 @@ jobs:
       - name: Example smoke test
         run: |
           go run ./examples/machines
+          go run ./examples/snapshots
           go run ./examples/release-train
       # examples/tracing-otel is its own module so the OpenTelemetry SDK
       # never enters durable's dependency graph; it builds against the

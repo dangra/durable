@@ -94,6 +94,11 @@ if result.Succeeded() {
 }
 ```
 
+Handlers need not be types: every generated handler interface comes with
+an `http.HandlerFunc`-style adapter, so a pipeline can be assembled from
+closures over a dependency struct.
+[examples/snapshots](examples/snapshots/) is written that way end to end.
+
 For the whole story in one runnable demo — a release surviving a daemon
 crash, a pipeline definition that evolves mid-flight, parent runs
 awaiting children, and a cascading cancellation that rolls everything

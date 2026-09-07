@@ -341,6 +341,7 @@ CancelRequested                         a cancel was pending at reservation
 Awaited, AwaitedRunID                   the resolved park, if this attempt
                                         follows one (see 01-model)
 Annotations                             the Run's acceptance-time metadata
+Failure                                 the failure being unwound; nil in forward
 Logger                                  a slog.Logger with the canonical keys
 ```
 

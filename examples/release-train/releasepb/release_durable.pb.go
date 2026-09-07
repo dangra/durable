@@ -12,6 +12,7 @@ import (
 	engine "github.com/dangra/durable/engine"
 	pipelinedef "github.com/dangra/durable/pipelinedef"
 	proto "google.golang.org/protobuf/proto"
+	slog "log/slog"
 	sync "sync"
 )
 
@@ -57,6 +58,14 @@ func (inv ProvisionEnvInvocation) Awaited() (durable.Wake, bool) { return inv.co
 // Annotations returns a caller-owned copy of the run's immutable
 // acceptance-time annotations (trace contexts, tenant tags).
 func (inv ProvisionEnvInvocation) Annotations() map[string]string { return inv.core.Annotations() }
+
+// Failure is the failure this run is unwinding: non-nil exactly in
+// durable.PhaseUnwind, nil during forward attempts.
+func (inv ProvisionEnvInvocation) Failure() *durable.Failure { return inv.core.Failure() }
+
+// Logger returns a logger scoped to this invocation, with the canonical
+// pipeline, resource, run, step, phase, and attempt keys attached.
+func (inv ProvisionEnvInvocation) Logger() *slog.Logger { return inv.core.Logger() }
 
 // Input returns a defensive caller-owned copy of the immutable pipeline input.
 func (inv ProvisionEnvInvocation) Input() *DeployServiceInput {
@@ -122,6 +131,14 @@ func (inv RunMigrationsInvocation) Awaited() (durable.Wake, bool) { return inv.c
 // acceptance-time annotations (trace contexts, tenant tags).
 func (inv RunMigrationsInvocation) Annotations() map[string]string { return inv.core.Annotations() }
 
+// Failure is the failure this run is unwinding: non-nil exactly in
+// durable.PhaseUnwind, nil during forward attempts.
+func (inv RunMigrationsInvocation) Failure() *durable.Failure { return inv.core.Failure() }
+
+// Logger returns a logger scoped to this invocation, with the canonical
+// pipeline, resource, run, step, phase, and attempt keys attached.
+func (inv RunMigrationsInvocation) Logger() *slog.Logger { return inv.core.Logger() }
+
 // Input returns a defensive caller-owned copy of the immutable pipeline input.
 func (inv RunMigrationsInvocation) Input() *DeployServiceInput {
 	msg, _ := inv.core.InputMessage().(*DeployServiceInput)
@@ -186,6 +203,14 @@ func (inv CanaryAnalysisInvocation) Awaited() (durable.Wake, bool) { return inv.
 // acceptance-time annotations (trace contexts, tenant tags).
 func (inv CanaryAnalysisInvocation) Annotations() map[string]string { return inv.core.Annotations() }
 
+// Failure is the failure this run is unwinding: non-nil exactly in
+// durable.PhaseUnwind, nil during forward attempts.
+func (inv CanaryAnalysisInvocation) Failure() *durable.Failure { return inv.core.Failure() }
+
+// Logger returns a logger scoped to this invocation, with the canonical
+// pipeline, resource, run, step, phase, and attempt keys attached.
+func (inv CanaryAnalysisInvocation) Logger() *slog.Logger { return inv.core.Logger() }
+
 // Input returns a defensive caller-owned copy of the immutable pipeline input.
 func (inv CanaryAnalysisInvocation) Input() *DeployServiceInput {
 	msg, _ := inv.core.InputMessage().(*DeployServiceInput)
@@ -241,6 +266,14 @@ func (inv ShiftTrafficInvocation) Awaited() (durable.Wake, bool) { return inv.co
 // Annotations returns a caller-owned copy of the run's immutable
 // acceptance-time annotations (trace contexts, tenant tags).
 func (inv ShiftTrafficInvocation) Annotations() map[string]string { return inv.core.Annotations() }
+
+// Failure is the failure this run is unwinding: non-nil exactly in
+// durable.PhaseUnwind, nil during forward attempts.
+func (inv ShiftTrafficInvocation) Failure() *durable.Failure { return inv.core.Failure() }
+
+// Logger returns a logger scoped to this invocation, with the canonical
+// pipeline, resource, run, step, phase, and attempt keys attached.
+func (inv ShiftTrafficInvocation) Logger() *slog.Logger { return inv.core.Logger() }
 
 // Input returns a defensive caller-owned copy of the immutable pipeline input.
 func (inv ShiftTrafficInvocation) Input() *DeployServiceInput {
@@ -525,6 +558,14 @@ func (inv PlanReleaseInvocation) Awaited() (durable.Wake, bool) { return inv.cor
 // acceptance-time annotations (trace contexts, tenant tags).
 func (inv PlanReleaseInvocation) Annotations() map[string]string { return inv.core.Annotations() }
 
+// Failure is the failure this run is unwinding: non-nil exactly in
+// durable.PhaseUnwind, nil during forward attempts.
+func (inv PlanReleaseInvocation) Failure() *durable.Failure { return inv.core.Failure() }
+
+// Logger returns a logger scoped to this invocation, with the canonical
+// pipeline, resource, run, step, phase, and attempt keys attached.
+func (inv PlanReleaseInvocation) Logger() *slog.Logger { return inv.core.Logger() }
+
 // Input returns a defensive caller-owned copy of the immutable pipeline input.
 func (inv PlanReleaseInvocation) Input() *ReleaseTrainInput {
 	msg, _ := inv.core.InputMessage().(*ReleaseTrainInput)
@@ -579,6 +620,14 @@ func (inv ShipWebInvocation) Awaited() (durable.Wake, bool) { return inv.core.Aw
 // acceptance-time annotations (trace contexts, tenant tags).
 func (inv ShipWebInvocation) Annotations() map[string]string { return inv.core.Annotations() }
 
+// Failure is the failure this run is unwinding: non-nil exactly in
+// durable.PhaseUnwind, nil during forward attempts.
+func (inv ShipWebInvocation) Failure() *durable.Failure { return inv.core.Failure() }
+
+// Logger returns a logger scoped to this invocation, with the canonical
+// pipeline, resource, run, step, phase, and attempt keys attached.
+func (inv ShipWebInvocation) Logger() *slog.Logger { return inv.core.Logger() }
+
 // Input returns a defensive caller-owned copy of the immutable pipeline input.
 func (inv ShipWebInvocation) Input() *ReleaseTrainInput {
 	msg, _ := inv.core.InputMessage().(*ReleaseTrainInput)
@@ -631,6 +680,14 @@ func (inv ShipApiInvocation) Awaited() (durable.Wake, bool) { return inv.core.Aw
 // acceptance-time annotations (trace contexts, tenant tags).
 func (inv ShipApiInvocation) Annotations() map[string]string { return inv.core.Annotations() }
 
+// Failure is the failure this run is unwinding: non-nil exactly in
+// durable.PhaseUnwind, nil during forward attempts.
+func (inv ShipApiInvocation) Failure() *durable.Failure { return inv.core.Failure() }
+
+// Logger returns a logger scoped to this invocation, with the canonical
+// pipeline, resource, run, step, phase, and attempt keys attached.
+func (inv ShipApiInvocation) Logger() *slog.Logger { return inv.core.Logger() }
+
 // Input returns a defensive caller-owned copy of the immutable pipeline input.
 func (inv ShipApiInvocation) Input() *ReleaseTrainInput {
 	msg, _ := inv.core.InputMessage().(*ReleaseTrainInput)
@@ -682,6 +739,14 @@ func (inv AnnounceInvocation) Awaited() (durable.Wake, bool) { return inv.core.A
 // Annotations returns a caller-owned copy of the run's immutable
 // acceptance-time annotations (trace contexts, tenant tags).
 func (inv AnnounceInvocation) Annotations() map[string]string { return inv.core.Annotations() }
+
+// Failure is the failure this run is unwinding: non-nil exactly in
+// durable.PhaseUnwind, nil during forward attempts.
+func (inv AnnounceInvocation) Failure() *durable.Failure { return inv.core.Failure() }
+
+// Logger returns a logger scoped to this invocation, with the canonical
+// pipeline, resource, run, step, phase, and attempt keys attached.
+func (inv AnnounceInvocation) Logger() *slog.Logger { return inv.core.Logger() }
 
 // Input returns a defensive caller-owned copy of the immutable pipeline input.
 func (inv AnnounceInvocation) Input() *ReleaseTrainInput {

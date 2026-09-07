@@ -27,7 +27,7 @@ func TestBindValidatesTheDefinition(t *testing.T) {
 	}{
 		{"empty pipeline id", pipelinedef.Config{Steps: []pipelinedef.Step{ok}}, "empty PipelineID"},
 		{"invalid pipeline id", pipelinedef.Config{ID: "p\x00", Steps: []pipelinedef.Step{ok}}, "NUL-free"},
-		{"invalid group", pipelinedef.Config{ID: "p", ExclusionGroup: "\xff", Steps: []pipelinedef.Step{ok}}, "exclusion group"},
+		{"invalid mutex", pipelinedef.Config{ID: "p", Mutexes: []string{"\xff"}, Steps: []pipelinedef.Step{ok}}, "mutex"},
 		{"no steps", pipelinedef.Config{ID: "p"}, "has no steps"},
 		{"empty step id", pipelinedef.Config{ID: "p", Steps: []pipelinedef.Step{{Run: run}}}, "empty StepID"},
 		{"invalid step id", pipelinedef.Config{ID: "p", Steps: []pipelinedef.Step{{ID: "s\x00", Run: run}}}, "NUL-free"},

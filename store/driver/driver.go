@@ -224,10 +224,10 @@ type Store interface {
 	// pipeline in excluding, for rec.ResourceID — returning (nil, true,
 	// nil) when it persisted, or the occupying record with created=false
 	// when it did not. The check and the write are one atomic step.
-	// excluding is the engine's view of rec's exclusion group at
-	// admission time; it is not persisted, which is what lets a group
-	// change in a later deployment apply to new admissions at once
-	// without touching Runs in flight.
+	// excluding is the engine's view of the pipelines sharing a mutex
+	// with rec's at admission time; it is not persisted, which is what
+	// lets a mutex change in a later deployment apply to new admissions
+	// at once without touching Runs in flight.
 	// rec.RunID must be fresh: the engine's ULID generation guarantees
 	// it, and behavior on reusing the id of an existing (even terminal)
 	// Run is undefined.

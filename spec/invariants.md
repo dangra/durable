@@ -4,7 +4,7 @@ Part of the [`durable` specification](README.md). This list is append-only; inva
 
 1. `RunID` identifies one exact execution.
 
-2. At most one nonterminal Run exists per resource slot `(PipelineID, ResourceID)`; an exclusion group additionally refuses admission while any member has a nonterminal Run on the resource.
+2. At most one nonterminal Run exists per resource slot `(PipelineID, ResourceID)`; a mutex additionally refuses admission while any pipeline naming it has a nonterminal Run on the resource.
 
 3. Pipeline Input is immutable.
 
@@ -208,6 +208,8 @@ Part of the [`durable` specification](README.md). This list is append-only; inva
 
 103. Handler code depends only on the `durable` package, and the Engine reads a handler's result through the same exported classifiers middleware uses; the handler contract carries no engine-only plumbing.
 
-104. Exclusion-group membership is resolved from the current deployment's definitions at `Engine.Start` and applied at admission; it is never persisted, and a Run's slot is always its own `(PipelineID, ResourceID)`.
+104. A pipeline's exclusion set — itself plus every pipeline sharing at least one of its mutexes — is resolved from the current deployment's definitions at `Engine.Start` and applied at admission; it is never persisted, and a Run's slot is always its own `(PipelineID, ResourceID)`.
 
-105. A change of exclusion-group membership between deployments never invalidates, aborts, or migrates a Run in flight; it governs new admissions from the first `Schedule` under the new deployment.
+105. A change of mutexes between deployments never invalidates, aborts, or migrates a Run in flight; it governs new admissions from the first `Schedule` under the new deployment.
+
+106. Mutexes compose pairwise, not transitively: two pipelines exclude each other exactly when they share a name, so a pipeline holding several mutexes is blocked by any holder of any of them while pipelines sharing no name run together.

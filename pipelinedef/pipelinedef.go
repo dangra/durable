@@ -46,11 +46,11 @@ type Config struct {
 	ID    durable.PipelineID
 	Steps []Step
 
-	// ExclusionGroup optionally names a mutual-exclusion group: pipelines
-	// sharing a group allow at most one nonterminal Run per ResourceID
-	// across the whole group. Empty means the pipeline excludes only with
-	// itself.
-	ExclusionGroup string
+	// Mutexes names the mutexes a Run of this pipeline holds on its
+	// ResourceID from admission to terminality. Two pipelines exclude
+	// each other exactly when they share a name; a pipeline always
+	// excludes with itself. Empty means it excludes with itself alone.
+	Mutexes []string
 
 	// ConcurrencyClass optionally sets the default concurrency class for
 	// all of this pipeline's steps; a step's own class overrides it.
@@ -72,11 +72,12 @@ type Definition struct {
 	cfg Config
 }
 
-// New wraps cfg. It copies the Steps slice so later mutation of cfg does
-// not reach the Definition, and applies the pipeline-level concurrency
-// class to steps that declare none.
+// New wraps cfg. It copies the Steps and Mutexes slices so later mutation
+// of cfg does not reach the Definition, and applies the pipeline-level
+// concurrency class to steps that declare none.
 func New(cfg Config) *Definition {
 	cfg.Steps = append([]Step(nil), cfg.Steps...)
+	cfg.Mutexes = append([]string(nil), cfg.Mutexes...)
 	for i := range cfg.Steps {
 		if cfg.Steps[i].ConcurrencyClass == "" {
 			cfg.Steps[i].ConcurrencyClass = cfg.ConcurrencyClass

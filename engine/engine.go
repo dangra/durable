@@ -315,7 +315,7 @@ func (e *Engine) Start(ctx context.Context) error {
 	e.started = true
 	e.pipelines.Freeze()
 	e.stepOwner.Freeze()
-	e.resolveExclusionGroups()
+	e.resolveMutexes()
 	e.baseCtx, e.cancel = context.WithCancelCause(context.Background())
 	e.dispCtx, e.drainCancel = context.WithCancel(e.baseCtx)
 	e.disp = dispatcher.New(dispatcher.Config[durable.RunID]{
@@ -1536,30 +1536,28 @@ func opState(s driver.OpStatus) ledger.OpState {
 	}
 }
 
-// resolveExclusionGroups computes each bound pipeline's exclusion set
-// from this deployment's definitions: the members of its group, itself
-// included, or itself alone. Exclusion is an admission rule evaluated
-// against these sets, never a persisted fact, so a group change in the
-// next deployment converges by itself: in-flight Runs keep their own
+// resolveMutexes computes each bound pipeline's exclusion set from this
+// deployment's definitions: itself plus every pipeline sharing at least
+// one of its mutexes. Exclusion is an admission rule evaluated against
+// these sets, never a persisted fact, so a mutex change in the next
+// deployment converges by itself: in-flight Runs keep their own
 // (pipeline, resource) slots and finish, and new admissions obey the new
-// membership from the first Schedule on.
-func (e *Engine) resolveExclusionGroups() {
-	groups := map[string][]durable.PipelineID{}
+// sets from the first Schedule on.
+func (e *Engine) resolveMutexes() {
+	holders := map[string][]durable.PipelineID{}
 	e.pipelines.Range(func(id durable.PipelineID, d *boundDef) bool {
-		if g := d.cfg.ExclusionGroup; g != "" {
-			groups[g] = append(groups[g], id)
+		for _, m := range d.cfg.Mutexes {
+			holders[m] = append(holders[m], id)
 		}
 		return true
 	})
-	for _, members := range groups {
-		slices.Sort(members)
-	}
 	e.pipelines.Range(func(id durable.PipelineID, d *boundDef) bool {
-		if g := d.cfg.ExclusionGroup; g != "" {
-			d.exclusive = groups[g]
-		} else {
-			d.exclusive = []durable.PipelineID{id}
+		set := []durable.PipelineID{id}
+		for _, m := range d.cfg.Mutexes {
+			set = append(set, holders[m]...)
 		}
+		slices.Sort(set)
+		d.excludes = slices.Compact(set)
 		return true
 	})
 }

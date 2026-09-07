@@ -376,7 +376,7 @@ func (*ReleaseMachine) Descriptor() ([]byte, []int) {
 	return file_machines_v1_machines_proto_rawDescGZIP(), []int{7}
 }
 
-// DecommissionMachine shares the machine-lifecycle exclusion group with
+// DecommissionMachine shares the machine-lifecycle mutex with
 // ProvisionMachine: at most one of the two may have a nonterminal run per
 // machine.
 type DecommissionMachine struct {
@@ -442,11 +442,11 @@ const file_machines_v1_machines_proto_rawDesc = "" +
 	"machine_id\x18\x01 \x01(\tR\tmachineId:\x17\x8a\xa8\x19\x13\n" +
 	"\x11create-machine/v1\"\xf3\x01\n" +
 	"\x10ProvisionMachine:\xde\x01\x92\xa8\x19\xd9\x01\n" +
-	"\x11provision-machine\x12\".machines.v1.ProvisionMachineInput\x1a#.machines.v1.ProvisionMachineOutput\"\x15.machines.v1.Validate\"\x17.machines.v1.SelectHost\"\x1c.machines.v1.ReserveCapacity\"\x1a.machines.v1.CreateMachine*\x11machine-lifecycle\"*\n" +
+	"\x11provision-machine\x12\".machines.v1.ProvisionMachineInput\x1a#.machines.v1.ProvisionMachineOutput\"\x15.machines.v1.Validate\"\x17.machines.v1.SelectHost\"\x1c.machines.v1.ReserveCapacity\"\x1a.machines.v1.CreateMachine:\x11machine-lifecycle\"*\n" +
 	"\x0eReleaseMachine:\x18\x8a\xa8\x19\x14\n" +
 	"\x12release-machine/v1\"a\n" +
 	"\x13DecommissionMachine:J\x92\xa8\x19F\n" +
-	"\x14decommission-machine\"\x1b.machines.v1.ReleaseMachine*\x11machine-lifecycleBCZAgithub.com/dangra/durable/examples/machines/machinespb;machinespbb\x06proto3"
+	"\x14decommission-machine\"\x1b.machines.v1.ReleaseMachine:\x11machine-lifecycleBCZAgithub.com/dangra/durable/examples/machines/machinespb;machinespbb\x06proto3"
 
 var (
 	file_machines_v1_machines_proto_rawDescOnce sync.Once

@@ -16,12 +16,13 @@ type boundDef struct {
 	steps map[durable.StepID]*pipelinedef.Step
 	topo  ledger.Topology
 
-	// exclusive is the pipeline's exclusion group as this deployment sees
-	// it — every bound pipeline sharing its ExclusionGroup, itself
-	// included — resolved at Start. It is passed to the store at each
-	// admission and never persisted, so a later deployment's view applies
-	// to new admissions at once and Runs in flight are never touched.
-	exclusive []durable.PipelineID
+	// excludes is the pipeline's exclusion set as this deployment sees
+	// it — every bound pipeline sharing at least one of its Mutexes,
+	// itself included — resolved at Start. It is passed to the store at
+	// each admission and never persisted, so a later deployment's view
+	// applies to new admissions at once and Runs in flight are never
+	// touched.
+	excludes []durable.PipelineID
 }
 
 func (d *boundDef) ID() durable.PipelineID { return d.cfg.ID }
@@ -56,8 +57,10 @@ func bindDefinition(cfg pipelinedef.Config) (*boundDef, error) {
 	if invalidID(string(cfg.ID)) {
 		return nil, fmt.Errorf("durable: pipeline id %q must be NUL-free valid UTF-8", cfg.ID)
 	}
-	if invalidID(cfg.ExclusionGroup) {
-		return nil, fmt.Errorf("durable: pipeline %q: exclusion group %q must be NUL-free valid UTF-8", cfg.ID, cfg.ExclusionGroup)
+	for _, m := range cfg.Mutexes {
+		if m == "" || invalidID(m) {
+			return nil, fmt.Errorf("durable: pipeline %q: mutex %q must be a non-empty NUL-free valid UTF-8 name", cfg.ID, m)
+		}
 	}
 	if len(cfg.Steps) == 0 {
 		return nil, fmt.Errorf("durable: pipeline %q has no steps", cfg.ID)

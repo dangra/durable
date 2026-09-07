@@ -641,7 +641,7 @@ GetActiveRun
 ```
 
 `GetActiveRun` is one indexed read against the store's slot index (the
-structure `CreateRun` enforces exclusion with), never a scan. There is
+structure `CreateRun` enforces mutexes with), never a scan. There is
 deliberately no listing or history API on a Pipeline: the engine is not
 a dashboard, and fleet-wide or historical views belong to the
 application's own records.

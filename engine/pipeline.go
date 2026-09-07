@@ -90,7 +90,7 @@ func (p *Pipeline) Schedule(ctx context.Context, resource durable.ResourceID, in
 	case so.StartAfter > 0:
 		rec.NextAttemptAt = now.Add(so.StartAfter)
 	}
-	existing, created, err := e.store.CreateRun(ctx, rec, p.def.exclusive)
+	existing, created, err := e.store.CreateRun(ctx, rec, p.def.excludes)
 	if err != nil {
 		return Run{}, false, err
 	}
@@ -112,8 +112,8 @@ func (p *Pipeline) Schedule(ctx context.Context, resource durable.ResourceID, in
 		return Run{id: rec.RunID, engine: e}, true, nil
 	}
 
-	// A slot occupied by another pipeline in the exclusion group is always
-	// a conflict: input equivalence is only meaningful within one pipeline.
+	// A mutex held by a Run of another pipeline is always a conflict:
+	// input equivalence is only meaningful within one pipeline.
 	if existing.PipelineID != p.def.ID() {
 		return Run{}, false, &durable.ScheduleConflictError{RunID: existing.RunID, PipelineID: existing.PipelineID}
 	}

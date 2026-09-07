@@ -494,8 +494,12 @@ func emitDefinition(g *protogen.GeneratedFile, pl *pipelineDecl) {
 	g.P(") *", name, "Definition {")
 	g.P("return &", name, "Definition{def: ", g.QualifiedGoIdent(defPkg.Ident("New")), "(", g.QualifiedGoIdent(defPkg.Ident("Config")), "{")
 	g.P("ID: ", strconv(pl.opts.GetId()), ",")
-	if eg := pl.opts.GetExclusionGroup(); eg != "" {
-		g.P("ExclusionGroup: ", strconv(eg), ",")
+	if ms := pl.opts.GetMutexes(); len(ms) > 0 {
+		quoted := make([]string, len(ms))
+		for i, m := range ms {
+			quoted[i] = strconv(m)
+		}
+		g.P("Mutexes: []string{", strings.Join(quoted, ", "), "},")
 	}
 	if cc := pl.opts.GetConcurrencyClass(); cc != "" {
 		g.P("ConcurrencyClass: ", strconv(cc), ",")

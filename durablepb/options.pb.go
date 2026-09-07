@@ -114,16 +114,19 @@ type PipelineOptions struct {
 	Output string `protobuf:"bytes,3,opt,name=output,proto3" json:"output,omitempty"`
 	// Ordered Step topology as fully-qualified Step message types.
 	Steps []string `protobuf:"bytes,4,rep,name=steps,proto3" json:"steps,omitempty"`
-	// Optional named exclusion group. Pipelines sharing a group mutually
-	// exclude per ResourceID: at most one nonterminal Run may exist across
-	// the whole group for a resource. Without a group, a pipeline excludes
-	// only with itself (the default per-pipeline slot).
-	ExclusionGroup string `protobuf:"bytes,5,opt,name=exclusion_group,json=exclusionGroup,proto3" json:"exclusion_group,omitempty"`
 	// Optional default concurrency class for all of this pipeline's steps;
 	// a step's own concurrency_class overrides it.
 	ConcurrencyClass string `protobuf:"bytes,6,opt,name=concurrency_class,json=concurrencyClass,proto3" json:"concurrency_class,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// Mutex names this pipeline's Runs hold on their ResourceID, from
+	// admission to terminality. Schedule is refused while any pipeline
+	// naming the same mutex holds it for that resource; the
+	// ScheduleConflictError names the holding Run so the caller can park
+	// on it. Two pipelines exclude each other exactly when they share at
+	// least one name. A pipeline always excludes with itself, with or
+	// without mutexes.
+	Mutexes       []string `protobuf:"bytes,7,rep,name=mutexes,proto3" json:"mutexes,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *PipelineOptions) Reset() {
@@ -184,18 +187,18 @@ func (x *PipelineOptions) GetSteps() []string {
 	return nil
 }
 
-func (x *PipelineOptions) GetExclusionGroup() string {
-	if x != nil {
-		return x.ExclusionGroup
-	}
-	return ""
-}
-
 func (x *PipelineOptions) GetConcurrencyClass() string {
 	if x != nil {
 		return x.ConcurrencyClass
 	}
 	return ""
+}
+
+func (x *PipelineOptions) GetMutexes() []string {
+	if x != nil {
+		return x.Mutexes
+	}
+	return nil
 }
 
 var file_durable_v1_options_proto_extTypes = []protoimpl.ExtensionInfo{
@@ -240,14 +243,14 @@ const file_durable_v1_options_proto_rawDesc = "" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x16\n" +
 	"\x06unwind\x18\x02 \x01(\bR\x06unwind\x12\x18\n" +
 	"\aretired\x18\x03 \x01(\bR\aretired\x12+\n" +
-	"\x11concurrency_class\x18\x04 \x01(\tR\x10concurrencyClass\"\xbb\x01\n" +
+	"\x11concurrency_class\x18\x04 \x01(\tR\x10concurrencyClass\"\xc3\x01\n" +
 	"\x0fPipelineOptions\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05input\x18\x02 \x01(\tR\x05input\x12\x16\n" +
 	"\x06output\x18\x03 \x01(\tR\x06output\x12\x14\n" +
-	"\x05steps\x18\x04 \x03(\tR\x05steps\x12'\n" +
-	"\x0fexclusion_group\x18\x05 \x01(\tR\x0eexclusionGroup\x12+\n" +
-	"\x11concurrency_class\x18\x06 \x01(\tR\x10concurrencyClass:N\n" +
+	"\x05steps\x18\x04 \x03(\tR\x05steps\x12+\n" +
+	"\x11concurrency_class\x18\x06 \x01(\tR\x10concurrencyClass\x12\x18\n" +
+	"\amutexes\x18\a \x03(\tR\amutexesJ\x04\b\x05\x10\x06R\x0fexclusion_group:N\n" +
 	"\x04step\x12\x1f.google.protobuf.MessageOptions\x18\x81\x95\x03 \x01(\v2\x17.durable.v1.StepOptionsR\x04step:Z\n" +
 	"\bpipeline\x12\x1f.google.protobuf.MessageOptions\x18\x82\x95\x03 \x01(\v2\x1b.durable.v1.PipelineOptionsR\bpipelineB/Z-github.com/dangra/durable/durablepb;durablepbb\x06proto3"
 

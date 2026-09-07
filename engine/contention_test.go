@@ -1,4 +1,4 @@
-// Contention: duplicate scheduling, exclusion groups, supersede
+// Contention: duplicate scheduling, mutexes, supersede
 // reconciliation, and concurrency classes.
 package engine_test
 
@@ -80,12 +80,12 @@ func TestDuplicateScheduling(t *testing.T) {
 	}
 }
 
-func TestExclusionGroupSemantics(t *testing.T) {
+func TestMutexSemantics(t *testing.T) {
 	release := make(chan struct{})
-	blocking := func(id durable.PipelineID, group string) *pipelinedef.Definition {
+	blocking := func(id durable.PipelineID, mutex string) *pipelinedef.Definition {
 		return pipelinedef.New(pipelinedef.Config{
-			ID:             id,
-			ExclusionGroup: group,
+			ID:      id,
+			Mutexes: mutexes(mutex),
 			Steps: []pipelinedef.Step{
 				stateless("s-"+durable.StepID(id)+"/v1", func(ctx context.Context, inv durable.Invocation) error {
 					select {
@@ -111,13 +111,13 @@ func TestExclusionGroupSemantics(t *testing.T) {
 		t.Fatalf("a.Schedule = created=%v err=%v", created, err)
 	}
 
-	// Same pipeline, equivalent input: dedup still applies inside a group.
+	// Same pipeline, equivalent input: dedup still applies under a mutex.
 	runA2, created, err := a.Schedule(context.Background(), "res", str("in"))
 	if err != nil || created || runA2.ID() != runA.ID() {
 		t.Fatalf("a dedup = %s created=%v err=%v", runA2.ID(), created, err)
 	}
 
-	// Group sibling: always a conflict, even with equivalent input.
+	// Another holder of the mutex: always a conflict, even with equivalent input.
 	_, created, err = b.Schedule(context.Background(), "res", str("in"))
 	var conflict *durable.ScheduleConflictError
 	if !errors.As(err, &conflict) || created {
@@ -127,7 +127,7 @@ func TestExclusionGroupSemantics(t *testing.T) {
 		t.Fatalf("conflict = %+v", conflict)
 	}
 
-	// A pipeline outside the group shares the resource freely.
+	// A pipeline naming no mutex shares the resource freely.
 	if _, created, err := solo.Schedule(context.Background(), "res", str("in")); err != nil || !created {
 		t.Fatalf("solo.Schedule = created=%v err=%v", created, err)
 	}

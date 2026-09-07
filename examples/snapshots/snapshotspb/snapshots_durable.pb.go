@@ -33,6 +33,14 @@ type FreezeVolumeInvocation struct {
 	core durable.Invocation
 }
 
+// NewFreezeVolumeInvocation wraps core for calling a FreezeVolumeHandler directly, outside
+// an engine: hand it durabletest.NewInvocation to unit-test the handler.
+// The engine wraps its own invocations; application code never needs
+// this at runtime.
+func NewFreezeVolumeInvocation(core durable.Invocation) FreezeVolumeInvocation {
+	return FreezeVolumeInvocation{core: core}
+}
+
 func (inv FreezeVolumeInvocation) PipelineID() durable.PipelineID { return inv.core.PipelineID() }
 func (inv FreezeVolumeInvocation) ResourceID() durable.ResourceID { return inv.core.ResourceID() }
 func (inv FreezeVolumeInvocation) RunID() durable.RunID           { return inv.core.RunID() }
@@ -103,6 +111,14 @@ func (f FreezeVolumeFuncs) Unwind(ctx context.Context, inv FreezeVolumeInvocatio
 // UploadSnapshotInvocation is passed to UploadSnapshotHandler methods.
 type UploadSnapshotInvocation struct {
 	core durable.Invocation
+}
+
+// NewUploadSnapshotInvocation wraps core for calling a UploadSnapshotHandler directly, outside
+// an engine: hand it durabletest.NewInvocation to unit-test the handler.
+// The engine wraps its own invocations; application code never needs
+// this at runtime.
+func NewUploadSnapshotInvocation(core durable.Invocation) UploadSnapshotInvocation {
+	return UploadSnapshotInvocation{core: core}
 }
 
 func (inv UploadSnapshotInvocation) PipelineID() durable.PipelineID { return inv.core.PipelineID() }
@@ -177,6 +193,14 @@ type ThawVolumeInvocation struct {
 	core durable.Invocation
 }
 
+// NewThawVolumeInvocation wraps core for calling a ThawVolumeHandler directly, outside
+// an engine: hand it durabletest.NewInvocation to unit-test the handler.
+// The engine wraps its own invocations; application code never needs
+// this at runtime.
+func NewThawVolumeInvocation(core durable.Invocation) ThawVolumeInvocation {
+	return ThawVolumeInvocation{core: core}
+}
+
 func (inv ThawVolumeInvocation) PipelineID() durable.PipelineID { return inv.core.PipelineID() }
 func (inv ThawVolumeInvocation) ResourceID() durable.ResourceID { return inv.core.ResourceID() }
 func (inv ThawVolumeInvocation) RunID() durable.RunID           { return inv.core.RunID() }
@@ -235,6 +259,14 @@ func (f ThawVolumeFunc) Run(ctx context.Context, inv ThawVolumeInvocation) error
 // RegisterSnapshotInvocation is passed to RegisterSnapshotHandler methods.
 type RegisterSnapshotInvocation struct {
 	core durable.Invocation
+}
+
+// NewRegisterSnapshotInvocation wraps core for calling a RegisterSnapshotHandler directly, outside
+// an engine: hand it durabletest.NewInvocation to unit-test the handler.
+// The engine wraps its own invocations; application code never needs
+// this at runtime.
+func NewRegisterSnapshotInvocation(core durable.Invocation) RegisterSnapshotInvocation {
+	return RegisterSnapshotInvocation{core: core}
 }
 
 func (inv RegisterSnapshotInvocation) PipelineID() durable.PipelineID { return inv.core.PipelineID() }
@@ -301,6 +333,17 @@ func (f RegisterSnapshotFunc) Run(ctx context.Context, inv RegisterSnapshotInvoc
 // free, synchronous, and non-failing.
 type CreateSnapshotReducer func(*CreateSnapshot) *CreateSnapshotOutput
 
+// Reduce folds view through r: the marker the reducer receives reads
+// its Input and States from view for the duration of the call. The
+// engine reduces through it; a unit test hands it durabletest.NewInvocation
+// (which is also a durable.ReduceView) to exercise the reducer alone.
+func (r CreateSnapshotReducer) Reduce(view durable.ReduceView) *CreateSnapshotOutput {
+	x := &CreateSnapshot{}
+	createSnapshotViews.Store(x, view)
+	defer createSnapshotViews.Delete(x)
+	return r(x)
+}
+
 var createSnapshotViews sync.Map
 
 func (x *CreateSnapshot) durableView() durable.ReduceView {
@@ -341,10 +384,7 @@ func NewCreateSnapshot(
 		ID:       "create-snapshot",
 		NewInput: func() proto.Message { return &CreateSnapshotInput{} },
 		Reduce: func(view durable.ReduceView) proto.Message {
-			x := &CreateSnapshot{}
-			createSnapshotViews.Store(x, view)
-			defer createSnapshotViews.Delete(x)
-			return reduce(x)
+			return reduce.Reduce(view)
 		},
 		Steps: []pipelinedef.Step{
 			{

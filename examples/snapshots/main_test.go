@@ -6,9 +6,11 @@ import (
 	"time"
 
 	"github.com/dangra/durable"
+	"github.com/dangra/durable/durabletest"
 	"github.com/dangra/durable/engine"
 	"github.com/dangra/durable/examples/snapshots/snapshotspb"
 	"github.com/dangra/durable/store/mem"
+	"google.golang.org/protobuf/proto"
 )
 
 var fastRetry = engine.WithRetryPolicy(engine.RetryPolicy{
@@ -93,5 +95,69 @@ func TestSnapshotUnwindsOnCatalogFull(t *testing.T) {
 	}
 	if len(w.catalog) != 0 {
 		t.Fatalf("catalog = %v; want empty", w.catalog)
+	}
+}
+
+// The closures are unit-testable without an engine: the generated
+// NewXxxInvocation wraps the durabletest fake, and XxxReducer.Reduce
+// folds it as a reducer view.
+
+func TestUploadUnwindDeletesObject(t *testing.T) {
+	ctx := context.Background()
+	w := newWorld()
+	w.objects["backups/vol-9/run.img"] = 1
+
+	inv := durabletest.NewInvocation(durabletest.InvocationConfig{
+		ResourceID: "vol-9",
+		StepID:     snapshotspb.UploadSnapshotStep.ID(),
+		Phase:      durable.PhaseUnwind,
+		State: map[durable.StepID]proto.Message{
+			snapshotspb.UploadSnapshotStep.ID(): &snapshotspb.UploadSnapshot{ObjectKey: "backups/vol-9/run.img"},
+		},
+		Failure: &durable.Failure{Root: durable.RootFailure{FailureRecord: durable.FailureRecord{StepID: "register-snapshot/v1"}}},
+	})
+	if err := uploadSnapshot(w).Unwind(ctx, snapshotspb.NewUploadSnapshotInvocation(inv)); err != nil {
+		t.Fatalf("Unwind: %v", err)
+	}
+	if len(w.objects) != 0 {
+		t.Fatalf("objects = %v; want the orphan deleted", w.objects)
+	}
+	if inv.Violation() != nil {
+		t.Fatalf("violation: %v", inv.Violation())
+	}
+
+	// Without committed upload state there is nothing to delete.
+	bare := durabletest.NewInvocation(durabletest.InvocationConfig{Phase: durable.PhaseUnwind, Failure: &durable.Failure{}})
+	w.objects["other"] = 1
+	if err := uploadSnapshot(w).Unwind(ctx, snapshotspb.NewUploadSnapshotInvocation(bare)); err != nil || len(w.objects) != 1 {
+		t.Fatalf("Unwind without state = %v, objects %v", err, w.objects)
+	}
+}
+
+func TestRegisterFailsPermanentlyWhenCatalogFull(t *testing.T) {
+	w := newWorld()
+	w.full = true
+	inv := durabletest.NewInvocation(durabletest.InvocationConfig{
+		State: map[durable.StepID]proto.Message{
+			snapshotspb.UploadSnapshotStep.ID(): &snapshotspb.UploadSnapshot{ObjectKey: "k"},
+		},
+	})
+	_, err := registerSnapshot(w).Run(context.Background(), snapshotspb.NewRegisterSnapshotInvocation(inv))
+	kind, reason, permanent := durable.FailureInfo(err)
+	if !permanent || kind != durable.FailureKindUser || reason != "catalog-full" {
+		t.Fatalf("Run = %v (permanent=%v kind=%v reason=%q); want a user/catalog-full Fail", err, permanent, kind, reason)
+	}
+}
+
+func TestReduceCreateSnapshot(t *testing.T) {
+	view := durabletest.NewInvocation(durabletest.InvocationConfig{
+		State: map[durable.StepID]proto.Message{
+			snapshotspb.UploadSnapshotStep.ID():   &snapshotspb.UploadSnapshot{ObjectKey: "k", Bytes: 7},
+			snapshotspb.RegisterSnapshotStep.ID(): &snapshotspb.RegisterSnapshot{SnapshotId: "snap-1"},
+		},
+	})
+	out := snapshotspb.CreateSnapshotReducer(reduceCreateSnapshot).Reduce(view)
+	if out.GetSnapshotId() != "snap-1" || out.GetObjectKey() != "k" {
+		t.Fatalf("Reduce = %+v", out)
 	}
 }

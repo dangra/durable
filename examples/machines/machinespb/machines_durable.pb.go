@@ -34,6 +34,14 @@ type ValidateInvocation struct {
 	core durable.Invocation
 }
 
+// NewValidateInvocation wraps core for calling a ValidateHandler directly, outside
+// an engine: hand it durabletest.NewInvocation to unit-test the handler.
+// The engine wraps its own invocations; application code never needs
+// this at runtime.
+func NewValidateInvocation(core durable.Invocation) ValidateInvocation {
+	return ValidateInvocation{core: core}
+}
+
 func (inv ValidateInvocation) PipelineID() durable.PipelineID { return inv.core.PipelineID() }
 func (inv ValidateInvocation) ResourceID() durable.ResourceID { return inv.core.ResourceID() }
 func (inv ValidateInvocation) RunID() durable.RunID           { return inv.core.RunID() }
@@ -92,6 +100,14 @@ func (f ValidateFunc) Run(ctx context.Context, inv ValidateInvocation) error { r
 // SelectHostInvocation is passed to SelectHostHandler methods.
 type SelectHostInvocation struct {
 	core durable.Invocation
+}
+
+// NewSelectHostInvocation wraps core for calling a SelectHostHandler directly, outside
+// an engine: hand it durabletest.NewInvocation to unit-test the handler.
+// The engine wraps its own invocations; application code never needs
+// this at runtime.
+func NewSelectHostInvocation(core durable.Invocation) SelectHostInvocation {
+	return SelectHostInvocation{core: core}
 }
 
 func (inv SelectHostInvocation) PipelineID() durable.PipelineID { return inv.core.PipelineID() }
@@ -154,6 +170,14 @@ func (f SelectHostFunc) Run(ctx context.Context, inv SelectHostInvocation) (*Sel
 // ReserveCapacityInvocation is passed to ReserveCapacityHandler methods.
 type ReserveCapacityInvocation struct {
 	core durable.Invocation
+}
+
+// NewReserveCapacityInvocation wraps core for calling a ReserveCapacityHandler directly, outside
+// an engine: hand it durabletest.NewInvocation to unit-test the handler.
+// The engine wraps its own invocations; application code never needs
+// this at runtime.
+func NewReserveCapacityInvocation(core durable.Invocation) ReserveCapacityInvocation {
+	return ReserveCapacityInvocation{core: core}
 }
 
 func (inv ReserveCapacityInvocation) PipelineID() durable.PipelineID { return inv.core.PipelineID() }
@@ -228,6 +252,14 @@ type CreateMachineInvocation struct {
 	core durable.Invocation
 }
 
+// NewCreateMachineInvocation wraps core for calling a CreateMachineHandler directly, outside
+// an engine: hand it durabletest.NewInvocation to unit-test the handler.
+// The engine wraps its own invocations; application code never needs
+// this at runtime.
+func NewCreateMachineInvocation(core durable.Invocation) CreateMachineInvocation {
+	return CreateMachineInvocation{core: core}
+}
+
 func (inv CreateMachineInvocation) PipelineID() durable.PipelineID { return inv.core.PipelineID() }
 func (inv CreateMachineInvocation) ResourceID() durable.ResourceID { return inv.core.ResourceID() }
 func (inv CreateMachineInvocation) RunID() durable.RunID           { return inv.core.RunID() }
@@ -292,6 +324,17 @@ func (f CreateMachineFunc) Run(ctx context.Context, inv CreateMachineInvocation)
 // free, synchronous, and non-failing.
 type ProvisionMachineReducer func(*ProvisionMachine) *ProvisionMachineOutput
 
+// Reduce folds view through r: the marker the reducer receives reads
+// its Input and States from view for the duration of the call. The
+// engine reduces through it; a unit test hands it durabletest.NewInvocation
+// (which is also a durable.ReduceView) to exercise the reducer alone.
+func (r ProvisionMachineReducer) Reduce(view durable.ReduceView) *ProvisionMachineOutput {
+	x := &ProvisionMachine{}
+	provisionMachineViews.Store(x, view)
+	defer provisionMachineViews.Delete(x)
+	return r(x)
+}
+
 var provisionMachineViews sync.Map
 
 func (x *ProvisionMachine) durableView() durable.ReduceView {
@@ -333,10 +376,7 @@ func NewProvisionMachine(
 		ExclusionGroup: "machine-lifecycle",
 		NewInput:       func() proto.Message { return &ProvisionMachineInput{} },
 		Reduce: func(view durable.ReduceView) proto.Message {
-			x := &ProvisionMachine{}
-			provisionMachineViews.Store(x, view)
-			defer provisionMachineViews.Delete(x)
-			return reduce(x)
+			return reduce.Reduce(view)
 		},
 		Steps: []pipelinedef.Step{
 			{
@@ -501,6 +541,14 @@ var ReleaseMachineStep = pipelinedef.StepRef("release-machine/v1")
 // ReleaseMachineInvocation is passed to ReleaseMachineHandler methods.
 type ReleaseMachineInvocation struct {
 	core durable.Invocation
+}
+
+// NewReleaseMachineInvocation wraps core for calling a ReleaseMachineHandler directly, outside
+// an engine: hand it durabletest.NewInvocation to unit-test the handler.
+// The engine wraps its own invocations; application code never needs
+// this at runtime.
+func NewReleaseMachineInvocation(core durable.Invocation) ReleaseMachineInvocation {
+	return ReleaseMachineInvocation{core: core}
 }
 
 func (inv ReleaseMachineInvocation) PipelineID() durable.PipelineID { return inv.core.PipelineID() }

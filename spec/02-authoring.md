@@ -354,7 +354,20 @@ Engine or a Store: `durabletest.NewInvocation` builds a fake from an
 annotations, park memory) that satisfies both `durable.Invocation` and
 `durable.ReduceView`, and records the contract violations a real Engine
 would invalidate the Run for. Generated code wraps it the same way it
-wraps the Engine's.
+wraps the Engine's: `NewReserveCapacityInvocation(fake)` is what a
+`ReserveCapacityHandler` method takes, and
+`ProvisionMachineReducer(reduce).Reduce(fake)` folds a reducer over it.
+
+```go
+inv := durabletest.NewInvocation(durabletest.InvocationConfig{
+    Phase:   durable.PhaseUnwind,
+    State:   map[durable.StepID]proto.Message{
+        machines.ReserveCapacityStep.ID(): &machines.ReserveCapacity{ReservationId: "res-1"},
+    },
+    Failure: &durable.Failure{Root: durable.RootFailure{ /* ... */ }},
+})
+err := handler.Unwind(ctx, machines.NewReserveCapacityInvocation(inv))
+```
 
 ---
 

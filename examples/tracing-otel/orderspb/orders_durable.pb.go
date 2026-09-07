@@ -29,6 +29,14 @@ type ReserveStockInvocation struct {
 	core durable.Invocation
 }
 
+// NewReserveStockInvocation wraps core for calling a ReserveStockHandler directly, outside
+// an engine: hand it durabletest.NewInvocation to unit-test the handler.
+// The engine wraps its own invocations; application code never needs
+// this at runtime.
+func NewReserveStockInvocation(core durable.Invocation) ReserveStockInvocation {
+	return ReserveStockInvocation{core: core}
+}
+
 func (inv ReserveStockInvocation) PipelineID() durable.PipelineID { return inv.core.PipelineID() }
 func (inv ReserveStockInvocation) ResourceID() durable.ResourceID { return inv.core.ResourceID() }
 func (inv ReserveStockInvocation) RunID() durable.RunID           { return inv.core.RunID() }
@@ -99,6 +107,14 @@ func (f ReserveStockFuncs) Unwind(ctx context.Context, inv ReserveStockInvocatio
 // ChargePaymentInvocation is passed to ChargePaymentHandler methods.
 type ChargePaymentInvocation struct {
 	core durable.Invocation
+}
+
+// NewChargePaymentInvocation wraps core for calling a ChargePaymentHandler directly, outside
+// an engine: hand it durabletest.NewInvocation to unit-test the handler.
+// The engine wraps its own invocations; application code never needs
+// this at runtime.
+func NewChargePaymentInvocation(core durable.Invocation) ChargePaymentInvocation {
+	return ChargePaymentInvocation{core: core}
 }
 
 func (inv ChargePaymentInvocation) PipelineID() durable.PipelineID { return inv.core.PipelineID() }
@@ -173,6 +189,12 @@ type ShipInvocation struct {
 	core durable.Invocation
 }
 
+// NewShipInvocation wraps core for calling a ShipHandler directly, outside
+// an engine: hand it durabletest.NewInvocation to unit-test the handler.
+// The engine wraps its own invocations; application code never needs
+// this at runtime.
+func NewShipInvocation(core durable.Invocation) ShipInvocation { return ShipInvocation{core: core} }
+
 func (inv ShipInvocation) PipelineID() durable.PipelineID { return inv.core.PipelineID() }
 func (inv ShipInvocation) ResourceID() durable.ResourceID { return inv.core.ResourceID() }
 func (inv ShipInvocation) RunID() durable.RunID           { return inv.core.RunID() }
@@ -233,6 +255,17 @@ func (f ShipFunc) Run(ctx context.Context, inv ShipInvocation) (*Ship, error) { 
 // free, synchronous, and non-failing.
 type FulfillOrderReducer func(*FulfillOrder) *FulfillOrderOutput
 
+// Reduce folds view through r: the marker the reducer receives reads
+// its Input and States from view for the duration of the call. The
+// engine reduces through it; a unit test hands it durabletest.NewInvocation
+// (which is also a durable.ReduceView) to exercise the reducer alone.
+func (r FulfillOrderReducer) Reduce(view durable.ReduceView) *FulfillOrderOutput {
+	x := &FulfillOrder{}
+	fulfillOrderViews.Store(x, view)
+	defer fulfillOrderViews.Delete(x)
+	return r(x)
+}
+
 var fulfillOrderViews sync.Map
 
 func (x *FulfillOrder) durableView() durable.ReduceView {
@@ -272,10 +305,7 @@ func NewFulfillOrder(
 		ID:       "fulfill-order",
 		NewInput: func() proto.Message { return &FulfillOrderInput{} },
 		Reduce: func(view durable.ReduceView) proto.Message {
-			x := &FulfillOrder{}
-			fulfillOrderViews.Store(x, view)
-			defer fulfillOrderViews.Delete(x)
-			return reduce(x)
+			return reduce.Reduce(view)
 		},
 		Steps: []pipelinedef.Step{
 			{

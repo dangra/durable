@@ -124,7 +124,13 @@ type PipelineOptions struct {
 	// on it. Two pipelines exclude each other exactly when they share at
 	// least one name. A pipeline always excludes with itself, with or
 	// without mutexes.
-	Mutexes       []string `protobuf:"bytes,7,rep,name=mutexes,proto3" json:"mutexes,omitempty"`
+	Mutexes []string `protobuf:"bytes,7,rep,name=mutexes,proto3" json:"mutexes,omitempty"`
+	// Fully-qualified failure Output message type, optional. When set, a
+	// failure reducer folds the immutable Input, the committed Step States,
+	// the Run's Failure, and the permanent unwind failures into it when the
+	// unwind completes, the way the reducer folds the Output on success;
+	// Result.FailureOutput carries it.
+	FailureOutput string `protobuf:"bytes,8,opt,name=failure_output,json=failureOutput,proto3" json:"failure_output,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -201,6 +207,13 @@ func (x *PipelineOptions) GetMutexes() []string {
 	return nil
 }
 
+func (x *PipelineOptions) GetFailureOutput() string {
+	if x != nil {
+		return x.FailureOutput
+	}
+	return ""
+}
+
 var file_durable_v1_options_proto_extTypes = []protoimpl.ExtensionInfo{
 	{
 		ExtendedType:  (*descriptorpb.MessageOptions)(nil),
@@ -243,14 +256,15 @@ const file_durable_v1_options_proto_rawDesc = "" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x16\n" +
 	"\x06unwind\x18\x02 \x01(\bR\x06unwind\x12\x18\n" +
 	"\aretired\x18\x03 \x01(\bR\aretired\x12+\n" +
-	"\x11concurrency_class\x18\x04 \x01(\tR\x10concurrencyClass\"\xc3\x01\n" +
+	"\x11concurrency_class\x18\x04 \x01(\tR\x10concurrencyClass\"\xea\x01\n" +
 	"\x0fPipelineOptions\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05input\x18\x02 \x01(\tR\x05input\x12\x16\n" +
 	"\x06output\x18\x03 \x01(\tR\x06output\x12\x14\n" +
 	"\x05steps\x18\x04 \x03(\tR\x05steps\x12+\n" +
 	"\x11concurrency_class\x18\x06 \x01(\tR\x10concurrencyClass\x12\x18\n" +
-	"\amutexes\x18\a \x03(\tR\amutexesJ\x04\b\x05\x10\x06R\x0fexclusion_group:N\n" +
+	"\amutexes\x18\a \x03(\tR\amutexes\x12%\n" +
+	"\x0efailure_output\x18\b \x01(\tR\rfailureOutputJ\x04\b\x05\x10\x06R\x0fexclusion_group:N\n" +
 	"\x04step\x12\x1f.google.protobuf.MessageOptions\x18\x81\x95\x03 \x01(\v2\x17.durable.v1.StepOptionsR\x04step:Z\n" +
 	"\bpipeline\x12\x1f.google.protobuf.MessageOptions\x18\x82\x95\x03 \x01(\v2\x1b.durable.v1.PipelineOptionsR\bpipelineB/Z-github.com/dangra/durable/durablepb;durablepbb\x06proto3"
 

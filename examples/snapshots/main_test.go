@@ -158,3 +158,72 @@ func TestReduceCreateSnapshot(t *testing.T) {
 		t.Fatalf("Reduce = %+v", out)
 	}
 }
+
+// The failure reducer's account of a failed run: where it failed, and what
+// the unwind left behind, joined from the failed compensation and the
+// state it could not undo.
+func TestFailureOutputNamesTheLeak(t *testing.T) {
+	ctx := context.Background()
+	w := newWorld()
+	w.full = true
+	w.stuck = true
+	p := start(t, w)
+
+	run, _, err := p.Schedule(ctx, "vol-3", &snapshotspb.CreateSnapshotInput{Bucket: "backups"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := run.Wait(ctx)
+	if err != nil || !result.Failed() {
+		t.Fatalf("Wait = %+v, %v", result, err)
+	}
+	fo := result.FailureOutput()
+	if fo == nil || fo.GetFailedStep() != "register-snapshot/v1" || fo.GetReason() != "catalog-full" {
+		t.Fatalf("FailureOutput = %+v", fo)
+	}
+	if len(w.objects) != 1 || fo.GetLeakedObjectKey() == "" {
+		t.Fatalf("leak: objects = %v, FailureOutput.LeakedObjectKey = %q", w.objects, fo.GetLeakedObjectKey())
+	}
+	if _, leaked := w.objects[fo.GetLeakedObjectKey()]; !leaked {
+		t.Fatalf("FailureOutput names %q, storage holds %v", fo.GetLeakedObjectKey(), w.objects)
+	}
+	if fo.GetVolumeLeftFrozen() || len(w.frozen) != 0 {
+		t.Fatalf("thaw still runs: frozen=%v output=%+v", w.frozen, fo)
+	}
+	if result.Output() != nil {
+		t.Fatal("a failed run has no success output")
+	}
+}
+
+// A clean unwind reports no leak, and the failure reducer is unit-testable
+// against the fake with a configured Failure and per-step unwind failures.
+func TestReduceCreateSnapshotFailure(t *testing.T) {
+	failure := &durable.Failure{StepID: "register-snapshot/v1", Reason: "catalog-full", Kind: durable.FailureKindUser}
+	clean := durabletest.NewInvocation(durabletest.InvocationConfig{
+		Phase:   durable.PhaseUnwind,
+		Failure: failure,
+		State: map[durable.StepID]proto.Message{
+			snapshotspb.UploadSnapshotStep.ID(): &snapshotspb.UploadSnapshot{ObjectKey: "k"},
+		},
+	})
+	out := snapshotspb.CreateSnapshotFailureReducer(reduceCreateSnapshotFailure).Reduce(clean)
+	if out.GetFailedStep() != "register-snapshot/v1" || out.GetLeakedObjectKey() != "" || out.GetVolumeLeftFrozen() {
+		t.Fatalf("clean unwind = %+v", out)
+	}
+
+	leaky := durabletest.NewInvocation(durabletest.InvocationConfig{
+		Phase:   durable.PhaseUnwind,
+		Failure: failure,
+		State: map[durable.StepID]proto.Message{
+			snapshotspb.UploadSnapshotStep.ID(): &snapshotspb.UploadSnapshot{ObjectKey: "k"},
+		},
+		UnwindFailures: map[durable.StepID]durable.Failure{
+			snapshotspb.UploadSnapshotStep.ID(): {StepID: snapshotspb.UploadSnapshotStep.ID(), Reason: "storage-stuck"},
+			snapshotspb.FreezeVolumeStep.ID():   {StepID: snapshotspb.FreezeVolumeStep.ID()},
+		},
+	})
+	out = snapshotspb.CreateSnapshotFailureReducer(reduceCreateSnapshotFailure).Reduce(leaky)
+	if out.GetLeakedObjectKey() != "k" || !out.GetVolumeLeftFrozen() {
+		t.Fatalf("leaky unwind = %+v", out)
+	}
+}

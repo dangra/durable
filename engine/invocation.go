@@ -129,11 +129,29 @@ type reduceView struct {
 	newInput func() proto.Message
 	states   map[durable.StepID][]byte
 
+	// failure and unwindFailures are set when a failed Run is reduced;
+	// nil for a successful one.
+	failure        *durable.Failure
+	unwindFailures map[durable.StepID]durable.Failure
+
 	mu        sync.Mutex
 	violation error
 }
 
 var _ durable.ReduceView = (*reduceView)(nil)
+
+func (v *reduceView) Failure() *durable.Failure {
+	if v.failure == nil {
+		return nil
+	}
+	f := *v.failure
+	return &f
+}
+
+func (v *reduceView) UnwindFailure(step durable.StepID) (durable.Failure, bool) {
+	f, ok := v.unwindFailures[step]
+	return f, ok
+}
 
 func (v *reduceView) InputMessage() proto.Message {
 	if v.newInput == nil {

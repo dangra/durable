@@ -55,6 +55,13 @@ message PipelineOptions {
   // without mutexes.
   repeated string mutexes = 7;
 
+  // Fully-qualified failure Output message type, optional. When set, a
+  // failure reducer folds the immutable Input, the committed Step States,
+  // the Run's Failure, and the permanent unwind failures into it when the
+  // unwind completes, the way the reducer folds the Output on success;
+  // Result.FailureOutput carries it.
+  string failure_output = 8;
+
   // Field 5 was the single exclusion_group; mutexes generalize it.
   reserved 5;
   reserved "exclusion_group";

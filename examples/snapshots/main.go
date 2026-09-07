@@ -31,6 +31,7 @@ type world struct {
 	objects  map[string]uint64 // object key -> bytes
 	catalog  map[string]string // snapshot id -> object key
 	full     bool              // the catalog rejects new entries
+	stuck    bool              // object storage refuses deletes
 	thawed   int
 	nextID   int
 	uploaded int
@@ -77,10 +78,16 @@ func (w *world) upload(key string) uint64 {
 	return w.objects[key]
 }
 
-func (w *world) delete(key string) {
+var errStorageStuck = errors.New("object storage refuses deletes")
+
+func (w *world) delete(key string) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if w.stuck {
+		return errStorageStuck
+	}
 	delete(w.objects, key)
+	return nil
 }
 
 func (w *world) register(key string) (string, error) {
@@ -127,10 +134,17 @@ func uploadSnapshot(w *world) snapshotspb.UploadSnapshotFuncs {
 			if !ok {
 				return nil
 			}
-			// The failure being unwound is on the invocation.
+			// The run's failure is on the invocation.
 			inv.Logger().Info("deleting orphaned snapshot object",
-				"key", up.GetObjectKey(), "root_step", inv.Failure().StepID)
-			w.delete(up.GetObjectKey())
+				"key", up.GetObjectKey(), "failed_step", inv.Failure().StepID)
+			if err := w.delete(up.GetObjectKey()); errors.Is(err, errStorageStuck) {
+				// A permanent unwind failure: the object leaks, the rest
+				// of the unwind continues, and the failure reducer
+				// reports the leak.
+				return durable.Fail(err, durable.WithReason("storage-stuck"))
+			} else if err != nil {
+				return err
+			}
 			return nil
 		},
 	}
@@ -169,6 +183,24 @@ func reduceCreateSnapshot(p *snapshotspb.CreateSnapshot) *snapshotspb.CreateSnap
 	return &snapshotspb.CreateSnapshotOutput{SnapshotId: reg.GetSnapshotId(), ObjectKey: up.GetObjectKey()}
 }
 
+// reduceCreateSnapshotFailure is the failure reducer: the failure output
+// relates to the failure and the step states the way the output relates
+// to the states. It names where the run failed and joins each failed
+// compensation with the state it could not undo.
+func reduceCreateSnapshotFailure(p *snapshotspb.CreateSnapshot) *snapshotspb.CreateSnapshotFailure {
+	out := &snapshotspb.CreateSnapshotFailure{
+		FailedStep: string(p.Failure().StepID),
+		Reason:     p.Failure().Reason,
+	}
+	if _, failed := p.UnwindFailure(snapshotspb.UploadSnapshotStep); failed {
+		if up, ok := p.State(snapshotspb.UploadSnapshotStep); ok {
+			out.LeakedObjectKey = up.GetObjectKey()
+		}
+	}
+	_, out.VolumeLeftFrozen = p.UnwindFailure(snapshotspb.FreezeVolumeStep)
+	return out
+}
+
 func newCreateSnapshot(w *world) *snapshotspb.CreateSnapshotDefinition {
 	return snapshotspb.NewCreateSnapshot(
 		freezeVolume(w),
@@ -176,6 +208,7 @@ func newCreateSnapshot(w *world) *snapshotspb.CreateSnapshotDefinition {
 		thawVolume(w),
 		registerSnapshot(w),
 		reduceCreateSnapshot,
+		reduceCreateSnapshotFailure,
 	)
 }
 
@@ -218,7 +251,23 @@ func main() {
 	if err != nil || !result.Failed() {
 		log.Fatalf("snapshot of vol-2: %+v, %v", result, err)
 	}
-	fmt.Printf("vol-2: failed at %s (%s/%s); unwound: objects in storage %d (vol-1's), volumes frozen %d\n",
-		result.Failure.StepID, result.Failure.Kind, result.Failure.Reason,
+	fo := result.FailureOutput()
+	fmt.Printf("vol-2: failed at %s (%s/%s); leaked object %q; objects in storage %d (vol-1's), volumes frozen %d\n",
+		fo.GetFailedStep(), result.Failure.Kind, fo.GetReason(), fo.GetLeakedObjectKey(),
 		len(w.objects), len(w.frozen))
+
+	// Object storage jams: the upload's compensation fails permanently,
+	// the volume still thaws, and the failure output names the leak.
+	w.stuck = true
+	run, _, err = snapshots.Schedule(ctx, "vol-3", input)
+	if err != nil {
+		log.Fatal(err)
+	}
+	result, err = run.Wait(ctx)
+	if err != nil || !result.Failed() {
+		log.Fatalf("snapshot of vol-3: %+v, %v", result, err)
+	}
+	fo = result.FailureOutput()
+	fmt.Printf("vol-3: failed at %s; leaked object %q; volume left frozen %v\n",
+		fo.GetFailedStep(), fo.GetLeakedObjectKey(), fo.GetVolumeLeftFrozen())
 }

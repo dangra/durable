@@ -121,6 +121,79 @@ func (x *CreateSnapshotOutput) GetObjectKey() string {
 	return ""
 }
 
+// CreateSnapshotFailure is the failure reducer's account of a failed run:
+// where it failed, and what the unwind could not clean up.
+type CreateSnapshotFailure struct {
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	FailedStep string                 `protobuf:"bytes,1,opt,name=failed_step,json=failedStep,proto3" json:"failed_step,omitempty"`
+	Reason     string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`
+	// The uploaded object left in storage because its deletion failed
+	// permanently; empty when the unwind cleaned up.
+	LeakedObjectKey string `protobuf:"bytes,3,opt,name=leaked_object_key,json=leakedObjectKey,proto3" json:"leaked_object_key,omitempty"`
+	// Set when the volume is still frozen because the thaw failed.
+	VolumeLeftFrozen bool `protobuf:"varint,4,opt,name=volume_left_frozen,json=volumeLeftFrozen,proto3" json:"volume_left_frozen,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *CreateSnapshotFailure) Reset() {
+	*x = CreateSnapshotFailure{}
+	mi := &file_snapshots_v1_snapshots_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateSnapshotFailure) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateSnapshotFailure) ProtoMessage() {}
+
+func (x *CreateSnapshotFailure) ProtoReflect() protoreflect.Message {
+	mi := &file_snapshots_v1_snapshots_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateSnapshotFailure.ProtoReflect.Descriptor instead.
+func (*CreateSnapshotFailure) Descriptor() ([]byte, []int) {
+	return file_snapshots_v1_snapshots_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *CreateSnapshotFailure) GetFailedStep() string {
+	if x != nil {
+		return x.FailedStep
+	}
+	return ""
+}
+
+func (x *CreateSnapshotFailure) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+func (x *CreateSnapshotFailure) GetLeakedObjectKey() string {
+	if x != nil {
+		return x.LeakedObjectKey
+	}
+	return ""
+}
+
+func (x *CreateSnapshotFailure) GetVolumeLeftFrozen() bool {
+	if x != nil {
+		return x.VolumeLeftFrozen
+	}
+	return false
+}
+
 // FreezeVolume quiesces the volume so the upload reads a consistent
 // image. Its unwind thaws; the ThawVolume step thaws on the happy path.
 type FreezeVolume struct {
@@ -132,7 +205,7 @@ type FreezeVolume struct {
 
 func (x *FreezeVolume) Reset() {
 	*x = FreezeVolume{}
-	mi := &file_snapshots_v1_snapshots_proto_msgTypes[2]
+	mi := &file_snapshots_v1_snapshots_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -144,7 +217,7 @@ func (x *FreezeVolume) String() string {
 func (*FreezeVolume) ProtoMessage() {}
 
 func (x *FreezeVolume) ProtoReflect() protoreflect.Message {
-	mi := &file_snapshots_v1_snapshots_proto_msgTypes[2]
+	mi := &file_snapshots_v1_snapshots_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -157,7 +230,7 @@ func (x *FreezeVolume) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FreezeVolume.ProtoReflect.Descriptor instead.
 func (*FreezeVolume) Descriptor() ([]byte, []int) {
-	return file_snapshots_v1_snapshots_proto_rawDescGZIP(), []int{2}
+	return file_snapshots_v1_snapshots_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *FreezeVolume) GetFreezeToken() string {
@@ -179,7 +252,7 @@ type UploadSnapshot struct {
 
 func (x *UploadSnapshot) Reset() {
 	*x = UploadSnapshot{}
-	mi := &file_snapshots_v1_snapshots_proto_msgTypes[3]
+	mi := &file_snapshots_v1_snapshots_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -191,7 +264,7 @@ func (x *UploadSnapshot) String() string {
 func (*UploadSnapshot) ProtoMessage() {}
 
 func (x *UploadSnapshot) ProtoReflect() protoreflect.Message {
-	mi := &file_snapshots_v1_snapshots_proto_msgTypes[3]
+	mi := &file_snapshots_v1_snapshots_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -204,7 +277,7 @@ func (x *UploadSnapshot) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UploadSnapshot.ProtoReflect.Descriptor instead.
 func (*UploadSnapshot) Descriptor() ([]byte, []int) {
-	return file_snapshots_v1_snapshots_proto_rawDescGZIP(), []int{3}
+	return file_snapshots_v1_snapshots_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *UploadSnapshot) GetObjectKey() string {
@@ -229,7 +302,7 @@ type ThawVolume struct {
 
 func (x *ThawVolume) Reset() {
 	*x = ThawVolume{}
-	mi := &file_snapshots_v1_snapshots_proto_msgTypes[4]
+	mi := &file_snapshots_v1_snapshots_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -241,7 +314,7 @@ func (x *ThawVolume) String() string {
 func (*ThawVolume) ProtoMessage() {}
 
 func (x *ThawVolume) ProtoReflect() protoreflect.Message {
-	mi := &file_snapshots_v1_snapshots_proto_msgTypes[4]
+	mi := &file_snapshots_v1_snapshots_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -254,7 +327,7 @@ func (x *ThawVolume) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ThawVolume.ProtoReflect.Descriptor instead.
 func (*ThawVolume) Descriptor() ([]byte, []int) {
-	return file_snapshots_v1_snapshots_proto_rawDescGZIP(), []int{4}
+	return file_snapshots_v1_snapshots_proto_rawDescGZIP(), []int{5}
 }
 
 type RegisterSnapshot struct {
@@ -266,7 +339,7 @@ type RegisterSnapshot struct {
 
 func (x *RegisterSnapshot) Reset() {
 	*x = RegisterSnapshot{}
-	mi := &file_snapshots_v1_snapshots_proto_msgTypes[5]
+	mi := &file_snapshots_v1_snapshots_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -278,7 +351,7 @@ func (x *RegisterSnapshot) String() string {
 func (*RegisterSnapshot) ProtoMessage() {}
 
 func (x *RegisterSnapshot) ProtoReflect() protoreflect.Message {
-	mi := &file_snapshots_v1_snapshots_proto_msgTypes[5]
+	mi := &file_snapshots_v1_snapshots_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -291,7 +364,7 @@ func (x *RegisterSnapshot) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisterSnapshot.ProtoReflect.Descriptor instead.
 func (*RegisterSnapshot) Descriptor() ([]byte, []int) {
-	return file_snapshots_v1_snapshots_proto_rawDescGZIP(), []int{5}
+	return file_snapshots_v1_snapshots_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *RegisterSnapshot) GetSnapshotId() string {
@@ -309,7 +382,7 @@ type CreateSnapshot struct {
 
 func (x *CreateSnapshot) Reset() {
 	*x = CreateSnapshot{}
-	mi := &file_snapshots_v1_snapshots_proto_msgTypes[6]
+	mi := &file_snapshots_v1_snapshots_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -321,7 +394,7 @@ func (x *CreateSnapshot) String() string {
 func (*CreateSnapshot) ProtoMessage() {}
 
 func (x *CreateSnapshot) ProtoReflect() protoreflect.Message {
-	mi := &file_snapshots_v1_snapshots_proto_msgTypes[6]
+	mi := &file_snapshots_v1_snapshots_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -334,7 +407,7 @@ func (x *CreateSnapshot) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateSnapshot.ProtoReflect.Descriptor instead.
 func (*CreateSnapshot) Descriptor() ([]byte, []int) {
-	return file_snapshots_v1_snapshots_proto_rawDescGZIP(), []int{6}
+	return file_snapshots_v1_snapshots_proto_rawDescGZIP(), []int{7}
 }
 
 var File_snapshots_v1_snapshots_proto protoreflect.FileDescriptor
@@ -348,7 +421,13 @@ const file_snapshots_v1_snapshots_proto_rawDesc = "" +
 	"\vsnapshot_id\x18\x01 \x01(\tR\n" +
 	"snapshotId\x12\x1d\n" +
 	"\n" +
-	"object_key\x18\x02 \x01(\tR\tobjectKey\"K\n" +
+	"object_key\x18\x02 \x01(\tR\tobjectKey\"\xaa\x01\n" +
+	"\x15CreateSnapshotFailure\x12\x1f\n" +
+	"\vfailed_step\x18\x01 \x01(\tR\n" +
+	"failedStep\x12\x16\n" +
+	"\x06reason\x18\x02 \x01(\tR\x06reason\x12*\n" +
+	"\x11leaked_object_key\x18\x03 \x01(\tR\x0fleakedObjectKey\x12,\n" +
+	"\x12volume_left_frozen\x18\x04 \x01(\bR\x10volumeLeftFrozen\"K\n" +
 	"\fFreezeVolume\x12!\n" +
 	"\ffreeze_token\x18\x01 \x01(\tR\vfreezeToken:\x18\x8a\xa8\x19\x14\n" +
 	"\x10freeze-volume/v1\x10\x01\"a\n" +
@@ -363,9 +442,9 @@ const file_snapshots_v1_snapshots_proto_rawDesc = "" +
 	"\x10RegisterSnapshot\x12\x1f\n" +
 	"\vsnapshot_id\x18\x01 \x01(\tR\n" +
 	"snapshotId:\x1a\x8a\xa8\x19\x16\n" +
-	"\x14register-snapshot/v1\"\xe4\x01\n" +
-	"\x0eCreateSnapshot:\xd1\x01\x92\xa8\x19\xcc\x01\n" +
-	"\x0fcreate-snapshot\x12!.snapshots.v1.CreateSnapshotInput\x1a\".snapshots.v1.CreateSnapshotOutput\"\x1a.snapshots.v1.FreezeVolume\"\x1c.snapshots.v1.UploadSnapshot\"\x18.snapshots.v1.ThawVolume\"\x1e.snapshots.v1.RegisterSnapshotBFZDgithub.com/dangra/durable/examples/snapshots/snapshotspb;snapshotspbb\x06proto3"
+	"\x14register-snapshot/v1\"\x89\x02\n" +
+	"\x0eCreateSnapshot:\xf6\x01\x92\xa8\x19\xf1\x01\n" +
+	"\x0fcreate-snapshot\x12!.snapshots.v1.CreateSnapshotInput\x1a\".snapshots.v1.CreateSnapshotOutput\"\x1a.snapshots.v1.FreezeVolume\"\x1c.snapshots.v1.UploadSnapshot\"\x18.snapshots.v1.ThawVolume\"\x1e.snapshots.v1.RegisterSnapshotB#.snapshots.v1.CreateSnapshotFailureBFZDgithub.com/dangra/durable/examples/snapshots/snapshotspb;snapshotspbb\x06proto3"
 
 var (
 	file_snapshots_v1_snapshots_proto_rawDescOnce sync.Once
@@ -379,15 +458,16 @@ func file_snapshots_v1_snapshots_proto_rawDescGZIP() []byte {
 	return file_snapshots_v1_snapshots_proto_rawDescData
 }
 
-var file_snapshots_v1_snapshots_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_snapshots_v1_snapshots_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_snapshots_v1_snapshots_proto_goTypes = []any{
-	(*CreateSnapshotInput)(nil),  // 0: snapshots.v1.CreateSnapshotInput
-	(*CreateSnapshotOutput)(nil), // 1: snapshots.v1.CreateSnapshotOutput
-	(*FreezeVolume)(nil),         // 2: snapshots.v1.FreezeVolume
-	(*UploadSnapshot)(nil),       // 3: snapshots.v1.UploadSnapshot
-	(*ThawVolume)(nil),           // 4: snapshots.v1.ThawVolume
-	(*RegisterSnapshot)(nil),     // 5: snapshots.v1.RegisterSnapshot
-	(*CreateSnapshot)(nil),       // 6: snapshots.v1.CreateSnapshot
+	(*CreateSnapshotInput)(nil),   // 0: snapshots.v1.CreateSnapshotInput
+	(*CreateSnapshotOutput)(nil),  // 1: snapshots.v1.CreateSnapshotOutput
+	(*CreateSnapshotFailure)(nil), // 2: snapshots.v1.CreateSnapshotFailure
+	(*FreezeVolume)(nil),          // 3: snapshots.v1.FreezeVolume
+	(*UploadSnapshot)(nil),        // 4: snapshots.v1.UploadSnapshot
+	(*ThawVolume)(nil),            // 5: snapshots.v1.ThawVolume
+	(*RegisterSnapshot)(nil),      // 6: snapshots.v1.RegisterSnapshot
+	(*CreateSnapshot)(nil),        // 7: snapshots.v1.CreateSnapshot
 }
 var file_snapshots_v1_snapshots_proto_depIdxs = []int32{
 	0, // [0:0] is the sub-list for method output_type
@@ -408,7 +488,7 @@ func file_snapshots_v1_snapshots_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_snapshots_v1_snapshots_proto_rawDesc), len(file_snapshots_v1_snapshots_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   7,
+			NumMessages:   8,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

@@ -35,12 +35,13 @@ type stepDecl struct {
 }
 
 type pipelineDecl struct {
-	msg    *protogen.Message
-	file   *protogen.File
-	opts   *durablepb.PipelineOptions
-	input  *protogen.Message // nil when the pipeline declares no Input
-	output *protogen.Message // nil when the pipeline declares no Output
-	steps  []*stepDecl
+	msg           *protogen.Message
+	file          *protogen.File
+	opts          *durablepb.PipelineOptions
+	input         *protogen.Message // nil when the pipeline declares no Input
+	output        *protogen.Message // nil when the pipeline declares no Output
+	failureOutput *protogen.Message // nil when the pipeline declares no failure Output
+	steps         []*stepDecl
 }
 
 // Generate is the plugin entry point.
@@ -121,6 +122,14 @@ func Generate(p *protogen.Plugin) error {
 				fail("%s: output type %q not found", m.Desc.FullName(), out)
 			} else {
 				pl.output = msg
+			}
+		}
+		if fo := pl.opts.GetFailureOutput(); fo != "" {
+			msg, ok := messages[trimDot(fo)]
+			if !ok {
+				fail("%s: failure_output type %q not found", m.Desc.FullName(), fo)
+			} else {
+				pl.failureOutput = msg
 			}
 		}
 
@@ -258,7 +267,12 @@ func emitPipeline(g *protogen.GeneratedFile, pl *pipelineDecl) {
 		emitHandler(g, s)
 	}
 	if pl.output != nil {
-		emitReducerType(g, pl)
+		emitReducerType(g, pl, "Reducer", pl.output,
+			"produces the pipeline output from the immutable input and committed step states on success")
+	}
+	if pl.failureOutput != nil {
+		emitReducerType(g, pl, "FailureReducer", pl.failureOutput,
+			"produces the pipeline failure output from the immutable input, the committed step states, the run's Failure, and the permanent unwind failures once the unwind completes")
 	}
 	emitMarkerView(g, pl)
 	emitDefinition(g, pl)
@@ -269,10 +283,15 @@ func emitPipeline(g *protogen.GeneratedFile, pl *pipelineDecl) {
 }
 
 // typedRun reports whether the pipeline gets a generated typed Run: any
-// pipeline with an Input (typed Input accessor) or an Output (typed Wait
-// result).
+// pipeline with an Input (typed Input accessor) or an Output or failure
+// Output (typed Wait result).
 func (pl *pipelineDecl) typedRun() bool {
-	return pl.input != nil || pl.output != nil
+	return pl.input != nil || pl.typedResult()
+}
+
+// typedResult reports whether Wait returns a typed Result.
+func (pl *pipelineDecl) typedResult() bool {
+	return pl.output != nil || pl.failureOutput != nil
 }
 
 func emitStepRef(g *protogen.GeneratedFile, s *stepDecl) {
@@ -413,19 +432,22 @@ func emitHandlerFuncs(g *protogen.GeneratedFile, s *stepDecl) {
 	g.P()
 }
 
-func emitReducerType(g *protogen.GeneratedFile, pl *pipelineDecl) {
+// emitReducerType emits one reducer func type (Reducer or FailureReducer)
+// over the pipeline marker, producing out, with its Reduce method.
+func emitReducerType(g *protogen.GeneratedFile, pl *pipelineDecl, kind string, out *protogen.Message, doc string) {
 	name := pl.msg.GoIdent.GoName
-	g.P("// ", name, "Reducer produces the pipeline output from the immutable input")
-	g.P("// and committed step states. It must be pure: deterministic, side-effect")
-	g.P("// free, synchronous, and non-failing.")
-	g.P("type ", name, "Reducer func(*", g.QualifiedGoIdent(pl.msg.GoIdent), ") *", g.QualifiedGoIdent(pl.output.GoIdent))
+	g.P("// ", name, kind, " ", doc, ".")
+	g.P("// It must be pure: deterministic, side-effect free, synchronous, and")
+	g.P("// non-failing.")
+	g.P("type ", name, kind, " func(*", g.QualifiedGoIdent(pl.msg.GoIdent), ") *", g.QualifiedGoIdent(out.GoIdent))
 	g.P()
 	views := lowerFirst(name) + "Views"
 	g.P("// Reduce folds view through r: the marker the reducer receives reads")
-	g.P("// its Input and States from view for the duration of the call. The")
-	g.P("// engine reduces through it; a unit test hands it durabletest.NewInvocation")
-	g.P("// (which is also a durable.ReduceView) to exercise the reducer alone.")
-	g.P("func (r ", name, "Reducer) Reduce(view ", g.QualifiedGoIdent(durablePkg.Ident("ReduceView")), ") *", g.QualifiedGoIdent(pl.output.GoIdent), " {")
+	g.P("// its Input, States, and failures from view for the duration of the")
+	g.P("// call. The engine reduces through it; a unit test hands it")
+	g.P("// durabletest.NewInvocation (which is also a durable.ReduceView) to")
+	g.P("// exercise the reducer alone.")
+	g.P("func (r ", name, kind, ") Reduce(view ", g.QualifiedGoIdent(durablePkg.Ident("ReduceView")), ") *", g.QualifiedGoIdent(out.GoIdent), " {")
 	g.P("x := &", g.QualifiedGoIdent(pl.msg.GoIdent), "{}")
 	g.P(views, ".Store(x, view)")
 	g.P("defer ", views, ".Delete(x)")
@@ -463,6 +485,18 @@ func emitMarkerView(g *protogen.GeneratedFile, pl *pipelineDecl) {
 	g.P("return ", g.QualifiedGoIdent(durablePkg.Ident("LookupState")), "(x.durableView(), step)")
 	g.P("}")
 	g.P()
+	g.P("// Failure is the run's failure when a failed run is being reduced, nil")
+	g.P("// when a successful one is.")
+	g.P("func (x *", name, ") Failure() *", g.QualifiedGoIdent(durablePkg.Ident("Failure")), " { return x.durableView().Failure() }")
+	g.P()
+	g.P("// UnwindFailure reports the permanent failure of the referenced step's")
+	g.P("// unwind, if its compensation failed; ok is false when the step was not")
+	g.P("// unwound or its unwind succeeded. Pair it with State to describe what a")
+	g.P("// failed run left behind.")
+	g.P("func (x *", name, ") UnwindFailure(step ", g.QualifiedGoIdent(durablePkg.Ident("StepIdentifier")), ") (", g.QualifiedGoIdent(durablePkg.Ident("Failure")), ", bool) {")
+	g.P("return x.durableView().UnwindFailure(step.ID())")
+	g.P("}")
+	g.P()
 }
 
 func emitDefinition(g *protogen.GeneratedFile, pl *pipelineDecl) {
@@ -479,7 +513,10 @@ func emitDefinition(g *protogen.GeneratedFile, pl *pipelineDecl) {
 
 	g.P("// New", name, " assembles the ", strconv(pl.opts.GetId()), " pipeline definition")
 	g.P("// from its step handlers", func() string {
-		if pl.output != nil {
+		switch {
+		case pl.output != nil && pl.failureOutput != nil:
+			return " and reducers"
+		case pl.output != nil || pl.failureOutput != nil:
 			return " and reducer"
 		}
 		return ""
@@ -490,6 +527,9 @@ func emitDefinition(g *protogen.GeneratedFile, pl *pipelineDecl) {
 	}
 	if pl.output != nil {
 		g.P("reduce ", name, "Reducer,")
+	}
+	if pl.failureOutput != nil {
+		g.P("reduceFailure ", name, "FailureReducer,")
 	}
 	g.P(") *", name, "Definition {")
 	g.P("return &", name, "Definition{def: ", g.QualifiedGoIdent(defPkg.Ident("New")), "(", g.QualifiedGoIdent(defPkg.Ident("Config")), "{")
@@ -510,6 +550,11 @@ func emitDefinition(g *protogen.GeneratedFile, pl *pipelineDecl) {
 	if pl.output != nil {
 		g.P("Reduce: func(view ", g.QualifiedGoIdent(durablePkg.Ident("ReduceView")), ") ", protoMsg, " {")
 		g.P("return reduce.Reduce(view)")
+		g.P("},")
+	}
+	if pl.failureOutput != nil {
+		g.P("ReduceFailure: func(view ", g.QualifiedGoIdent(durablePkg.Ident("ReduceView")), ") ", protoMsg, " {")
+		g.P("return reduceFailure.Reduce(view)")
 		g.P("},")
 	}
 	g.P("Steps: []", g.QualifiedGoIdent(defPkg.Ident("Step")), "{")
@@ -673,7 +718,7 @@ func emitTypedRunAndResult(g *protogen.GeneratedFile, pl *pipelineDecl) {
 		g.P("}")
 		g.P()
 	}
-	if pl.output == nil {
+	if !pl.typedResult() {
 		g.P("// Wait blocks until the run is terminal.")
 		g.P("func (r ", name, "Run) Wait(ctx ", ctx, ") (", g.QualifiedGoIdent(enginePkg.Ident("Result")), ", error) {")
 		g.P("return r.run.Wait(ctx)")
@@ -681,38 +726,65 @@ func emitTypedRunAndResult(g *protogen.GeneratedFile, pl *pipelineDecl) {
 		g.P()
 		return
 	}
+	// decode emits the read of the terminal output bytes into a typed
+	// message stored in the named Result field.
+	decode := func(field string, msg *protogen.Message) {
+		g.P("b, err := r.run.OutputBytes(ctx)")
+		g.P("if err != nil {")
+		g.P("return ", name, "Result{}, err")
+		g.P("}")
+		g.P("msg := &", g.QualifiedGoIdent(msg.GoIdent), "{}")
+		g.P("if err := ", g.QualifiedGoIdent(protoPkg.Ident("Unmarshal")), "(b, msg); err != nil {")
+		g.P("return ", name, "Result{}, err")
+		g.P("}")
+		g.P("out.", field, " = msg")
+	}
 	g.P("// Wait blocks until the run is terminal. A successful result carries the")
-	g.P("// pipeline output; a failed run has none.")
+	g.P("// pipeline output and a failed one the failure output, each when the")
+	g.P("// pipeline declares it.")
 	g.P("func (r ", name, "Run) Wait(ctx ", ctx, ") (", name, "Result, error) {")
 	g.P("res, err := r.run.Wait(ctx)")
 	g.P("if err != nil {")
 	g.P("return ", name, "Result{}, err")
 	g.P("}")
 	g.P("out := ", name, "Result{Result: res}")
-	g.P("if res.Succeeded() {")
-	g.P("b, err := r.run.OutputBytes(ctx)")
-	g.P("if err != nil {")
-	g.P("return ", name, "Result{}, err")
-	g.P("}")
-	g.P("msg := &", g.QualifiedGoIdent(pl.output.GoIdent), "{}")
-	g.P("if err := ", g.QualifiedGoIdent(protoPkg.Ident("Unmarshal")), "(b, msg); err != nil {")
-	g.P("return ", name, "Result{}, err")
-	g.P("}")
-	g.P("out.output = msg")
-	g.P("}")
+	if pl.output != nil {
+		g.P("if res.Succeeded() {")
+		decode("output", pl.output)
+		g.P("}")
+	}
+	if pl.failureOutput != nil {
+		g.P("if res.Failed() {")
+		decode("failureOutput", pl.failureOutput)
+		g.P("}")
+	}
 	g.P("return out, nil")
 	g.P("}")
 	g.P()
 	g.P("// ", name, "Result is the typed terminal result of a run.")
 	g.P("type ", name, "Result struct {")
 	g.P(g.QualifiedGoIdent(enginePkg.Ident("Result")))
-	g.P("output *", g.QualifiedGoIdent(pl.output.GoIdent))
+	if pl.output != nil {
+		g.P("output *", g.QualifiedGoIdent(pl.output.GoIdent))
+	}
+	if pl.failureOutput != nil {
+		g.P("failureOutput *", g.QualifiedGoIdent(pl.failureOutput.GoIdent))
+	}
 	g.P("}")
 	g.P()
-	g.P("// Output returns the pipeline output. It is non-nil exactly when the run")
-	g.P("// succeeded.")
-	g.P("func (r ", name, "Result) Output() *", g.QualifiedGoIdent(pl.output.GoIdent), " { return r.output }")
-	g.P()
+	if pl.output != nil {
+		g.P("// Output returns the pipeline output. It is non-nil exactly when the run")
+		g.P("// succeeded.")
+		g.P("func (r ", name, "Result) Output() *", g.QualifiedGoIdent(pl.output.GoIdent), " { return r.output }")
+		g.P()
+	}
+	if pl.failureOutput != nil {
+		g.P("// FailureOutput returns the pipeline failure output, the failure")
+		g.P("// reducer's account of the failed run. It is non-nil exactly when the")
+		g.P("// run failed.")
+		g.P("func (r ", name, "Result) FailureOutput() *", g.QualifiedGoIdent(pl.failureOutput.GoIdent), " { return r.failureOutput }")
+		g.P()
+	}
 }
 
 func strconv(s string) string { return fmt.Sprintf("%q", s) }

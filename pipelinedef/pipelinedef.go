@@ -63,6 +63,11 @@ type Config struct {
 	// Reduce invokes the application Reducer; nil for an Output-less
 	// pipeline. It must be pure.
 	Reduce func(durable.ReduceView) proto.Message
+
+	// ReduceFailure invokes the application failure Reducer when a Run's
+	// unwind completes; nil for a pipeline without a failure Output. It
+	// must be pure.
+	ReduceFailure func(durable.ReduceView) proto.Message
 }
 
 // Definition is an unbound pipeline definition: identity, ordered Step

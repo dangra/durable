@@ -121,9 +121,10 @@ type Transition struct {
 	// run failure is a Run-level fact.
 	Failure *kernel.Failure
 
-	// Outcome commits terminality; Output accompanies a successful
-	// outcome for Output-producing pipelines. Committing an Outcome
-	// releases the Run's resource slot.
+	// Outcome commits terminality; Output accompanies it when the
+	// pipeline reduces one for that outcome (the Output on success, the
+	// failure Output on failure). Committing an Outcome releases the
+	// Run's resource slot.
 	Output  []byte
 	Outcome *kernel.Outcome
 }

@@ -217,3 +217,5 @@ Part of the [`durable` specification](README.md). This list is append-only; inva
 107. Free text recorded on a Run (failure messages and reasons, last-error fields, cancel causes) never exceeds the Engine's text limit; longer text is cut at a rune boundary and marked.
 
 108. A Step's forward execution and its unwind are two operations, each persisted as its own record written when it resolves, carrying its status, attempts, committed State (forward only), the permanent failure that resolved it if any, and its resolution order within the Run. The Run's permanent unwind failures are the failed unwind operations in that order; the `Failure` is the only Run-level failure fact.
+
+109. A Pipeline's failure Reducer, when declared, runs once in the transition that commits a failed Outcome, over the Input, committed States, the Run's `Failure`, and the per-step unwind failures; its Output is the failed Run's terminal output. It is pure, and a fault in it invalidates the Run exactly as a fault in the Reducer does.

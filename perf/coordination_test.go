@@ -73,7 +73,7 @@ func BenchmarkSupersedeCycle(b *testing.B) {
 				}
 				return nil, nil // fresh generation completes immediately
 			},
-			UnwindFunc: func(ctx context.Context, inv durable.Invocation, f durable.Failure) error {
+			UnwindFunc: func(ctx context.Context, inv durable.Invocation) error {
 				return nil
 			},
 		}},

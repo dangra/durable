@@ -176,7 +176,7 @@ is torn down. A step opts in with `unwind: true` and an `Unwind`
 handler:
 
 ```go
-func (h *runMigrations) Unwind(ctx context.Context, inv deploypb.RunMigrationsInvocation, f durable.Failure) error {
+func (h *runMigrations) Unwind(ctx context.Context, inv deploypb.RunMigrationsInvocation) error {
     m, ok := inv.State(deploypb.RunMigrationsStep) // what forward committed
     if !ok {
         return nil // forward never committed; nothing to undo
@@ -185,8 +185,8 @@ func (h *runMigrations) Unwind(ctx context.Context, inv deploypb.RunMigrationsIn
 }
 ```
 
-`f.Root` carries the failure that started the unwind (step, message,
-kind, reason). Unwind handlers have the same at-least-once/retry
+`inv.Failure().Root` carries the failure that started the unwind (step,
+message, kind, reason); `Failure()` is non-nil exactly during unwind. Unwind handlers have the same at-least-once/retry
 semantics as forward ones; a *permanent* unwind failure (a `Fail` from
 an unwind handler) is recorded on the result as an `UnwindFailure` and
 does **not** stop the remaining unwind — the environment still gets

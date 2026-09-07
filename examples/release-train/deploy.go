@@ -5,7 +5,6 @@ package main
 import (
 	"context"
 
-	"github.com/dangra/durable"
 	"github.com/dangra/durable/examples/release-train/releasepb"
 )
 
@@ -15,7 +14,7 @@ func (h *provisionEnv) Run(ctx context.Context, inv releasepb.ProvisionEnvInvoca
 	return &releasepb.ProvisionEnv{EnvId: h.w.provision(inv.Input().GetService())}, nil
 }
 
-func (h *provisionEnv) Unwind(ctx context.Context, inv releasepb.ProvisionEnvInvocation, f durable.Failure) error {
+func (h *provisionEnv) Unwind(ctx context.Context, inv releasepb.ProvisionEnvInvocation) error {
 	h.w.teardown(inv.Input().GetService())
 	return nil
 }
@@ -27,7 +26,7 @@ func (h *runMigrations) Run(ctx context.Context, inv releasepb.RunMigrationsInvo
 	return &releasepb.RunMigrations{SchemaVersion: inv.Input().GetImage()}, nil
 }
 
-func (h *runMigrations) Unwind(ctx context.Context, inv releasepb.RunMigrationsInvocation, f durable.Failure) error {
+func (h *runMigrations) Unwind(ctx context.Context, inv releasepb.RunMigrationsInvocation) error {
 	h.w.rollback(inv.Input().GetService())
 	return nil
 }

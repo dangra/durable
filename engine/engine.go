@@ -1221,14 +1221,15 @@ func (e *Engine) runUnwind(rec *driver.RunRecord, def *boundDef, stepID durable.
 
 	inv := e.invocation(rec, def, stepID, sr.UnwindAttempts, durable.PhaseUnwind)
 	inv.awaited = rec.Awaited.Clone()
-	opStart := e.clock.Now()
-	failure := durable.Failure{
+	// A fresh copy per attempt: the handler owns what it reads.
+	inv.failure = &durable.Failure{
 		UnwindFailures: append([]durable.UnwindFailure(nil), rec.UnwindFailures...),
 	}
 	if rec.RootFailure != nil {
-		failure.Root = *rec.RootFailure
+		inv.failure.Root = *rec.RootFailure
 	}
-	panicked, err := e.invokeUnwind(sc, inv, failure)
+	opStart := e.clock.Now()
+	panicked, err := e.invokeUnwind(sc, inv)
 	e.takePreempted(rec.RunID) // clear evidence; yields attribute only forward
 
 	if v := inv.takeViolation(); v != nil {
@@ -1373,7 +1374,7 @@ func (e *Engine) invokeForward(sc *pipelinedef.Step, inv *attemptInvocation) (st
 	return state, false, err
 }
 
-func (e *Engine) invokeUnwind(sc *pipelinedef.Step, inv *attemptInvocation, failure durable.Failure) (panicked bool, err error) {
+func (e *Engine) invokeUnwind(sc *pipelinedef.Step, inv *attemptInvocation) (panicked bool, err error) {
 	defer func() {
 		if p := recover(); p != nil {
 			panicked = true
@@ -1384,7 +1385,7 @@ func (e *Engine) invokeUnwind(sc *pipelinedef.Step, inv *attemptInvocation, fail
 		}
 	}()
 	h := e.wrap(func(ctx context.Context, in durable.Invocation) (proto.Message, error) {
-		return nil, sc.UnwindFunc(ctx, in, failure)
+		return nil, sc.UnwindFunc(ctx, in)
 	})
 	ctx, done := e.attemptContext(inv.runID)
 	defer done()

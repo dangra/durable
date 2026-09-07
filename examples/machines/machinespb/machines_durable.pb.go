@@ -181,21 +181,21 @@ func (inv ReserveCapacityInvocation) State[T proto.Message](step durable.StateSt
 type ReserveCapacityHandler interface {
 	Run(context.Context, ReserveCapacityInvocation) (*ReserveCapacity, error)
 
-	Unwind(context.Context, ReserveCapacityInvocation, durable.Failure) error
+	Unwind(context.Context, ReserveCapacityInvocation) error
 }
 
 // ReserveCapacityFuncs adapts a pair of functions to ReserveCapacityHandler.
 type ReserveCapacityFuncs struct {
 	RunFunc    func(ctx context.Context, inv ReserveCapacityInvocation) (*ReserveCapacity, error)
-	UnwindFunc func(context.Context, ReserveCapacityInvocation, durable.Failure) error
+	UnwindFunc func(ctx context.Context, inv ReserveCapacityInvocation) error
 }
 
 func (f ReserveCapacityFuncs) Run(ctx context.Context, inv ReserveCapacityInvocation) (*ReserveCapacity, error) {
 	return f.RunFunc(ctx, inv)
 }
 
-func (f ReserveCapacityFuncs) Unwind(ctx context.Context, inv ReserveCapacityInvocation, failure durable.Failure) error {
-	return f.UnwindFunc(ctx, inv, failure)
+func (f ReserveCapacityFuncs) Unwind(ctx context.Context, inv ReserveCapacityInvocation) error {
+	return f.UnwindFunc(ctx, inv)
 }
 
 // CreateMachineInvocation is passed to CreateMachineHandler methods.
@@ -335,8 +335,8 @@ func NewProvisionMachine(
 					}
 					return state, err
 				},
-				UnwindFunc: func(ctx context.Context, core durable.Invocation, failure durable.Failure) error {
-					return reserveCapacity.Unwind(ctx, ReserveCapacityInvocation{core: core}, failure)
+				UnwindFunc: func(ctx context.Context, core durable.Invocation) error {
+					return reserveCapacity.Unwind(ctx, ReserveCapacityInvocation{core: core})
 				},
 			},
 			{

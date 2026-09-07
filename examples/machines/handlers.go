@@ -73,7 +73,7 @@ func (h *reserveCapacity) Run(ctx context.Context, inv machinespb.ReserveCapacit
 	return &machinespb.ReserveCapacity{ReservationId: id}, nil
 }
 
-func (h *reserveCapacity) Unwind(ctx context.Context, inv machinespb.ReserveCapacityInvocation, failure durable.Failure) error {
+func (h *reserveCapacity) Unwind(ctx context.Context, inv machinespb.ReserveCapacityInvocation) error {
 	reservation, ok := inv.State(machinespb.ReserveCapacityStep)
 	if !ok {
 		return nil

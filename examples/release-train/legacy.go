@@ -5,7 +5,6 @@ package main
 import (
 	"context"
 
-	"github.com/dangra/durable"
 	"github.com/dangra/durable/examples/release-train/legacypb"
 )
 
@@ -15,7 +14,7 @@ func (h *legacyProvisionEnv) Run(ctx context.Context, inv legacypb.ProvisionEnvI
 	return &legacypb.ProvisionEnv{EnvId: h.w.provision(inv.Input().GetService())}, nil
 }
 
-func (h *legacyProvisionEnv) Unwind(ctx context.Context, inv legacypb.ProvisionEnvInvocation, f durable.Failure) error {
+func (h *legacyProvisionEnv) Unwind(ctx context.Context, inv legacypb.ProvisionEnvInvocation) error {
 	h.w.teardown(inv.Input().GetService())
 	return nil
 }
@@ -33,7 +32,7 @@ func (h *legacyRunMigrations) Run(ctx context.Context, inv legacypb.RunMigration
 	return nil, ctx.Err()
 }
 
-func (h *legacyRunMigrations) Unwind(ctx context.Context, inv legacypb.RunMigrationsInvocation, f durable.Failure) error {
+func (h *legacyRunMigrations) Unwind(ctx context.Context, inv legacypb.RunMigrationsInvocation) error {
 	h.w.rollback(inv.Input().GetService())
 	return nil
 }

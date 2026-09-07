@@ -139,10 +139,10 @@ func TestPermanentFailureUnwinds(t *testing.T) {
 				Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 					return nil, nil
 				},
-				UnwindFunc: func(ctx context.Context, inv durable.Invocation, f durable.Failure) error {
+				UnwindFunc: func(ctx context.Context, inv durable.Invocation) error {
 					mu.Lock()
 					unwoundSteps = append(unwoundSteps, inv.StepID())
-					failureSeenByA = f
+					failureSeenByA = *inv.Failure()
 					mu.Unlock()
 					return nil
 				},
@@ -154,7 +154,7 @@ func TestPermanentFailureUnwinds(t *testing.T) {
 				Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 					return str("res-42"), nil
 				},
-				UnwindFunc: func(ctx context.Context, inv durable.Invocation, f durable.Failure) error {
+				UnwindFunc: func(ctx context.Context, inv durable.Invocation) error {
 					state, ok := durable.LookupState(inv, reserveRef)
 					if !ok || state.GetValue() != "res-42" {
 						return durable.Fail(errors.New("own state unavailable during unwind"))

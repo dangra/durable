@@ -137,7 +137,7 @@ func TestAwaitWokenAttemptPermanentFailureUnwinds(t *testing.T) {
 					})(ctx, inv)
 				},
 				Unwind: true,
-				UnwindFunc: func(ctx context.Context, inv durable.Invocation, f durable.Failure) error {
+				UnwindFunc: func(ctx context.Context, inv durable.Invocation) error {
 					unwindLog.record(inv)
 					return nil
 				},
@@ -280,7 +280,7 @@ func TestAwaitUnwindParkThenTransientError(t *testing.T) {
 				ID:     "cleanup-owner/v1",
 				Run:    func(ctx context.Context, inv durable.Invocation) (proto.Message, error) { return nil, nil },
 				Unwind: true,
-				UnwindFunc: func(ctx context.Context, inv durable.Invocation, f durable.Failure) error {
+				UnwindFunc: func(ctx context.Context, inv durable.Invocation) error {
 					return scheduleThenAwait(&childPipe, &log, func(e awaitedEntry) error {
 						if wokenAttempts.Add(1) == 1 {
 							return errors.New("transient during unwind")

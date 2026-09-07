@@ -3,6 +3,7 @@ package durabletest
 import (
 	"log/slog"
 	"maps"
+	"slices"
 	"sync"
 
 	"google.golang.org/protobuf/proto"
@@ -36,6 +37,11 @@ type InvocationConfig struct {
 	// execution.
 	Awaited *durable.Wake
 
+	// Failure is what an unwind handler under test is unwinding; nil for
+	// a forward attempt. The engine guarantees it is set exactly when
+	// Phase is PhaseUnwind; the fake does not enforce that pairing.
+	Failure *durable.Failure
+
 	// Logger backs Invocation.Logger; nil discards.
 	Logger *slog.Logger
 }
@@ -58,9 +64,9 @@ var (
 )
 
 // NewInvocation builds a fake Invocation from cfg. The fake owns copies
-// of Input, State, Annotations, and Awaited, so mutating cfg's values
-// after construction does not change what the handler observes. It
-// panics if a State message cannot be marshaled, which indicates a
+// of Input, State, Annotations, Awaited, and Failure, so mutating cfg's
+// values after construction does not change what the handler observes.
+// It panics if a State message cannot be marshaled, which indicates a
 // broken test fixture.
 func NewInvocation(cfg InvocationConfig) *Invocation {
 	if cfg.Input != nil {
@@ -70,6 +76,11 @@ func NewInvocation(cfg InvocationConfig) *Invocation {
 		cfg.Annotations = maps.Clone(cfg.Annotations)
 	}
 	cfg.Awaited = cfg.Awaited.Clone()
+	if cfg.Failure != nil {
+		f := *cfg.Failure
+		f.UnwindFailures = slices.Clone(f.UnwindFailures)
+		cfg.Failure = &f
+	}
 	if cfg.Phase == 0 {
 		cfg.Phase = durable.PhaseForward
 	}
@@ -125,6 +136,17 @@ func (inv *Invocation) Awaited() (durable.Wake, bool) {
 		return durable.Wake{}, false
 	}
 	return *inv.cfg.Awaited.Clone(), true
+}
+
+// Failure returns a copy of the configured failure, nil when none was
+// configured.
+func (inv *Invocation) Failure() *durable.Failure {
+	if inv.cfg.Failure == nil {
+		return nil
+	}
+	f := *inv.cfg.Failure
+	f.UnwindFailures = slices.Clone(f.UnwindFailures)
+	return &f
 }
 
 // AwaitedRunID reports the configured park memory when it has exactly one

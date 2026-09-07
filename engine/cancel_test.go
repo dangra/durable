@@ -60,7 +60,7 @@ func TestCancelPreemptsAndUnwinds(t *testing.T) {
 		sawRequested atomic.Bool
 		cRan         atomic.Bool
 	)
-	unwind := func(ctx context.Context, inv durable.Invocation, f durable.Failure) error {
+	unwind := func(ctx context.Context, inv durable.Invocation) error {
 		mu.Lock()
 		unwound = append(unwound, inv.StepID())
 		mu.Unlock()

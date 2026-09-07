@@ -166,7 +166,7 @@ func machinePipeline(id durable.PipelineID, specs [numSteps]stepSpec) *pipelined
 			},
 		}
 		if spec.unwind {
-			sc.UnwindFunc = func(ctx context.Context, inv durable.Invocation, f durable.Failure) error {
+			sc.UnwindFunc = func(ctx context.Context, inv durable.Invocation) error {
 				return nil
 			}
 		}

@@ -29,6 +29,14 @@ func TestMiddlewareOrderingAndPhases(t *testing.T) {
 		return func(next durable.Handler) durable.Handler {
 			return func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 				record(fmt.Sprintf("%s:in:%v:%s:%d", name, inv.Phase(), inv.StepID(), inv.Attempt()))
+				// The failure being unwound is visible from the chain,
+				// non-nil exactly in the unwind phase.
+				switch f := inv.Failure(); {
+				case inv.Phase() == durable.PhaseUnwind && (f == nil || f.Root.StepID != "b/v1"):
+					t.Errorf("%s: unwind of %s sees Failure %+v; want root b/v1", name, inv.StepID(), f)
+				case inv.Phase() == durable.PhaseForward && f != nil:
+					t.Errorf("%s: forward %s sees Failure %+v; want nil", name, inv.StepID(), f)
+				}
 				state, err := next(ctx, inv)
 				record(name + ":out")
 				return state, err
@@ -47,7 +55,7 @@ func TestMiddlewareOrderingAndPhases(t *testing.T) {
 				Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 					return nil, nil
 				},
-				UnwindFunc: func(ctx context.Context, inv durable.Invocation, f durable.Failure) error {
+				UnwindFunc: func(ctx context.Context, inv durable.Invocation) error {
 					return nil
 				},
 			},

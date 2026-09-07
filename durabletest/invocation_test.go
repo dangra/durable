@@ -34,6 +34,9 @@ func TestFakeInvocationDefaults(t *testing.T) {
 	if _, ok := inv.AwaitedRunID(); ok {
 		t.Fatal("zero config must be a first execution")
 	}
+	if inv.Failure() != nil {
+		t.Fatal("a forward attempt has no failure to unwind")
+	}
 	inv.Logger().Info("discarded") // must not panic with a nil logger
 	if inv.Violation() != nil {
 		t.Fatal("no violation expected")
@@ -70,6 +73,10 @@ func TestFakeInvocationStateLookup(t *testing.T) {
 
 func TestFakeInvocationCopiesAndMemory(t *testing.T) {
 	wake := &durable.Wake{Targets: []durable.RunID{"child"}, Done: []durable.RunID{"child"}}
+	failure := &durable.Failure{
+		Root:           durable.RootFailure{FailureRecord: durable.FailureRecord{StepID: "ship/v1", Message: "boom"}},
+		UnwindFailures: []durable.UnwindFailure{{FailureRecord: durable.FailureRecord{StepID: "t/v1"}}},
+	}
 	inv := durabletest.NewInvocation(durabletest.InvocationConfig{
 		PipelineID:  "p",
 		ResourceID:  "r",
@@ -80,6 +87,7 @@ func TestFakeInvocationCopiesAndMemory(t *testing.T) {
 		Input:       wrapperspb.String("in"),
 		Annotations: map[string]string{"traceparent": "00-abc"},
 		Awaited:     wake,
+		Failure:     failure,
 	})
 	if inv.PipelineID() != "p" || inv.ResourceID() != "r" || inv.RunID() != "run" || inv.StepID() != "s/v1" || inv.Attempt() != 3 || inv.Phase() != durable.PhaseUnwind {
 		t.Fatal("identity accessors must echo the config")
@@ -97,6 +105,15 @@ func TestFakeInvocationCopiesAndMemory(t *testing.T) {
 	w, ok := inv.Awaited()
 	if !ok || len(w.Done) != 1 {
 		t.Fatalf("Awaited = %+v, %v", w, ok)
+	}
+	f := inv.Failure()
+	if f == nil || f.Root.StepID != "ship/v1" || len(f.UnwindFailures) != 1 {
+		t.Fatalf("Failure = %+v", f)
+	}
+	f.Root.StepID, f.UnwindFailures[0].StepID = "mutated", "mutated"
+	failure.UnwindFailures[0].Message = "mutated"
+	if g := inv.Failure(); g.Root.StepID != "ship/v1" || g.UnwindFailures[0].StepID != "t/v1" || g.UnwindFailures[0].Message != "" {
+		t.Fatalf("Failure must be a copy on both sides: %+v", g)
 	}
 	w.Done[0] = "mutated"
 	if wake.Done[0] != "child" {

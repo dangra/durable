@@ -260,7 +260,6 @@ type MarkProvisioningHandler interface {
     Unwind(
         context.Context,
         MarkProvisioningInvocation,
-        durable.Failure,
     ) error
 }
 ```
@@ -277,7 +276,6 @@ type ReserveCapacityHandler interface {
     Unwind(
         context.Context,
         ReserveCapacityInvocation,
-        durable.Failure,
     ) error
 }
 ```
@@ -288,7 +286,16 @@ An Unwind handler obtains its own State through:
 state, ok := inv.State(machines.ReserveCapacityStep)
 ```
 
-No separate State parameter is passed.
+and the failure it is unwinding through:
+
+```go
+failure := inv.Failure() // *durable.Failure; never nil during unwind
+```
+
+Neither is passed as a parameter: an unwind handler is a handler that
+observes `PhaseUnwind`, and everything the attempt knows is on the
+Invocation. `Failure` is nil during forward attempts, which is how
+middleware tells the two apart without a separate handler type.
 
 ---
 
@@ -311,7 +318,7 @@ implement, so it gets a struct of funcs:
 ```go
 type ReserveCapacityFuncs struct {
     RunFunc    func(context.Context, ReserveCapacityInvocation) (*ReserveCapacity, error)
-    UnwindFunc func(context.Context, ReserveCapacityInvocation, durable.Failure) error
+    UnwindFunc func(context.Context, ReserveCapacityInvocation) error
 }
 ```
 
@@ -887,7 +894,6 @@ func (h *createMachine) Run(
 func (h *reserveCapacity) Unwind(
     ctx context.Context,
     inv machines.ReserveCapacityInvocation,
-    failure durable.Failure,
 ) error {
     reservation, ok := inv.State(
         machines.ReserveCapacityStep,
@@ -895,6 +901,9 @@ func (h *reserveCapacity) Unwind(
     if !ok {
         return nil
     }
+
+    inv.Logger().Info("releasing reservation",
+        "root_step", inv.Failure().Root.StepID)
 
     if err := h.release(
         ctx,

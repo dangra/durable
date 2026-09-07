@@ -35,9 +35,10 @@ type Step struct {
 	// (nil, err).
 	Run func(context.Context, durable.Invocation) (proto.Message, error)
 
-	// UnwindFunc invokes the application unwind handler. It is set exactly
-	// when Unwind is true.
-	UnwindFunc func(context.Context, durable.Invocation, durable.Failure) error
+	// UnwindFunc invokes the application unwind handler; the failure being
+	// unwound is read through Invocation.Failure. It is set exactly when
+	// Unwind is true.
+	UnwindFunc func(context.Context, durable.Invocation) error
 }
 
 // Config is the type-erased pipeline description.

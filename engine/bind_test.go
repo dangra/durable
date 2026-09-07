@@ -17,7 +17,7 @@ import (
 // an error at Bind, never a panic at construction.
 func TestBindValidatesTheDefinition(t *testing.T) {
 	run := func(context.Context, durable.Invocation) (proto.Message, error) { return nil, nil }
-	unwind := func(context.Context, durable.Invocation, durable.Failure) error { return nil }
+	unwind := func(context.Context, durable.Invocation) error { return nil }
 	ok := pipelinedef.Step{ID: "s/v1", Run: run}
 
 	cases := []struct {

@@ -89,7 +89,7 @@ func TestUnwindFailureAttribution(t *testing.T) {
 				Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 					return nil, nil
 				},
-				UnwindFunc: func(ctx context.Context, inv durable.Invocation, f durable.Failure) error {
+				UnwindFunc: func(ctx context.Context, inv durable.Invocation) error {
 					return durable.Fail(errors.New("release rejected"), durable.WithReason("release-rejected"))
 				},
 			},

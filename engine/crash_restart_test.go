@@ -82,7 +82,7 @@ func crashPipeline(seed uint64) *pipelinedef.Definition {
 			},
 		}
 		if sc.Unwind {
-			sc.UnwindFunc = func(ctx context.Context, inv durable.Invocation, f durable.Failure) error {
+			sc.UnwindFunc = func(ctx context.Context, inv durable.Invocation) error {
 				select {
 				case <-time.After(200 * time.Microsecond):
 				case <-ctx.Done():

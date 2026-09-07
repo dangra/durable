@@ -70,21 +70,21 @@ func (inv ReserveStockInvocation) State[T proto.Message](step durable.StateStepR
 type ReserveStockHandler interface {
 	Run(context.Context, ReserveStockInvocation) (*ReserveStock, error)
 
-	Unwind(context.Context, ReserveStockInvocation, durable.Failure) error
+	Unwind(context.Context, ReserveStockInvocation) error
 }
 
 // ReserveStockFuncs adapts a pair of functions to ReserveStockHandler.
 type ReserveStockFuncs struct {
 	RunFunc    func(ctx context.Context, inv ReserveStockInvocation) (*ReserveStock, error)
-	UnwindFunc func(context.Context, ReserveStockInvocation, durable.Failure) error
+	UnwindFunc func(ctx context.Context, inv ReserveStockInvocation) error
 }
 
 func (f ReserveStockFuncs) Run(ctx context.Context, inv ReserveStockInvocation) (*ReserveStock, error) {
 	return f.RunFunc(ctx, inv)
 }
 
-func (f ReserveStockFuncs) Unwind(ctx context.Context, inv ReserveStockInvocation, failure durable.Failure) error {
-	return f.UnwindFunc(ctx, inv, failure)
+func (f ReserveStockFuncs) Unwind(ctx context.Context, inv ReserveStockInvocation) error {
+	return f.UnwindFunc(ctx, inv)
 }
 
 // ChargePaymentInvocation is passed to ChargePaymentHandler methods.
@@ -134,21 +134,21 @@ func (inv ChargePaymentInvocation) State[T proto.Message](step durable.StateStep
 type ChargePaymentHandler interface {
 	Run(context.Context, ChargePaymentInvocation) (*ChargePayment, error)
 
-	Unwind(context.Context, ChargePaymentInvocation, durable.Failure) error
+	Unwind(context.Context, ChargePaymentInvocation) error
 }
 
 // ChargePaymentFuncs adapts a pair of functions to ChargePaymentHandler.
 type ChargePaymentFuncs struct {
 	RunFunc    func(ctx context.Context, inv ChargePaymentInvocation) (*ChargePayment, error)
-	UnwindFunc func(context.Context, ChargePaymentInvocation, durable.Failure) error
+	UnwindFunc func(ctx context.Context, inv ChargePaymentInvocation) error
 }
 
 func (f ChargePaymentFuncs) Run(ctx context.Context, inv ChargePaymentInvocation) (*ChargePayment, error) {
 	return f.RunFunc(ctx, inv)
 }
 
-func (f ChargePaymentFuncs) Unwind(ctx context.Context, inv ChargePaymentInvocation, failure durable.Failure) error {
-	return f.UnwindFunc(ctx, inv, failure)
+func (f ChargePaymentFuncs) Unwind(ctx context.Context, inv ChargePaymentInvocation) error {
+	return f.UnwindFunc(ctx, inv)
 }
 
 // ShipInvocation is passed to ShipHandler methods.
@@ -264,8 +264,8 @@ func NewFulfillOrder(
 					}
 					return state, err
 				},
-				UnwindFunc: func(ctx context.Context, core durable.Invocation, failure durable.Failure) error {
-					return reserveStock.Unwind(ctx, ReserveStockInvocation{core: core}, failure)
+				UnwindFunc: func(ctx context.Context, core durable.Invocation) error {
+					return reserveStock.Unwind(ctx, ReserveStockInvocation{core: core})
 				},
 			},
 			{
@@ -279,8 +279,8 @@ func NewFulfillOrder(
 					}
 					return state, err
 				},
-				UnwindFunc: func(ctx context.Context, core durable.Invocation, failure durable.Failure) error {
-					return chargePayment.Unwind(ctx, ChargePaymentInvocation{core: core}, failure)
+				UnwindFunc: func(ctx context.Context, core durable.Invocation) error {
+					return chargePayment.Unwind(ctx, ChargePaymentInvocation{core: core})
 				},
 			},
 			{

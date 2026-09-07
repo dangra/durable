@@ -70,21 +70,21 @@ func (inv ProvisionEnvInvocation) State[T proto.Message](step durable.StateStepR
 type ProvisionEnvHandler interface {
 	Run(context.Context, ProvisionEnvInvocation) (*ProvisionEnv, error)
 
-	Unwind(context.Context, ProvisionEnvInvocation, durable.Failure) error
+	Unwind(context.Context, ProvisionEnvInvocation) error
 }
 
 // ProvisionEnvFuncs adapts a pair of functions to ProvisionEnvHandler.
 type ProvisionEnvFuncs struct {
 	RunFunc    func(ctx context.Context, inv ProvisionEnvInvocation) (*ProvisionEnv, error)
-	UnwindFunc func(context.Context, ProvisionEnvInvocation, durable.Failure) error
+	UnwindFunc func(ctx context.Context, inv ProvisionEnvInvocation) error
 }
 
 func (f ProvisionEnvFuncs) Run(ctx context.Context, inv ProvisionEnvInvocation) (*ProvisionEnv, error) {
 	return f.RunFunc(ctx, inv)
 }
 
-func (f ProvisionEnvFuncs) Unwind(ctx context.Context, inv ProvisionEnvInvocation, failure durable.Failure) error {
-	return f.UnwindFunc(ctx, inv, failure)
+func (f ProvisionEnvFuncs) Unwind(ctx context.Context, inv ProvisionEnvInvocation) error {
+	return f.UnwindFunc(ctx, inv)
 }
 
 // RunMigrationsInvocation is passed to RunMigrationsHandler methods.
@@ -134,21 +134,21 @@ func (inv RunMigrationsInvocation) State[T proto.Message](step durable.StateStep
 type RunMigrationsHandler interface {
 	Run(context.Context, RunMigrationsInvocation) (*RunMigrations, error)
 
-	Unwind(context.Context, RunMigrationsInvocation, durable.Failure) error
+	Unwind(context.Context, RunMigrationsInvocation) error
 }
 
 // RunMigrationsFuncs adapts a pair of functions to RunMigrationsHandler.
 type RunMigrationsFuncs struct {
 	RunFunc    func(ctx context.Context, inv RunMigrationsInvocation) (*RunMigrations, error)
-	UnwindFunc func(context.Context, RunMigrationsInvocation, durable.Failure) error
+	UnwindFunc func(ctx context.Context, inv RunMigrationsInvocation) error
 }
 
 func (f RunMigrationsFuncs) Run(ctx context.Context, inv RunMigrationsInvocation) (*RunMigrations, error) {
 	return f.RunFunc(ctx, inv)
 }
 
-func (f RunMigrationsFuncs) Unwind(ctx context.Context, inv RunMigrationsInvocation, failure durable.Failure) error {
-	return f.UnwindFunc(ctx, inv, failure)
+func (f RunMigrationsFuncs) Unwind(ctx context.Context, inv RunMigrationsInvocation) error {
+	return f.UnwindFunc(ctx, inv)
 }
 
 // ShiftTrafficInvocation is passed to ShiftTrafficHandler methods.
@@ -268,8 +268,8 @@ func NewDeployService(
 					}
 					return state, err
 				},
-				UnwindFunc: func(ctx context.Context, core durable.Invocation, failure durable.Failure) error {
-					return provisionEnv.Unwind(ctx, ProvisionEnvInvocation{core: core}, failure)
+				UnwindFunc: func(ctx context.Context, core durable.Invocation) error {
+					return provisionEnv.Unwind(ctx, ProvisionEnvInvocation{core: core})
 				},
 			},
 			{
@@ -283,8 +283,8 @@ func NewDeployService(
 					}
 					return state, err
 				},
-				UnwindFunc: func(ctx context.Context, core durable.Invocation, failure durable.Failure) error {
-					return runMigrations.Unwind(ctx, RunMigrationsInvocation{core: core}, failure)
+				UnwindFunc: func(ctx context.Context, core durable.Invocation) error {
+					return runMigrations.Unwind(ctx, RunMigrationsInvocation{core: core})
 				},
 			},
 			{

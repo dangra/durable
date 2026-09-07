@@ -45,7 +45,7 @@ func sagaDef() *pipelinedef.Definition {
 					}
 					return nil, nil
 				},
-				UnwindFunc: func(ctx context.Context, inv durable.Invocation, f durable.Failure) error {
+				UnwindFunc: func(ctx context.Context, inv durable.Invocation) error {
 					return nil
 				},
 			},

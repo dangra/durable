@@ -680,10 +680,10 @@ B.Unwind    -> permanent failure
 A.Unwind    -> current
 ```
 
-A receives:
+A reads through `inv.Failure()`:
 
 ```go
-Failure{
+&Failure{
     Root: root,
     UnwindFailures: []UnwindFailure{
         cFailure,

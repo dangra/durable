@@ -65,7 +65,7 @@ func (h *reserveStock) Run(ctx context.Context, inv orderspb.ReserveStockInvocat
 	return &orderspb.ReserveStock{ReservationId: h.w.id("stock")}, nil
 }
 
-func (h *reserveStock) Unwind(ctx context.Context, inv orderspb.ReserveStockInvocation, f durable.Failure) error {
+func (h *reserveStock) Unwind(ctx context.Context, inv orderspb.ReserveStockInvocation) error {
 	if res, ok := inv.State(orderspb.ReserveStockStep); ok {
 		h.w.mu.Lock()
 		h.w.released = append(h.w.released, res.GetReservationId())
@@ -92,7 +92,7 @@ func (h *chargePayment) Run(ctx context.Context, inv orderspb.ChargePaymentInvoc
 	return &orderspb.ChargePayment{ChargeId: h.w.id("charge")}, nil
 }
 
-func (h *chargePayment) Unwind(ctx context.Context, inv orderspb.ChargePaymentInvocation, f durable.Failure) error {
+func (h *chargePayment) Unwind(ctx context.Context, inv orderspb.ChargePaymentInvocation) error {
 	if c, ok := inv.State(orderspb.ChargePaymentStep); ok {
 		h.w.mu.Lock()
 		h.w.refunded = append(h.w.refunded, c.GetChargeId())

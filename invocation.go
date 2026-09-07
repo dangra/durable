@@ -68,6 +68,14 @@ type Invocation interface {
 	// here and is read through Awaited.
 	AwaitedRunID() (RunID, bool)
 
+	// Failure is the failure this Run is unwinding: the RootFailure that
+	// ended the forward phase and the permanent unwind failures recorded
+	// so far, in unwind execution order. Every path into unwind
+	// establishes a RootFailure first (a cancellation included), so it is
+	// non-nil exactly when Phase is PhaseUnwind and nil in forward. The
+	// value is built per attempt and owned by the caller.
+	Failure() *Failure
+
 	// Logger returns a logger scoped to this invocation: the Engine's
 	// WithLogger logger with the canonical keys (pipeline, resource, run,
 	// step, phase, attempt) pre-attached, so handler and middleware lines

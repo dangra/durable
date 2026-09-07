@@ -207,7 +207,7 @@ func TestSupersedeReconcile(t *testing.T) {
 					}
 					return nil, nil
 				},
-				UnwindFunc: func(ctx context.Context, inv durable.Invocation, f durable.Failure) error {
+				UnwindFunc: func(ctx context.Context, inv durable.Invocation) error {
 					in := inv.InputMessage().(*wrapperspb.StringValue)
 					mu.Lock()
 					unwound = append(unwound, in.GetValue())

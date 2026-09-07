@@ -29,8 +29,8 @@ func ExampleFail() {
 				Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 					return nil, nil
 				},
-				UnwindFunc: func(ctx context.Context, inv durable.Invocation, f durable.Failure) error {
-					fmt.Printf("removing tenant record (unwinding: %s)\n", f.Root.Reason)
+				UnwindFunc: func(ctx context.Context, inv durable.Invocation) error {
+					fmt.Printf("removing tenant record (unwinding: %s)\n", inv.Failure().Root.Reason)
 					return nil
 				},
 			},
@@ -90,7 +90,7 @@ func ExampleRun_Cancel() {
 					fmt.Println("provisioned staging env")
 					return nil, nil
 				},
-				UnwindFunc: func(ctx context.Context, inv durable.Invocation, f durable.Failure) error {
+				UnwindFunc: func(ctx context.Context, inv durable.Invocation) error {
 					fmt.Println("tearing down staging env")
 					return nil
 				},

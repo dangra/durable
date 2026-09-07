@@ -353,7 +353,7 @@ func emitHandler(g *protogen.GeneratedFile, s *stepDecl) {
 	}
 	if s.opts.GetUnwind() {
 		g.P()
-		g.P("Unwind(", ctx, ", ", inv, ", ", g.QualifiedGoIdent(durablePkg.Ident("Failure")), ") error")
+		g.P("Unwind(", ctx, ", ", inv, ") error")
 	}
 	g.P("}")
 	g.P()
@@ -385,18 +385,16 @@ func emitHandlerFuncs(g *protogen.GeneratedFile, s *stepDecl) {
 		return
 	}
 
-	failure := g.QualifiedGoIdent(durablePkg.Ident("Failure"))
+	unwindSig := "(ctx " + ctx + ", inv " + inv + ") error"
 	g.P("// ", goName, "Funcs adapts a pair of functions to ", goName, "Handler.")
 	g.P("type ", goName, "Funcs struct {")
 	g.P("RunFunc func", runSig)
-	g.P("UnwindFunc func(", ctx, ", ", inv, ", ", failure, ") error")
+	g.P("UnwindFunc func", unwindSig)
 	g.P("}")
 	g.P()
 	g.P("func (f ", goName, "Funcs) Run", runSig, " { return f.RunFunc(ctx, inv) }")
 	g.P()
-	g.P("func (f ", goName, "Funcs) Unwind(ctx ", ctx, ", inv ", inv, ", failure ", failure, ") error {")
-	g.P("return f.UnwindFunc(ctx, inv, failure)")
-	g.P("}")
+	g.P("func (f ", goName, "Funcs) Unwind", unwindSig, " { return f.UnwindFunc(ctx, inv) }")
 	g.P()
 }
 
@@ -517,8 +515,8 @@ func emitDefinition(g *protogen.GeneratedFile, pl *pipelineDecl) {
 			g.P("},")
 		}
 		if s.opts.GetUnwind() {
-			g.P("UnwindFunc: func(ctx ", ctx, ", core ", core, ", failure ", g.QualifiedGoIdent(durablePkg.Ident("Failure")), ") error {")
-			g.P("return ", param, ".Unwind(ctx, ", goName, "Invocation{core: core}, failure)")
+			g.P("UnwindFunc: func(ctx ", ctx, ", core ", core, ") error {")
+			g.P("return ", param, ".Unwind(ctx, ", goName, "Invocation{core: core})")
 			g.P("},")
 		}
 		g.P("},")

@@ -19,6 +19,7 @@ import (
 	"github.com/dangra/durable/store/driver"
 	"github.com/dangra/durable/store/mem"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
 // classifiedError carries its own attribution, the way domain error types
@@ -299,5 +300,84 @@ func TestRecordedTextIsBounded(t *testing.T) {
 				t.Fatalf("messages lost their head: %q / %q", res.Failure.Message[:8], ufs[0].Message[:8])
 			}
 		})
+	}
+}
+
+// TestFailureReducer pins the failure reducer: it runs once when the
+// unwind completes, sees the run's Failure and each failed compensation by
+// step, and its output is the failed run's terminal output; a nil result
+// marks the run invalid rather than terminal, as for the success reducer.
+func TestFailureReducer(t *testing.T) {
+	var seen struct {
+		failure  *durable.Failure
+		aFailed  bool
+		bFailed  bool
+		hasState bool
+	}
+	build := func(returnNil bool) *pipelinedef.Definition {
+		bRef := refFor("b/v1")
+		return pipelinedef.New(pipelinedef.Config{
+			ID: "freduce",
+			Steps: []pipelinedef.Step{
+				{ID: "a/v1", Unwind: true,
+					Run:        func(ctx context.Context, inv durable.Invocation) (proto.Message, error) { return nil, nil },
+					UnwindFunc: func(ctx context.Context, inv durable.Invocation) error { return nil }},
+				{ID: "b/v1", Unwind: true, HasState: true,
+					Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) { return str("held"), nil },
+					UnwindFunc: func(ctx context.Context, inv durable.Invocation) error {
+						return durable.Fail(errors.New("release rejected"), durable.WithReason("stuck"))
+					}},
+				stateless("c/v1", func(ctx context.Context, inv durable.Invocation) error {
+					return durable.Fail(errors.New("boom"), durable.WithUserKind(), durable.WithReason("quota"))
+				}),
+			},
+			ReduceFailure: func(v durable.ReduceView) proto.Message {
+				seen.failure = v.Failure()
+				_, seen.aFailed = v.UnwindFailure("a/v1")
+				_, seen.bFailed = v.UnwindFailure("b/v1")
+				_, seen.hasState = durable.LookupState(v, bRef)
+				if returnNil {
+					return nil
+				}
+				return str("leaked:" + string(v.Failure().StepID))
+			},
+		})
+	}
+
+	st := mem.New()
+	_, pipes := startEngine(t, st, build(false))
+	run, _, err := pipes[0].Schedule(context.Background(), "r", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := run.Wait(context.Background())
+	if err != nil || !res.Failed() {
+		t.Fatalf("Wait = %+v, %v", res, err)
+	}
+	if seen.failure == nil || seen.failure.StepID != "c/v1" || seen.failure.Reason != "quota" {
+		t.Fatalf("reducer saw Failure %+v; want c/v1 quota", seen.failure)
+	}
+	if seen.aFailed || !seen.bFailed || !seen.hasState {
+		t.Fatalf("reducer saw aFailed=%v bFailed=%v state=%v; want only b failed, with its state", seen.aFailed, seen.bFailed, seen.hasState)
+	}
+	b, err := run.OutputBytes(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := &wrapperspb.StringValue{}
+	if err := proto.Unmarshal(b, out); err != nil || out.GetValue() != "leaked:c/v1" {
+		t.Fatalf("failed run output = %q, %v; want the failure reducer's", out.GetValue(), err)
+	}
+
+	// A nil result from the failure reducer invalidates the run instead
+	// of committing terminal failure.
+	_, pipes = startEngine(t, mem.New(), build(true))
+	run, _, err = pipes[0].Schedule(context.Background(), "r", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var invalid *engine.InvalidRunError
+	if _, err := run.Wait(context.Background()); !errors.As(err, &invalid) || !strings.Contains(invalid.Reason, "failure reducer") {
+		t.Fatalf("Wait = %v; want InvalidRunError naming the failure reducer", err)
 	}
 }

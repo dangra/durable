@@ -42,6 +42,12 @@ type InvocationConfig struct {
 	// that pairing.
 	Failure *durable.Failure
 
+	// UnwindFailures holds, by StepID, the permanent failures of unwind
+	// operations, as a failure reducer under test reads them through
+	// ReduceView.UnwindFailure. Key it with the generated step reference's
+	// ID().
+	UnwindFailures map[durable.StepID]durable.Failure
+
 	// Logger backs Invocation.Logger; nil discards.
 	Logger *slog.Logger
 }
@@ -80,6 +86,7 @@ func NewInvocation(cfg InvocationConfig) *Invocation {
 		f := *cfg.Failure
 		cfg.Failure = &f
 	}
+	cfg.UnwindFailures = maps.Clone(cfg.UnwindFailures)
 	if cfg.Phase == 0 {
 		cfg.Phase = durable.PhaseForward
 	}
@@ -145,6 +152,13 @@ func (inv *Invocation) Failure() *durable.Failure {
 	}
 	f := *inv.cfg.Failure
 	return &f
+}
+
+// UnwindFailure implements durable.ReduceView over the configured unwind
+// failures.
+func (inv *Invocation) UnwindFailure(step durable.StepID) (durable.Failure, bool) {
+	f, ok := inv.cfg.UnwindFailures[step]
+	return f, ok
 }
 
 // AwaitedRunID reports the configured park memory when it has exactly one

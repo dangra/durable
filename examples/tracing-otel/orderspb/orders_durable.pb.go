@@ -250,15 +250,16 @@ type ShipFunc func(ctx context.Context, inv ShipInvocation) (*Ship, error)
 
 func (f ShipFunc) Run(ctx context.Context, inv ShipInvocation) (*Ship, error) { return f(ctx, inv) }
 
-// FulfillOrderReducer produces the pipeline output from the immutable input
-// and committed step states. It must be pure: deterministic, side-effect
-// free, synchronous, and non-failing.
+// FulfillOrderReducer produces the pipeline output from the immutable input and committed step states on success.
+// It must be pure: deterministic, side-effect free, synchronous, and
+// non-failing.
 type FulfillOrderReducer func(*FulfillOrder) *FulfillOrderOutput
 
 // Reduce folds view through r: the marker the reducer receives reads
-// its Input and States from view for the duration of the call. The
-// engine reduces through it; a unit test hands it durabletest.NewInvocation
-// (which is also a durable.ReduceView) to exercise the reducer alone.
+// its Input, States, and failures from view for the duration of the
+// call. The engine reduces through it; a unit test hands it
+// durabletest.NewInvocation (which is also a durable.ReduceView) to
+// exercise the reducer alone.
 func (r FulfillOrderReducer) Reduce(view durable.ReduceView) *FulfillOrderOutput {
 	x := &FulfillOrder{}
 	fulfillOrderViews.Store(x, view)
@@ -286,6 +287,18 @@ func (x *FulfillOrder) Input() *FulfillOrderInput {
 // being reduced. ok is false when no committed state exists.
 func (x *FulfillOrder) State[T proto.Message](step durable.StateStepRef[T]) (T, bool) {
 	return durable.LookupState(x.durableView(), step)
+}
+
+// Failure is the run's failure when a failed run is being reduced, nil
+// when a successful one is.
+func (x *FulfillOrder) Failure() *durable.Failure { return x.durableView().Failure() }
+
+// UnwindFailure reports the permanent failure of the referenced step's
+// unwind, if its compensation failed; ok is false when the step was not
+// unwound or its unwind succeeded. Pair it with State to describe what a
+// failed run left behind.
+func (x *FulfillOrder) UnwindFailure(step durable.StepIdentifier) (durable.Failure, bool) {
+	return x.durableView().UnwindFailure(step.ID())
 }
 
 // FulfillOrderDefinition is the unbound pipeline definition.
@@ -429,7 +442,8 @@ func (r FulfillOrderRun) Input(ctx context.Context) (*FulfillOrderInput, error) 
 }
 
 // Wait blocks until the run is terminal. A successful result carries the
-// pipeline output; a failed run has none.
+// pipeline output and a failed one the failure output, each when the
+// pipeline declares it.
 func (r FulfillOrderRun) Wait(ctx context.Context) (FulfillOrderResult, error) {
 	res, err := r.run.Wait(ctx)
 	if err != nil {

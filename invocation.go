@@ -91,4 +91,14 @@ type ReduceView interface {
 	// InputMessage returns a defensive caller-owned copy of the Pipeline
 	// Input, or nil for an Input-less Pipeline.
 	InputMessage() proto.Message
+
+	// Failure is the Run's failure when a failed Run is being reduced,
+	// nil when a successful one is. Caller-owned copy.
+	Failure() *Failure
+
+	// UnwindFailure reports the permanent failure of the step's unwind
+	// operation, if its compensation failed; ok is false when the step
+	// was not unwound or its unwind succeeded. Reducers pair it with the
+	// step's State to describe what a failed Run left behind.
+	UnwindFailure(step StepID) (f Failure, ok bool)
 }

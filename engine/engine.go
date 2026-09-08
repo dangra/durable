@@ -717,13 +717,9 @@ func (e *Engine) processRun(id durable.RunID) (time.Duration, bool) {
 			}
 
 		case ledger.KindUnwindComplete:
-			oc := durable.OutcomeFailure
-			rec.Outcome = &oc
-			rec.Phase = durable.PhaseDone
-			if !e.apply(rec, driver.Transition{Cursor: idleCursor(rec), Outcome: rec.Outcome}) {
-				return time.Second, true
+			if !e.reduceFailureAndComplete(rec, def) {
+				return 0, false
 			}
-			e.completeRun(rec)
 			return 0, false
 		}
 	}
@@ -1320,30 +1316,10 @@ func (e *Engine) runUnwind(rec *driver.RunRecord, def *boundDef, stepID durable.
 // It returns false when the Run became invalid or the store failed.
 func (e *Engine) reduceAndComplete(rec *driver.RunRecord, def *boundDef) bool {
 	if def.cfg.Reduce != nil {
-		view := &reduceView{
-			input:    rec.Input,
-			newInput: def.cfg.NewInput,
-			states:   committedStates(rec),
-		}
-		out, rerr := e.invokeReduce(def, view)
-		if rerr != nil {
-			e.markInvalid(rec, "", rerr.Error())
+		view := &reduceView{input: rec.Input, newInput: def.cfg.NewInput, states: committedStates(rec)}
+		if !e.reduceInto(rec, def, "reducer", def.cfg.Reduce, view) {
 			return false
 		}
-		if v := view.takeViolation(); v != nil {
-			e.markInvalid(rec, "", v.Error())
-			return false
-		}
-		if out == nil || !out.ProtoReflect().IsValid() {
-			e.markInvalid(rec, "", "reducer returned nil output")
-			return false
-		}
-		b, merr := proto.Marshal(out)
-		if merr != nil {
-			e.markInvalid(rec, "", fmt.Sprintf("cannot serialize pipeline output: %v", merr))
-			return false
-		}
-		rec.Output = b
 	}
 	oc := durable.OutcomeSuccess
 	rec.Outcome = &oc
@@ -1353,6 +1329,74 @@ func (e *Engine) reduceAndComplete(rec *driver.RunRecord, def *boundDef) bool {
 	}
 	e.completeRun(rec)
 	return true
+}
+
+// reduceFailureAndComplete runs the failure Reducer (if any) over the
+// failed Run — its input, committed states, Failure, and the permanent
+// unwind failures — and commits terminal failure with its output. The
+// same rules as success apply: a panic, a nil result, or a decode
+// violation marks the Run invalid rather than terminal, because a
+// reducer bug is a definition bug and a corrected deployment reduces
+// again. It returns false when the Run became invalid or the store
+// failed.
+func (e *Engine) reduceFailureAndComplete(rec *driver.RunRecord, def *boundDef) bool {
+	if def.cfg.ReduceFailure != nil {
+		view := &reduceView{
+			input:          rec.Input,
+			newInput:       def.cfg.NewInput,
+			states:         committedStates(rec),
+			failure:        rec.Failure,
+			unwindFailures: unwindFailuresByStep(rec),
+		}
+		if !e.reduceInto(rec, def, "failure reducer", def.cfg.ReduceFailure, view) {
+			return false
+		}
+	}
+	oc := durable.OutcomeFailure
+	rec.Outcome = &oc
+	rec.Phase = durable.PhaseDone
+	if !e.apply(rec, driver.Transition{Cursor: idleCursor(rec), Output: rec.Output, Outcome: rec.Outcome}) {
+		return false
+	}
+	e.completeRun(rec)
+	return true
+}
+
+// reduceInto folds view through reduce and stores the serialized result
+// in rec.Output, marking the Run invalid on any reducer fault.
+func (e *Engine) reduceInto(rec *driver.RunRecord, def *boundDef, what string, reduce func(durable.ReduceView) proto.Message, view *reduceView) bool {
+	out, rerr := e.invokeReduce(def, what, reduce, view)
+	if rerr != nil {
+		e.markInvalid(rec, "", rerr.Error())
+		return false
+	}
+	if v := view.takeViolation(); v != nil {
+		e.markInvalid(rec, "", v.Error())
+		return false
+	}
+	if out == nil || !out.ProtoReflect().IsValid() {
+		e.markInvalid(rec, "", what+" returned nil output")
+		return false
+	}
+	b, merr := proto.Marshal(out)
+	if merr != nil {
+		e.markInvalid(rec, "", fmt.Sprintf("cannot serialize %s output: %v", what, merr))
+		return false
+	}
+	rec.Output = b
+	return true
+}
+
+// unwindFailuresByStep indexes the permanent unwind failures of rec by
+// step, the shape ReduceView.UnwindFailure answers from.
+func unwindFailuresByStep(rec *driver.RunRecord) map[durable.StepID]durable.Failure {
+	out := map[durable.StepID]durable.Failure{}
+	for id, sr := range rec.Steps {
+		if sr.Unwind.Status == driver.OpFailed && sr.Unwind.Failure != nil {
+			out[id] = *sr.Unwind.Failure
+		}
+	}
+	return out
 }
 
 func (e *Engine) invocation(rec *driver.RunRecord, def *boundDef, stepID durable.StepID, attempt uint64, phase durable.Phase) *attemptInvocation {
@@ -1423,15 +1467,15 @@ func (e *Engine) invokeUnwind(sc *pipelinedef.Step, inv *attemptInvocation) (pan
 	return false, err
 }
 
-func (e *Engine) invokeReduce(def *boundDef, view *reduceView) (out proto.Message, err error) {
+func (e *Engine) invokeReduce(def *boundDef, what string, reduce func(durable.ReduceView) proto.Message, view *reduceView) (out proto.Message, err error) {
 	defer func() {
 		if p := recover(); p != nil {
-			err = fmt.Errorf("reducer panic: %v", p)
-			e.logger.Error("durable: reducer panic",
+			err = fmt.Errorf("%s panic: %v", what, p)
+			e.logger.Error("durable: "+what+" panic",
 				"pipeline", def.ID(), "panic", p, "stack", string(debug.Stack()))
 		}
 	}()
-	return def.cfg.Reduce(view), nil
+	return reduce(view), nil
 }
 
 // activeCursor builds the driver.Cursor for a Run whose operation on stepID is

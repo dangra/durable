@@ -17,6 +17,18 @@ message CreateSnapshotOutput {
   string object_key = 2;
 }
 
+// CreateSnapshotFailure is the failure reducer's account of a failed run:
+// where it failed, and what the unwind could not clean up.
+message CreateSnapshotFailure {
+  string failed_step = 1;
+  string reason = 2;
+  // The uploaded object left in storage because its deletion failed
+  // permanently; empty when the unwind cleaned up.
+  string leaked_object_key = 3;
+  // Set when the volume is still frozen because the thaw failed.
+  bool volume_left_frozen = 4;
+}
+
 // FreezeVolume quiesces the volume so the upload reads a consistent
 // image. Its unwind thaws; the ThawVolume step thaws on the happy path.
 message FreezeVolume {
@@ -55,6 +67,7 @@ message CreateSnapshot {
     id: "create-snapshot"
     input: ".snapshots.v1.CreateSnapshotInput"
     output: ".snapshots.v1.CreateSnapshotOutput"
+    failure_output: ".snapshots.v1.CreateSnapshotFailure"
 
     steps: ".snapshots.v1.FreezeVolume"
     steps: ".snapshots.v1.UploadSnapshot"

@@ -688,9 +688,9 @@ A.Unwind    -> current
 
 A reads `inv.Failure()` and gets D's failure, the Run's. C's and B's
 failures are on their operation records in the Store, in resolution
-order; the handler contract does not expose them, and the failure
-reducer (future work) is where they become part of a typed account of
-the failed Run.
+order; the handler contract does not expose them. The failure Reducer
+reads them per step through `UnwindFailure` and folds them into the
+failed Run's typed failure Output.
 
 Ordinary retry errors are operational history and are not recorded as
 failures.
@@ -722,10 +722,12 @@ type Result struct {
 }
 ```
 
-A `Result` carries the Run's failure only. What each unwind step did
-with it is a fact on that step's operation record in the Store; a typed
-account of a failed Run for callers is the failure reducer's job (future
-work), the way the Output is the reducer's account of a successful one.
+A `Result` carries the Run's failure. What each unwind step did with it
+is a fact on that step's operation record in the Store; the typed
+account of a failed Run for callers is the failure Reducer's Output,
+read through the typed `Result`'s `FailureOutput()`, the way the Output
+is the Reducer's account of a successful one (see
+[02-authoring.md § Reducer](02-authoring.md#reducer)).
 
 Convenience methods SHOULD include:
 

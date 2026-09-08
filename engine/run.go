@@ -202,9 +202,11 @@ func (r Run) InputBytes(ctx context.Context) ([]byte, error) {
 	return rec.Input, nil
 }
 
-// OutputBytes returns the committed Pipeline Output of a terminal
-// successful Run. It is intended for generated code, which wraps it with a
-// typed Output accessor.
+// OutputBytes returns the committed terminal output of a Run: the
+// Pipeline Output of a successful Run, or the failure Output of a failed
+// Run whose pipeline declares one; nil otherwise. It is intended for
+// generated code, which wraps it with typed Output and FailureOutput
+// accessors keyed on the outcome.
 func (r Run) OutputBytes(ctx context.Context) ([]byte, error) {
 	rec, err := r.engine.store.GetRun(ctx, r.id)
 	if err != nil {

@@ -27,6 +27,7 @@ message PipelineOptions {
   repeated string steps = 4;
   string concurrency_class = 6;
   repeated string mutexes = 7;
+  string failure_output = 8;
   reserved 5;
   reserved "exclusion_group";
 }
@@ -52,8 +53,8 @@ Published protobuf extensions MUST use globally allocated extension numbers.
 - typed Step references,
 - generic concrete `State` methods,
 - Pipeline constructors,
-- Reducer function types, with a `Reduce(view)` method the engine and
-  reducer tests fold through,
+- Reducer and failure Reducer function types, each with a `Reduce(view)`
+  method the engine and reducer tests fold through,
 - runtime methods on Pipeline marker types,
 - bound Pipeline handles,
 - typed Runs,

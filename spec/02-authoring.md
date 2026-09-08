@@ -460,13 +460,57 @@ type ProvisionMachineReducer func(
 ) *ProvisionMachineOutput
 ```
 
+A Pipeline MAY also declare a failure Output, produced by a pure
+**failure Reducer** when a failed Run's unwind completes. The failure
+Output relates to the Run's `Failure` and the Step States the way the
+Output relates to the States:
+
+```text
+Pipeline Input
++
+committed Step States
++
+the Run's Failure
++
+per-step unwind failures
+        |
+        v
+  failure Reducer
+        |
+        v
+ failure Output
+```
+
+```proto
+option (durable.v1.pipeline) = {
+  output:         ".machines.v1.ProvisionMachineOutput"
+  failure_output: ".machines.v1.ProvisionMachineFailure"
+  ...
+};
+```
+
+```go
+type ProvisionMachineFailureReducer func(
+    *ProvisionMachine,
+) *ProvisionMachineFailure
+```
+
+It runs once, in the transition that commits the failed Outcome, for
+every failed Run including canceled ones; the typed `Result` carries its
+value through `FailureOutput()`, non-nil exactly when the Run failed.
+Either reducer may be declared without the other. Both are positional
+arguments of the generated constructor, after the step handlers.
+
 ---
 
 ## Pipeline marker as Reducer input
 
-The generated protobuf Pipeline type becomes a read-only reduction view:
+The generated protobuf Pipeline type becomes a read-only reduction view,
+the same for both reducers:
 
 ```go
+func (p *ProvisionMachine) Failure() *durable.Failure          // nil on success
+func (p *ProvisionMachine) UnwindFailure(step durable.StepIdentifier) (durable.Failure, bool)
 func (p *ProvisionMachine) Input() *ProvisionMachineInput
 
 func (p *ProvisionMachine) State[T proto.Message](
@@ -496,7 +540,16 @@ func reduceProvisionMachine(
 
 ---
 
+`UnwindFailure` answers per step, keyed like `State`: a failure reducer
+pairs the two to say what a failed Run left behind, as in a compensation
+that failed permanently for a step whose State names the resource it
+created.
+
+---
+
 ## Reducer contract
+
+Everything in this section and the next applies to both reducers.
 
 A Reducer MUST be:
 
@@ -534,6 +587,11 @@ It is not retried continuously.
 The Engine logs the condition and stops scheduling the Run.
 
 A corrected deployment may later reconcile the same nonterminal Run and execute the new Reducer successfully.
+
+The failure Reducer follows the same rule: a fault in it leaves the Run
+nonterminal and invalid rather than committing a failed Outcome without
+its failure Output. A reducer bug is a definition bug either way, and a
+silent drop would be the harder one to notice.
 
 Example:
 

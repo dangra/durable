@@ -10,7 +10,7 @@ go 1.27.0
 replace github.com/dangra/durable => ../..
 
 require (
-	github.com/dangra/durable v0.7.0
+	github.com/dangra/durable v0.8.0
 	go.opentelemetry.io/otel v1.46.0
 	go.opentelemetry.io/otel/metric v1.46.0
 	go.opentelemetry.io/otel/sdk v1.46.0

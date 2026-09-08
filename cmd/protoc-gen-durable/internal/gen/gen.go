@@ -704,7 +704,8 @@ func emitTypedRunAndResult(g *protogen.GeneratedFile, pl *pipelineDecl) {
 	g.P()
 	if pl.input != nil {
 		g.P("// Input returns a defensive caller-owned copy of the run's immutable")
-		g.P("// pipeline input.")
+		g.P("// pipeline input. The input is released when the run reaches its")
+		g.P("// terminal outcome; Input on a terminal run returns durable.ErrRunTerminal.")
 		g.P("func (r ", name, "Run) Input(ctx ", ctx, ") (*", g.QualifiedGoIdent(pl.input.GoIdent), ", error) {")
 		g.P("b, err := r.run.InputBytes(ctx)")
 		g.P("if err != nil {")

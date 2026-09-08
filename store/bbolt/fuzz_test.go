@@ -259,7 +259,9 @@ func FuzzStoreContract(f *testing.F) {
 						opPhase = durable.PhaseUnwind
 					}
 					op := driver.OperationRecord{
-						Status:   driver.OpStatus(arg % 4),
+						// arg%4 is 0 here; the status comes from the
+						// next two bits so failed rows do occur.
+						Status:   driver.OpStatus((arg / 4) % 4),
 						Attempts: uint64(arg % 7),
 						State:    normBytes([]byte{arg, arg}),
 						Order:    uint32(arg % 5),

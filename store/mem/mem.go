@@ -47,7 +47,12 @@ func (s *Store) CreateRun(_ context.Context, rec *driver.RunRecord, excluding []
 			return s.runs[active].Clone(), false, nil
 		}
 	}
-	s.runs[rec.RunID] = rec.Clone()
+	c := rec.Clone()
+	if c.Terminal() {
+		// A record seeded terminal is stored in its terminal stage.
+		c.CompactTerminal()
+	}
+	s.runs[rec.RunID] = c
 	s.slots[slotKey(rec.PipelineID, rec.ResourceID)] = rec.RunID
 	return nil, true, nil
 }
@@ -73,8 +78,11 @@ func (s *Store) ApplyTransition(_ context.Context, id kernel.RunID, t driver.Tra
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	rec, ok := s.runs[id]
-	if !ok {
+	switch {
+	case !ok:
 		return kernel.ErrRunNotFound
+	case rec.Terminal():
+		return kernel.ErrRunTerminal
 	}
 
 	// Operation rows: each write replaces one half of a step's record.
@@ -118,10 +126,12 @@ func (s *Store) ApplyTransition(_ context.Context, id kernel.RunID, t driver.Tra
 		oc := *t.Outcome
 		rec.Outcome = &oc
 		rec.Output = append([]byte(nil), t.Output...)
-		// Terminality releases the resource slot.
+		// Terminality releases the resource slot and the nonterminal
+		// stage.
 		if key := slotKey(rec.PipelineID, rec.ResourceID); s.slots[key] == id {
 			delete(s.slots, key)
 		}
+		rec.CompactTerminal()
 	}
 	return nil
 }

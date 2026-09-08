@@ -194,10 +194,17 @@ func (r Run) Annotations(ctx context.Context) (map[string]string, error) {
 // for an Input-less pipeline). It is intended for generated code, which
 // wraps it with a typed Input accessor; the typed accessor returns a
 // defensive caller-owned copy via a fresh unmarshal.
+//
+// The Input is released when the Run reaches its terminal outcome: it
+// has been folded into the Output by then, and the store keeps only the
+// Output. InputBytes on a terminal Run returns durable.ErrRunTerminal.
 func (r Run) InputBytes(ctx context.Context) ([]byte, error) {
 	rec, err := r.engine.store.GetRun(ctx, r.id)
 	if err != nil {
 		return nil, err
+	}
+	if rec.Terminal() {
+		return nil, durable.ErrRunTerminal
 	}
 	return rec.Input, nil
 }

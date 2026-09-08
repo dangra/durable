@@ -11,13 +11,25 @@
 // cadences (the internal durable.storage.v1 protobuf schema): write-once
 // meta (identity + input), one operation row per step phase written at
 // that operation's resolution and carrying its own failure, the run's
-// write-once run failure, terminal, and cancel records, and the small
-// cursor rewritten per attempt. Per-attempt write volume is therefore
+// write-once run failure and cancel records, and the small cursor
+// rewritten per attempt. Per-attempt write volume is therefore
 // independent of input and state sizes, an unwind never rewrites the
-// forward row's state, and no row is read back to be rewritten. An active-slot index keyed by (PipelineID,
-// ResourceID) holds every nonterminal run: CreateRun admits against it,
-// GetActiveRunID reads it, and ListNonterminal walks it, so recovery cost
-// follows the runs in flight rather than the retained history.
+// forward row's state, and no row is read back to be rewritten on the
+// attempt path.
+//
+// A run has two storage stages. Nonterminal, it is meta, cursor, and
+// operation rows. The terminality commit reads the run once and
+// replaces those three with one terminal record — identity, outcome,
+// output, commit time, and the permanently failed unwinds — in the same
+// transaction, so the input and step states, folded into the output by
+// then, are released when the run ends rather than when retention
+// reaps it. Failure and cancel records span both stages. Exactly one of
+// meta and terminal exists for a run; GetRun dispatches on which.
+//
+// An active-slot index keyed by (PipelineID, ResourceID) holds every
+// nonterminal run: CreateRun admits against it, GetActiveRunID reads it,
+// and ListNonterminal walks it, so recovery cost follows the runs in
+// flight rather than the retained history.
 package bbolt
 
 import (
@@ -178,8 +190,19 @@ func (s *Store) CreateRun(_ context.Context, rec *driver.RunRecord, excluding []
 }
 
 // putRun persists every present component of rec; used at creation (and
-// for seeded records carrying pre-existing facts).
+// for seeded records carrying pre-existing facts). A record seeded
+// terminal is written in its terminal stage.
 func putRun(tx *bolt.Tx, rec *driver.RunRecord) error {
+	if rec.Failure != nil {
+		if err := putRootFailure(tx, rec.RunID, rec.Failure); err != nil {
+			return err
+		}
+	}
+	if rec.Outcome != nil {
+		c := rec.Clone()
+		c.CompactTerminal()
+		return putTerminal(tx, c)
+	}
 	meta, err := storagepb.MarshalRunMeta(rec)
 	if err != nil {
 		return err
@@ -212,20 +235,6 @@ func putRun(tx *bolt.Tx, rec *driver.RunRecord) error {
 			}
 		}
 	}
-	if rec.Failure != nil {
-		if err := putRootFailure(tx, rec.RunID, rec.Failure); err != nil {
-			return err
-		}
-	}
-	if rec.Outcome != nil {
-		b, err := storagepb.MarshalTerminal(*rec.Outcome, rec.Output)
-		if err != nil {
-			return err
-		}
-		if err := tx.Bucket(terminalBucket).Put([]byte(rec.RunID), b); err != nil {
-			return err
-		}
-	}
 	return nil
 }
 
@@ -235,7 +244,58 @@ func (s *Store) ApplyTransition(_ context.Context, id kernel.RunID, t driver.Tra
 	return commit(func(tx *bolt.Tx) error {
 		metaBytes := tx.Bucket(metaBucket).Get([]byte(id))
 		if metaBytes == nil {
+			// A terminal run has no meta; it accepts no further
+			// transitions, and the engine never sends one.
+			if tx.Bucket(terminalBucket).Get([]byte(id)) != nil {
+				return kernel.ErrRunTerminal
+			}
 			return kernel.ErrRunNotFound
+		}
+		if t.Failure != nil {
+			if err := putRootFailure(tx, id, t.Failure); err != nil {
+				return err
+			}
+		}
+		if t.Outcome != nil {
+			// The terminality commit: the nonterminal stage — meta,
+			// cursor, operation rows — gives way to one terminal record,
+			// and the slot is released. The record is assembled the way
+			// the reference store's would be after this transition (rows,
+			// then the transition's ops, then its cursor's in-flight
+			// overlay) and compacted by the shared rule, so the failed
+			// unwinds it keeps are the same ones the model keeps.
+			rec, err := getNonterminal(tx, id, metaBytes)
+			if err != nil {
+				return err
+			}
+			for _, ow := range t.Ops {
+				*rec.Step(ow.StepID).Op(ow.Phase) = ow.Record
+			}
+			if t.Cursor.StepID != "" {
+				sr := rec.Step(t.Cursor.StepID)
+				if t.Cursor.Phase == kernel.PhaseUnwind && sr.Forward.Status == driver.OpSucceeded {
+					sr.Unwind.Status = driver.OpUnresolved
+				} else {
+					sr.Forward.Status = driver.OpUnresolved
+				}
+			}
+			rec.Phase = t.Cursor.Phase
+			rec.UpdatedAt = t.Cursor.UpdatedAt
+			oc := *t.Outcome
+			rec.Outcome = &oc
+			rec.Output = t.Output
+			rec.CompactTerminal()
+			if err := putTerminal(tx, rec); err != nil {
+				return err
+			}
+			if err := deleteNonterminalStage(tx, id); err != nil {
+				return err
+			}
+			key := slotKey(rec)
+			if active := tx.Bucket(slotsBucket).Get(key); active != nil && string(active) == string(id) {
+				return tx.Bucket(slotsBucket).Delete(key)
+			}
+			return nil
 		}
 		cursor, err := storagepb.MarshalCursor(t.Cursor)
 		if err != nil {
@@ -250,31 +310,39 @@ func (s *Store) ApplyTransition(_ context.Context, id kernel.RunID, t driver.Tra
 				return err
 			}
 		}
-		if t.Failure != nil {
-			if err := putRootFailure(tx, id, t.Failure); err != nil {
-				return err
-			}
-		}
-		if t.Outcome != nil {
-			b, err := storagepb.MarshalTerminal(*t.Outcome, t.Output)
-			if err != nil {
-				return err
-			}
-			if err := tx.Bucket(terminalBucket).Put([]byte(id), b); err != nil {
-				return err
-			}
-			// Terminality releases the resource slot.
-			rec := &driver.RunRecord{}
-			if err := storagepb.UnmarshalRunMetaInto(metaBytes, rec); err != nil {
-				return err
-			}
-			key := slotKey(rec)
-			if active := tx.Bucket(slotsBucket).Get(key); active != nil && string(active) == string(id) {
-				return tx.Bucket(slotsBucket).Delete(key)
-			}
-		}
 		return nil
 	})
+}
+
+func putTerminal(tx *bolt.Tx, rec *driver.RunRecord) error {
+	b, err := storagepb.MarshalTerminal(rec)
+	if err != nil {
+		return err
+	}
+	return tx.Bucket(terminalBucket).Put([]byte(rec.RunID), b)
+}
+
+// deleteNonterminalStage removes a run's meta, cursor, and operation
+// rows. Operation rows hang off the run id; they are collected before
+// deletion since bbolt forbids mutating a bucket while iterating it.
+func deleteNonterminalStage(tx *bolt.Tx, id kernel.RunID) error {
+	prefix := runPrefix(id)
+	sc := tx.Bucket(stepsBucket).Cursor()
+	var opKeys [][]byte
+	for k, _ := sc.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, _ = sc.Next() {
+		opKeys = append(opKeys, bytes.Clone(k))
+	}
+	for _, k := range opKeys {
+		if err := tx.Bucket(stepsBucket).Delete(k); err != nil {
+			return err
+		}
+	}
+	for _, bucket := range [][]byte{cursorBucket, metaBucket} {
+		if err := tx.Bucket(bucket).Delete([]byte(id)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func putOp(tx *bolt.Tx, id kernel.RunID, step kernel.StepID, phase kernel.Phase, op *driver.OperationRecord) error {
@@ -305,14 +373,40 @@ func readRootFailure(tx *bolt.Tx, id kernel.RunID) (*kernel.Failure, error) {
 	return &f, nil
 }
 
-// getRun assembles the read model from the run's components: meta, step
-// rows, failures, terminal — with the cursor's in-flight operation
-// overlaid as an unresolved step entry.
+// getRun assembles the read model from the run's components, dispatching
+// on its stage. Nonterminal: meta, step rows, and the cursor, with the
+// cursor's in-flight operation overlaid as an unresolved step entry.
+// Terminal: the terminal record alone. Failure and cancel are read in
+// both stages.
 func getRun(tx *bolt.Tx, id kernel.RunID) (*driver.RunRecord, error) {
-	metaBytes := tx.Bucket(metaBucket).Get([]byte(id))
-	if metaBytes == nil {
+	var rec *driver.RunRecord
+	var err error
+	if metaBytes := tx.Bucket(metaBucket).Get([]byte(id)); metaBytes != nil {
+		rec, err = getNonterminal(tx, id, metaBytes)
+	} else if tb := tx.Bucket(terminalBucket).Get([]byte(id)); tb != nil {
+		rec = &driver.RunRecord{}
+		err = storagepb.UnmarshalTerminalInto(tb, rec)
+	} else {
 		return nil, kernel.ErrRunNotFound
 	}
+	if err != nil {
+		return nil, err
+	}
+
+	if rec.Failure, err = readRootFailure(tx, id); err != nil {
+		return nil, err
+	}
+	if xb := tx.Bucket(cancelBucket).Get([]byte(id)); xb != nil {
+		cr, err := storagepb.UnmarshalCancel(xb)
+		if err != nil {
+			return nil, err
+		}
+		rec.Cancel = cr
+	}
+	return rec, nil
+}
+
+func getNonterminal(tx *bolt.Tx, id kernel.RunID, metaBytes []byte) (*driver.RunRecord, error) {
 	rec := &driver.RunRecord{}
 	if err := storagepb.UnmarshalRunMetaInto(metaBytes, rec); err != nil {
 		return nil, err
@@ -356,28 +450,6 @@ func getRun(tx *bolt.Tx, id kernel.RunID) (*driver.RunRecord, error) {
 			sr.Forward.Attempts = cur.Attempts
 		}
 	}
-
-	root, err := readRootFailure(tx, id)
-	if err != nil {
-		return nil, err
-	}
-	rec.Failure = root
-
-	if tb := tx.Bucket(terminalBucket).Get([]byte(id)); tb != nil {
-		oc, out, err := storagepb.UnmarshalTerminal(tb)
-		if err != nil {
-			return nil, err
-		}
-		rec.Outcome = &oc
-		rec.Output = out
-	}
-	if xb := tx.Bucket(cancelBucket).Get([]byte(id)); xb != nil {
-		cr, err := storagepb.UnmarshalCancel(xb)
-		if err != nil {
-			return nil, err
-		}
-		rec.Cancel = cr
-	}
 	return rec, nil
 }
 
@@ -394,39 +466,28 @@ func (s *Store) GetRun(_ context.Context, id kernel.RunID) (*driver.RunRecord, e
 func (s *Store) ReapTerminal(_ context.Context, before time.Time, limit int) (int, error) {
 	deleted := 0
 	err := s.db.Update(func(tx *bolt.Tx) error {
-		// The terminal bucket's keys are exactly the terminal run ids;
-		// terminality time is the cursor's UpdatedAt, stamped by the
-		// terminal transition.
+		// The terminal bucket's keys are exactly the terminal run ids,
+		// and each record carries its commit time.
 		var victims [][]byte
 		c := tx.Bucket(terminalBucket).Cursor()
-		for k, _ := c.First(); k != nil && len(victims) < limit; k, _ = c.Next() {
-			cb := tx.Bucket(cursorBucket).Get(k)
-			if cb == nil {
-				continue
-			}
-			cur, err := storagepb.UnmarshalCursor(cb)
-			if err != nil {
+		for k, v := c.First(); k != nil && len(victims) < limit; k, v = c.Next() {
+			rec := &driver.RunRecord{}
+			if err := storagepb.UnmarshalTerminalInto(v, rec); err != nil {
 				return err
 			}
-			if cur.UpdatedAt.Before(before) {
+			if rec.UpdatedAt.Before(before) {
 				victims = append(victims, bytes.Clone(k))
 			}
 		}
 		for _, id := range victims {
-			// Operation rows hang off the run id; collect before deleting,
-			// since bbolt forbids mutating a bucket while iterating it.
-			prefix := runPrefix(kernel.RunID(id))
-			sc := tx.Bucket(stepsBucket).Cursor()
-			var opKeys [][]byte
-			for k, _ := sc.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, _ = sc.Next() {
-				opKeys = append(opKeys, bytes.Clone(k))
+			// The nonterminal stage is already gone for a run that
+			// committed through this driver; sweeping it anyway costs one
+			// cursor seek and keeps a database whose terminal runs predate
+			// the stage split from leaving orphans behind.
+			if err := deleteNonterminalStage(tx, kernel.RunID(id)); err != nil {
+				return err
 			}
-			for _, k := range opKeys {
-				if err := tx.Bucket(stepsBucket).Delete(k); err != nil {
-					return err
-				}
-			}
-			for _, bucket := range [][]byte{failuresBucket, cancelBucket, cursorBucket, terminalBucket, metaBucket} {
+			for _, bucket := range [][]byte{failuresBucket, cancelBucket, terminalBucket} {
 				if err := tx.Bucket(bucket).Delete(id); err != nil {
 					return err
 				}
@@ -445,10 +506,10 @@ func (s *Store) RequestCancel(_ context.Context, id kernel.RunID, req driver.Can
 	accepted := false
 	err := s.db.Update(func(tx *bolt.Tx) error {
 		switch {
-		case tx.Bucket(metaBucket).Get([]byte(id)) == nil:
-			return kernel.ErrRunNotFound
 		case tx.Bucket(terminalBucket).Get([]byte(id)) != nil:
 			return kernel.ErrRunTerminal
+		case tx.Bucket(metaBucket).Get([]byte(id)) == nil:
+			return kernel.ErrRunNotFound
 		case tx.Bucket(cancelBucket).Get([]byte(id)) != nil:
 			return nil // first cancel wins
 		}
@@ -486,23 +547,39 @@ func (s *Store) ListNonterminal(_ context.Context) ([]*driver.RunRecord, error) 
 	return out, err
 }
 
+// ListRuns scans both stages: meta for the nonterminal runs and the
+// terminal bucket for the rest.
 func (s *Store) ListRuns(_ context.Context, pipeline kernel.PipelineID, resource kernel.ResourceID) ([]*driver.RunRecord, error) {
 	var out []*driver.RunRecord
 	err := s.db.View(func(tx *bolt.Tx) error {
-		return tx.Bucket(metaBucket).ForEach(func(k, v []byte) error {
-			probe := &driver.RunRecord{}
-			if err := storagepb.UnmarshalRunMetaInto(v, probe); err != nil {
-				return err
-			}
-			if probe.PipelineID != pipeline || probe.ResourceID != resource {
+		seen := map[string]bool{}
+		collect := func(k []byte, probe *driver.RunRecord) error {
+			if probe.PipelineID != pipeline || probe.ResourceID != resource || seen[string(k)] {
 				return nil
 			}
 			rec, err := getRun(tx, kernel.RunID(k))
 			if err != nil {
 				return err
 			}
+			seen[string(k)] = true
 			out = append(out, rec)
 			return nil
+		}
+		if err := tx.Bucket(metaBucket).ForEach(func(k, v []byte) error {
+			probe := &driver.RunRecord{}
+			if err := storagepb.UnmarshalRunMetaInto(v, probe); err != nil {
+				return err
+			}
+			return collect(k, probe)
+		}); err != nil {
+			return err
+		}
+		return tx.Bucket(terminalBucket).ForEach(func(k, v []byte) error {
+			probe := &driver.RunRecord{}
+			if err := storagepb.UnmarshalTerminalInto(v, probe); err != nil {
+				return err
+			}
+			return collect(k, probe)
 		})
 	})
 	if err != nil {

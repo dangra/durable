@@ -71,6 +71,10 @@ func TestForwardSuccessWithReducer(t *testing.T) {
 	if err := proto.Unmarshal(b, out); err != nil {
 		t.Fatalf("unmarshal output: %v", err)
 	}
+	// The input was folded into the output; terminality released it.
+	if _, err := run.InputBytes(context.Background()); !errors.Is(err, durable.ErrRunTerminal) {
+		t.Fatalf("InputBytes(terminal) = %v, want ErrRunTerminal", err)
+	}
 	if out.GetValue() != "ord:host-7" {
 		t.Fatalf("Output = %q, want %q", out.GetValue(), "ord:host-7")
 	}

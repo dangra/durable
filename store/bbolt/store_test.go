@@ -491,3 +491,123 @@ func TestOperationRowsAreWrittenOnce(t *testing.T) {
 		return nil
 	})
 }
+
+// TestTerminalityCompactsRun pins the stage split: the terminality commit
+// deletes meta, cursor, and every operation row but keeps the run
+// readable — identity, outcome, output, failure, cancel, and the failed
+// unwinds — from the terminal record alone, and reap sweeps that.
+func TestTerminalityCompactsRun(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(filepath.Join(t.TempDir(), "stages.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	now := time.Unix(1_700_000_000, 0).UTC()
+	input := bytes.Repeat([]byte{1}, 8192)
+	rec := &driver.RunRecord{
+		RunID: "run-t", PipelineID: "p", ResourceID: "r", Phase: durable.PhaseForward,
+		Input: input, Annotations: map[string]string{"tenant": "t1"},
+		Steps: map[durable.StepID]*driver.StepRecord{}, CreatedAt: now, UpdatedAt: now,
+	}
+	if _, created, err := s.CreateRun(ctx, rec, nil); err != nil || !created {
+		t.Fatalf("CreateRun = %v, %v", created, err)
+	}
+	apply := func(tr driver.Transition) {
+		t.Helper()
+		if err := s.ApplyTransition(ctx, "run-t", tr); err != nil {
+			t.Fatal(err)
+		}
+	}
+	state := bytes.Repeat([]byte{7}, 4096)
+	apply(driver.Transition{Cursor: driver.Cursor{Phase: durable.PhaseForward, UpdatedAt: now}, Ops: []driver.OpWrite{{
+		StepID: "a/v1", Phase: durable.PhaseForward,
+		Record: driver.OperationRecord{Status: driver.OpSucceeded, Attempts: 1, State: state, Order: 1},
+	}}})
+	root := &durable.Failure{StepID: "b/v1", Phase: durable.PhaseForward, Attempt: 1, Message: "boom", At: now}
+	apply(driver.Transition{Cursor: driver.Cursor{Phase: durable.PhaseUnwind, UpdatedAt: now}, Failure: root, Ops: []driver.OpWrite{{
+		StepID: "b/v1", Phase: durable.PhaseForward,
+		Record: driver.OperationRecord{Status: driver.OpFailed, Attempts: 1, Failure: root, Order: 2},
+	}}})
+	if _, err := s.RequestCancel(ctx, "run-t", driver.CancelRequest{Cause: "late", At: now}); err != nil {
+		t.Fatalf("RequestCancel: %v", err)
+	}
+	uf := durable.Failure{StepID: "a/v1", Phase: durable.PhaseUnwind, Attempt: 2, Message: "stuck", At: now}
+	oc := durable.OutcomeFailure
+	committed := now.Add(time.Minute)
+	// The last unwind resolution rides the terminality commit.
+	apply(driver.Transition{
+		Cursor: driver.Cursor{Phase: durable.PhaseDone, UpdatedAt: committed, LastError: "stale", NextAttemptAt: now},
+		Ops: []driver.OpWrite{{StepID: "a/v1", Phase: durable.PhaseUnwind,
+			Record: driver.OperationRecord{Status: driver.OpFailed, Attempts: 2, Failure: &uf, Order: 3}}},
+		Outcome: &oc, Output: []byte{9},
+	})
+
+	// The nonterminal stage is gone from disk.
+	s.db.View(func(tx *bolt.Tx) error {
+		for _, bucket := range [][]byte{metaBucket, cursorBucket} {
+			if tx.Bucket(bucket).Get([]byte("run-t")) != nil {
+				t.Errorf("bucket %s still holds the terminal run", bucket)
+			}
+		}
+		if k, _ := tx.Bucket(stepsBucket).Cursor().Seek(runPrefix("run-t")); k != nil && bytes.HasPrefix(k, runPrefix("run-t")) {
+			t.Errorf("operation row %q survived terminality", k)
+		}
+		if tb := tx.Bucket(terminalBucket).Get([]byte("run-t")); len(tb) > 1024 {
+			t.Errorf("terminal record = %d bytes; the input and state must not be in it", len(tb))
+		}
+		return nil
+	})
+
+	// The run reads back from the terminal stage.
+	got, err := s.GetRun(ctx, "run-t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.PipelineID != "p" || got.ResourceID != "r" || got.Annotations["tenant"] != "t1" || !got.CreatedAt.Equal(now) {
+		t.Fatalf("identity = %+v", got)
+	}
+	if got.Outcome == nil || *got.Outcome != oc || string(got.Output) != "\x09" || got.Phase != durable.PhaseDone || !got.UpdatedAt.Equal(committed) {
+		t.Fatalf("terminal facts = %+v", got)
+	}
+	if got.Input != nil || got.LastError != "" || !got.NextAttemptAt.IsZero() {
+		t.Fatalf("nonterminal facts leaked: input=%d lastError=%q next=%v", len(got.Input), got.LastError, got.NextAttemptAt)
+	}
+	if got.Failure == nil || got.Failure.Message != "boom" || got.Cancel == nil || got.Cancel.Cause != "late" {
+		t.Fatalf("failure/cancel = %+v / %+v", got.Failure, got.Cancel)
+	}
+	if ufs := got.UnwindFailures(); len(ufs) != 1 || ufs[0].Message != "stuck" {
+		t.Fatalf("UnwindFailures = %+v", ufs)
+	}
+	if len(got.Steps) != 1 || got.Steps["a/v1"].Forward.Status != driver.OpNone {
+		t.Fatalf("Steps = %+v; want the failed unwind only", got.Steps)
+	}
+	if err := s.ApplyTransition(ctx, "run-t", driver.Transition{Cursor: driver.Cursor{Phase: durable.PhaseDone}}); !errors.Is(err, durable.ErrRunTerminal) {
+		t.Fatalf("ApplyTransition(terminal) = %v, want ErrRunTerminal", err)
+	}
+	if _, err := s.RequestCancel(ctx, "run-t", driver.CancelRequest{}); !errors.Is(err, durable.ErrRunTerminal) {
+		t.Fatalf("RequestCancel(terminal) = %v, want ErrRunTerminal", err)
+	}
+	runs, err := s.ListRuns(ctx, "p", "r")
+	if err != nil || len(runs) != 1 || runs[0].RunID != "run-t" {
+		t.Fatalf("ListRuns = %+v, %v", runs, err)
+	}
+	if id, ok, _ := s.GetActiveRunID(ctx, "p", "r"); ok {
+		t.Fatalf("slot still held by %s", id)
+	}
+
+	if n, err := s.ReapTerminal(ctx, committed.Add(time.Second), 10); err != nil || n != 1 {
+		t.Fatalf("ReapTerminal = %d, %v", n, err)
+	}
+	if _, err := s.GetRun(ctx, "run-t"); !errors.Is(err, durable.ErrRunNotFound) {
+		t.Fatalf("GetRun after reap = %v", err)
+	}
+	s.db.View(func(tx *bolt.Tx) error {
+		for _, b := range [][]byte{terminalBucket, failuresBucket, cancelBucket} {
+			if k, _ := tx.Bucket(b).Cursor().First(); k != nil {
+				t.Fatalf("bucket %s still holds %q after reap", b, k)
+			}
+		}
+		return nil
+	})
+}

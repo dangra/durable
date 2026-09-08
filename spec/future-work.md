@@ -9,8 +9,9 @@ contract): component persistence, atomic transitions, the cursor, slot
 uniqueness, and terminal-run retention. Remaining:
 
 - waiters (currently in-process only),
-- a compact post-retention summary tier (terminal Runs currently delete
-  entirely at retention),
+- an Output retention option for pipelines whose Output nobody reads
+  after `Wait` (the terminality commit already releases the Input and
+  Step States; the Output is what a retention window keeps),
 - a SQLite implementation.
 
 ## Historical inspection

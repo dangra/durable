@@ -502,7 +502,8 @@ func (r ProvisionMachineRun) Cancel(ctx context.Context, cause string) error {
 }
 
 // Input returns a defensive caller-owned copy of the run's immutable
-// pipeline input.
+// pipeline input. The input is released when the run reaches its
+// terminal outcome; Input on a terminal run returns durable.ErrRunTerminal.
 func (r ProvisionMachineRun) Input(ctx context.Context) (*ProvisionMachineInput, error) {
 	b, err := r.run.InputBytes(ctx)
 	if err != nil {

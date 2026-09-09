@@ -1111,3 +1111,74 @@ func TestBlobCacheEvictsColdRuns(t *testing.T) {
 		t.Fatalf("GetRun(big) = %d bytes, %v", len(got.Input), err)
 	}
 }
+
+// A head is the run without its blobs and operation history, read in
+// point reads: it never fills the blob cache, so polling a cold run
+// costs no cache churn.
+func TestGetRunHead(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(filepath.Join(t.TempDir(), "head.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	now := time.Unix(1_700_000_000, 0).UTC()
+	rec := &driver.RunRecord{RunID: "run-1", PipelineID: "p", ResourceID: "r", Phase: durable.PhaseForward,
+		Annotations: map[string]string{"tenant": "t1"},
+		Input:       bytes.Repeat([]byte{1}, 8192), CreatedAt: now, UpdatedAt: now}
+	if _, created, err := s.CreateRun(ctx, rec, nil); err != nil || !created {
+		t.Fatal(err)
+	}
+	// One resolved step with a large state, one in flight, a cancel.
+	err = s.ApplyTransition(ctx, "run-1", driver.Transition{
+		Cursor: driver.Cursor{Phase: durable.PhaseForward, StepID: "b", Attempts: 3, LastError: "boom", NextAttemptAt: now.Add(time.Minute), UpdatedAt: now.Add(time.Second)},
+		Ops: []driver.OpWrite{{StepID: "a", Phase: durable.PhaseForward, Record: driver.OperationRecord{
+			Status: driver.OpSucceeded, Attempts: 1, State: bytes.Repeat([]byte{2}, 8192), Order: 1}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RequestCancel(ctx, "run-1", driver.CancelRequest{Cause: "op", At: now}); err != nil {
+		t.Fatal(err)
+	}
+	// Forget the blobs, as a restart would, and prove a head leaves them
+	// alone.
+	s.blobs.drop("run-1")
+	h, err := s.GetRunHead(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("GetRunHead: %v", err)
+	}
+	if h.Input != nil || len(h.Steps) != 1 || h.Steps["a"] != nil {
+		t.Fatalf("head carries blobs or history: %+v", h)
+	}
+	if op := h.Steps["b"]; op == nil || op.Forward.Status != driver.OpUnresolved || op.Forward.Attempts != 3 {
+		t.Fatalf("head in-flight op = %+v", h.Steps["b"])
+	}
+	if h.PipelineID != "p" || h.Annotations["tenant"] != "t1" || h.LastError != "boom" || h.Cancel == nil || h.Cancel.Cause != "op" || !h.NextAttemptAt.Equal(now.Add(time.Minute)) {
+		t.Fatalf("head = %+v", h)
+	}
+	if s.blobs.has("run-1") {
+		t.Fatal("a head read must not fill the blob cache")
+	}
+	full, err := s.GetRun(ctx, "run-1")
+	if err != nil || len(full.Input) != 8192 || len(full.Steps["a"].Forward.State) != 8192 {
+		t.Fatalf("GetRun after head = %+v, %v", full, err)
+	}
+	// Terminal: the record without its (large, beside) output.
+	oc := durable.OutcomeSuccess
+	err = s.ApplyTransition(ctx, "run-1", driver.Transition{Cursor: driver.Cursor{Phase: durable.PhaseDone, UpdatedAt: now.Add(time.Hour)},
+		Outcome: &oc, Output: bytes.Repeat([]byte{3}, 8192)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err = s.GetRunHead(ctx, "run-1")
+	if err != nil || !h.Terminal() || *h.Outcome != oc || h.Output != nil || h.Cancel == nil {
+		t.Fatalf("terminal head = %+v, %v", h, err)
+	}
+	if full, err := s.GetRun(ctx, "run-1"); err != nil || len(full.Output) != 8192 {
+		t.Fatalf("GetRun terminal = %+v, %v", full, err)
+	}
+	if _, err := s.GetRunHead(ctx, "nope"); !errors.Is(err, durable.ErrRunNotFound) {
+		t.Fatalf("missing head = %v", err)
+	}
+}

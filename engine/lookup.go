@@ -13,7 +13,7 @@ import (
 // PipelineID, so a caller that needs the typed Output routes there
 // (provision.GetRun(ctx, run.ID())).
 func (e *Engine) GetRun(ctx context.Context, id durable.RunID) (Run, error) {
-	if _, err := e.store.GetRun(ctx, id); err != nil {
+	if _, err := e.store.GetRunHead(ctx, id); err != nil {
 		return Run{}, err
 	}
 	return Run{id: id, engine: e}, nil

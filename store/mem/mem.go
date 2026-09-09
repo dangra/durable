@@ -26,11 +26,19 @@ type Store struct {
 	// structure CreateRun enforces exclusion with and GetActiveRunID
 	// answers from. Released when a Run commits its Outcome.
 	slots map[string]kernel.RunID
+	// inflight is the Cursor's operation per nonterminal Run — the step
+	// the last transition's Cursor named — so a head can be projected
+	// without guessing which unresolved operation is the Cursor's.
+	inflight map[kernel.RunID]kernel.StepID
 }
 
 // New constructs an empty Store.
 func New() *Store {
-	return &Store{runs: make(map[kernel.RunID]*driver.RunRecord), slots: make(map[string]kernel.RunID)}
+	return &Store{
+		runs:     make(map[kernel.RunID]*driver.RunRecord),
+		slots:    make(map[string]kernel.RunID),
+		inflight: make(map[kernel.RunID]kernel.StepID),
+	}
 }
 
 func slotKey(pipeline kernel.PipelineID, resource kernel.ResourceID) string {
@@ -75,6 +83,34 @@ func (s *Store) GetRun(_ context.Context, id kernel.RunID) (*driver.RunRecord, e
 	return r.Clone(), nil
 }
 
+func (s *Store) GetRunHead(_ context.Context, id kernel.RunID) (*driver.RunRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.runs[id]
+	if !ok {
+		return nil, kernel.ErrRunNotFound
+	}
+	return s.head(r), nil
+}
+
+// head projects a record to what GetRunHead returns: no Input, no
+// Output, and for a nonterminal Run only the Cursor's operation in
+// Steps, unresolved with its attempt count. A terminal record's Steps
+// are already its compact form.
+func (s *Store) head(r *driver.RunRecord) *driver.RunRecord {
+	h := r.Clone()
+	h.Input, h.Output = nil, nil
+	if h.Terminal() {
+		return h
+	}
+	h.Steps = nil
+	if step, ok := s.inflight[r.RunID]; ok {
+		op := r.Steps[step].Op(r.Phase)
+		*h.Step(step).Op(r.Phase) = driver.OperationRecord{Status: driver.OpUnresolved, Attempts: op.Attempts}
+	}
+	return h
+}
+
 func (s *Store) ApplyTransition(_ context.Context, id kernel.RunID, t driver.Transition) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -107,15 +143,14 @@ func (s *Store) ApplyTransition(_ context.Context, id kernel.RunID, t driver.Tra
 	rec.Awaiting = c.Awaiting.Clone()
 	rec.Awaited = c.Awaited.Clone()
 	rec.UpdatedAt = c.UpdatedAt
+	// The Cursor's operation is the forward one in PhaseForward and the
+	// unwind one in PhaseUnwind (the Cursor contract).
+	delete(s.inflight, id)
 	if c.StepID != "" {
-		sr := rec.Step(c.StepID)
-		if c.Phase == kernel.PhaseUnwind && sr.Forward.Status == driver.OpSucceeded {
-			sr.Unwind.Status = driver.OpUnresolved
-			sr.Unwind.Attempts = c.Attempts
-		} else {
-			sr.Forward.Status = driver.OpUnresolved
-			sr.Forward.Attempts = c.Attempts
-		}
+		op := rec.Step(c.StepID).Op(c.Phase)
+		op.Status = driver.OpUnresolved
+		op.Attempts = c.Attempts
+		s.inflight[id] = c.StepID
 	}
 
 	if t.Failure != nil {
@@ -131,6 +166,7 @@ func (s *Store) ApplyTransition(_ context.Context, id kernel.RunID, t driver.Tra
 		if key := slotKey(rec.PipelineID, rec.ResourceID); s.slots[key] == id {
 			delete(s.slots, key)
 		}
+		delete(s.inflight, id)
 		rec.CompactTerminal()
 	}
 	return nil
@@ -174,7 +210,7 @@ func (s *Store) ListNonterminal(_ context.Context) ([]*driver.RunRecord, error) 
 	var out []*driver.RunRecord
 	for _, r := range s.runs {
 		if !r.Terminal() {
-			out = append(out, r.Clone())
+			out = append(out, s.head(r))
 		}
 	}
 	return out, nil

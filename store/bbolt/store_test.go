@@ -448,9 +448,15 @@ func TestOperationRowsAreWrittenOnce(t *testing.T) {
 		Record: driver.OperationRecord{Status: driver.OpSucceeded, Attempts: 1, State: state, Order: 1},
 	}}})
 	forwardRow := rowBytes("a/v1", durable.PhaseForward)
-	if len(forwardRow) < len(state) {
-		t.Fatalf("forward row = %d bytes; want the state in it", len(forwardRow))
+	if len(forwardRow) == 0 || len(forwardRow) > 64 {
+		t.Fatalf("forward row = %d bytes; want a small row, the state beside it", len(forwardRow))
 	}
+	s.db.View(func(tx *bolt.Tx) error {
+		if got := getBlob(tx.Bucket(activeBucket), stateKey(opKey("run-o", 1, "a/v1", durable.PhaseForward))); !bytes.Equal(got, state) {
+			t.Fatalf("state blob = %d bytes, want %d", len(got), len(state))
+		}
+		return nil
+	})
 
 	// The run failure ends the forward phase: a failed forward row for
 	// b/v1 and one root row.
@@ -493,12 +499,13 @@ func TestOperationRowsAreWrittenOnce(t *testing.T) {
 	}
 	s.db.View(func(tx *bolt.Tx) error {
 		// The walk reads meta, failure, then operations in resolution
-		// order: a forward (1), b forward (2), a unwind (3).
+		// order — a forward (1) with its state beside it, b forward (2),
+		// a unwind (3).
 		var tags []byte
 		var ops []string
 		for _, row := range activeRows(tx, "run-o") {
 			tags = append(tags, row.key[0])
-			if row.key[0] == tagOp {
+			if row.key[0] == tagOp && !bytes.HasSuffix(row.key, stateSuffix) {
 				order, step, phase, ok := splitOpRest(row.key[1:])
 				if !ok {
 					t.Fatalf("malformed operation key %q", row.key)
@@ -506,8 +513,8 @@ func TestOperationRowsAreWrittenOnce(t *testing.T) {
 				ops = append(ops, fmt.Sprintf("%d:%s/%s", order, step, phase))
 			}
 		}
-		if string(tags) != "Mfooo" {
-			t.Fatalf("active row tags = %q; want meta, failure, three operations", tags)
+		if string(tags) != "Mfoooo" {
+			t.Fatalf("active row tags = %q; want meta, failure, three operations and a's state beside its row", tags)
 		}
 		if want := []string{"1:a/v1/forward", "2:b/v1/forward", "3:a/v1/unwind"}; !reflect.DeepEqual(ops, want) {
 			t.Fatalf("operation rows = %v; want %v", ops, want)
@@ -653,8 +660,8 @@ func TestTerminalityCompactsRun(t *testing.T) {
 	// reads back whole.
 	s.db.View(func(tx *bolt.Tx) error {
 		ib := tx.Bucket(activeBucket).Bucket(activeKey("run-t", tagInput))
-		if ib == nil || !bytes.Equal(ib.Get(inputKey), input) {
-			t.Fatal("input must sit in its own nested bucket")
+		if ib == nil || !bytes.Equal(ib.Get(blobKey), input) {
+			t.Fatal("an input this large must sit in its own nested bucket")
 		}
 		return nil
 	})
@@ -787,5 +794,96 @@ func TestStageDrainSurvivesCrash(t *testing.T) {
 	got, err := s2.GetRun(ctx, "run-x")
 	if err != nil || got.Outcome == nil || got.Input != nil {
 		t.Fatalf("GetRun after reopen = %+v, %v", got, err)
+	}
+}
+
+// TestBlobRule pins the two forms of a variable-length value: at or
+// below the store's row limit the input, a state, and the output are the
+// row's value; above it each is a nested bucket holding one value. Both
+// read back the same, and terminality and reap delete both forms.
+func TestBlobRule(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(filepath.Join(t.TempDir(), "blobs.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if s.blobRowMax <= 0 || s.blobRowMax >= 4096 {
+		t.Fatalf("blobRowMax = %d; want bbolt's inline limit for a one-key bucket", s.blobRowMax)
+	}
+	now := time.Unix(1_700_000_000, 0).UTC()
+	oc := durable.OutcomeSuccess
+	for _, tc := range []struct {
+		name   string
+		size   int
+		bucket bool
+	}{
+		{"row", s.blobRowMax, false},
+		{"bucket", s.blobRowMax + 1, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			id := durable.RunID("run-" + tc.name)
+			val := bytes.Repeat([]byte{9}, tc.size)
+			rec := &driver.RunRecord{RunID: id, PipelineID: "p", ResourceID: durable.ResourceID(tc.name), Phase: durable.PhaseForward, Input: val, CreatedAt: now, UpdatedAt: now}
+			if _, created, err := s.CreateRun(ctx, rec, nil); err != nil || !created {
+				t.Fatalf("CreateRun = %v, %v", created, err)
+			}
+			if err := s.ApplyTransition(ctx, id, driver.Transition{Cursor: driver.Cursor{Phase: durable.PhaseForward, UpdatedAt: now}, Ops: []driver.OpWrite{{
+				StepID: "a/v1", Phase: durable.PhaseForward, Record: driver.OperationRecord{Status: driver.OpSucceeded, Attempts: 1, State: val, Order: 1},
+			}}}); err != nil {
+				t.Fatal(err)
+			}
+			s.db.View(func(tx *bolt.Tx) error {
+				active := tx.Bucket(activeBucket)
+				if isBucket := active.Bucket(activeKey(id, tagInput)) != nil; isBucket != tc.bucket {
+					t.Errorf("input stored as bucket=%v, want %v", isBucket, tc.bucket)
+				}
+				// A small state is inside its record; a large one is a
+				// bucket beside the row.
+				sk := stateKey(opKey(id, 1, "a/v1", durable.PhaseForward))
+				if isBucket := active.Bucket(sk) != nil; isBucket != tc.bucket {
+					t.Errorf("state beside the row as bucket=%v, want %v", isBucket, tc.bucket)
+				}
+				if _, v := findOp(active, id, "a/v1", durable.PhaseForward); (len(v) > tc.size) != !tc.bucket {
+					t.Errorf("operation row = %d bytes for a %d-byte state, bucket=%v", len(v), tc.size, tc.bucket)
+				}
+				return nil
+			})
+			got, err := s.GetRun(ctx, id)
+			if err != nil || !bytes.Equal(got.Input, val) || !bytes.Equal(got.Step("a/v1").Forward.State, val) {
+				t.Fatalf("GetRun = input %d, state %d, %v; want %d each", len(got.Input), len(got.Step("a/v1").Forward.State), err, tc.size)
+			}
+			if err := s.ApplyTransition(ctx, id, driver.Transition{Cursor: driver.Cursor{Phase: durable.PhaseDone, UpdatedAt: now}, Outcome: &oc, Output: val}); err != nil {
+				t.Fatal(err)
+			}
+			s.db.View(func(tx *bolt.Tx) error {
+				terminal := tx.Bucket(terminalBucket)
+				if isBucket := terminal.Bucket(outputKey(id)) != nil; isBucket != tc.bucket {
+					t.Errorf("output beside the row as bucket=%v, want %v", isBucket, tc.bucket)
+				}
+				if row := terminal.Get([]byte(id)); (len(row) > tc.size) != !tc.bucket {
+					t.Errorf("terminal row = %d bytes for a %d-byte output, bucket=%v", len(row), tc.size, tc.bucket)
+				}
+				return nil
+			})
+			if got, err := s.GetRun(ctx, id); err != nil || !bytes.Equal(got.Output, val) || got.Input != nil {
+				t.Fatalf("terminal GetRun = output %d, input %d, %v", len(got.Output), len(got.Input), err)
+			}
+			if err := s.Drain(); err != nil {
+				t.Fatal(err)
+			}
+			if n, err := s.ReapTerminal(ctx, now.Add(time.Second), 10); err != nil || n != 1 {
+				t.Fatalf("ReapTerminal = %d, %v", n, err)
+			}
+			s.db.View(func(tx *bolt.Tx) error {
+				if rows := activeRows(tx, id); len(rows) != 0 {
+					t.Errorf("%d active rows survived", len(rows))
+				}
+				if k, _ := tx.Bucket(terminalBucket).Cursor().First(); k != nil {
+					t.Errorf("terminal bucket still holds %q", k)
+				}
+				return nil
+			})
+		})
 	}
 }

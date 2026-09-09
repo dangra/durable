@@ -15,17 +15,21 @@
 //	  R·M                              -> RunMeta          write-once, refused twice
 //	  R·c                              -> CancelRequest    write-once, first cancel wins
 //	  R·f                              -> FailureRecord    write-once, refused twice
-//	  R·i                              -> nested bucket { i -> input bytes }
+//	  R·i                              -> input            blob: row or nested bucket
 //	  R·o·<order:4 BE>·<step>·<phase>  -> OperationRecord  one row per step and phase
 //	                                      phase byte: f forward, u unwind
+//	  R·o·<order:4 BE>·<step>·f·s      -> state            a large one, beside its row;
+//	                                                       a small one is in the record
 //
 //	bucket: cursor                     the one mutable row
 //	  R                                -> Cursor           rewritten on every attempt
 //
 //	bucket: terminal                   the whole of a terminal run
 //	  R                                -> Terminal         identity, annotations, phase,
-//	                                                       outcome, output, committed_at,
+//	                                                       outcome, committed_at,
 //	                                                       failure, cancel, failed_unwinds
+//	  R·O                              -> output           a large one, beside the row;
+//	                                                       a small one is in the record
 //
 //	bucket: expiry                     retention order of terminal runs
 //	  <committed_at:8 BE>·R            -> (empty)          written with the terminal row
@@ -38,9 +42,9 @@
 //	  <pipeline>·<resource>            -> R                held from CreateRun to terminality
 //
 // A run moves through it like this. CreateRun writes R·M, the input
-// bucket when there is one, the cursor row, and the slot, in one
+// blob when there is one, the cursor row, and the slot, in one
 // transaction. Each attempt rewrites only the cursor. Each resolution
-// appends one R·o row; an unresolved operation displaced by a topology
+// appends one R·o row, a large state beside it; an unresolved operation displaced by a topology
 // change is flushed at order zero and moves to its real order when it
 // resolves, the one delete before terminality. Cancel and failure land
 // as R·c and R·f. The terminality commit writes the terminal row —
@@ -58,16 +62,24 @@
 //
 // What each choice bought. Tags sort M, c, f, i, o, so one prefix walk
 // reads a run in the order a reader wants it, with operations in
-// resolution order and no sorting. The input is a nested bucket so its
-// bytes never share a leaf node with rows that change or with other
-// inputs: bbolt rewrites a whole leaf node on any write to it, and a
-// bucket over a quarter page gets pages of its own, so creating and
-// deleting an input touches the run's own pages plus one small entry in
-// the active leaf. Operation rows are plain rows because a nested bucket
-// costs a page per write for anything appended to (every write into a
-// child bucket rewrites the child's page and the parent's entry for it;
-// measured, and rejected, for a bucket per run and for a bucket per
-// run's operations). The cursor is its own bucket because it is the
+// resolution order and no sorting. The variable-length values — input,
+// state, output — follow one rule: a small one stays where it is (the
+// input as the row's value, a state or output inside its record), a
+// large one is a nested bucket of its own beside the row. bbolt
+// rewrites a whole leaf node on any write to it, so a large value must
+// never share a node with rows that change or with other large values
+// that come and go; a bucket over a quarter page gets pages of its own,
+// so writing and deleting the blob touches its own pages plus one small
+// entry in the parent leaf. A value of half a page or less stays put:
+// it shares leaves with its neighbours as cheaply as before, a bucket
+// would cost a page to write and an open to read, and a row of its own
+// beside the record sat on the leaf split boundary and got rewritten by
+// the next resolution (measured). Half a page is bbolt's node split
+// threshold, computed from the page size at Open. Operation rows are plain rows because a nested
+// bucket costs a page per write for anything appended to (every write
+// into a child bucket rewrites the child's page and the parent's entry
+// for it; measured, and rejected, for a bucket per run and for a bucket
+// per run's operations). The cursor is its own bucket because it is the
 // only row rewritten, so per-attempt write volume is the cursor's,
 // independent of input and state sizes. Terminal is one row because
 // everything a caller can still reach lives in it. The slots index
@@ -112,6 +124,13 @@ const (
 	tagOp      byte = 'o'
 )
 
+// stateSuffix follows an operation key to address the state blob written
+// beside it, so the row and its state share a leaf.
+var stateSuffix = []byte{0, 's'}
+
+// blobKey is the one key of a blob's nested bucket.
+var blobKey = []byte{'b'}
+
 // Store is a driver.Store backed by a bbolt database file.
 type Store struct {
 	db *bolt.DB
@@ -132,9 +151,16 @@ type Store struct {
 	// which drains whatever a crash left staged. The bucket is the
 	// truth; the counter only decides whether a write bothers to look.
 	staged atomic.Int64
-	stop   chan struct{}
-	done   chan struct{}
-	once   sync.Once
+
+	// blobRowMax is the largest value kept in place — the input as a row,
+	// a state or output inside its record; anything larger becomes a
+	// nested bucket of its own beside the row. It is half a page, bbolt's
+	// node split threshold: a value past it forces its leaf node to split
+	// and rides alone through every later rewrite.
+	blobRowMax int
+	stop       chan struct{}
+	done       chan struct{}
+	once       sync.Once
 }
 
 const (
@@ -189,7 +215,7 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("bbolt: initializing buckets: %w", err)
 	}
 	db.MaxBatchDelay = 2 * time.Millisecond
-	s := &Store{db: db, stop: make(chan struct{}), done: make(chan struct{})}
+	s := &Store{db: db, stop: make(chan struct{}), done: make(chan struct{}), blobRowMax: blobRowMaxFor(db.Info().PageSize)}
 	// Whatever the previous process left staged is drained now; the
 	// counter starts at zero and the sweep sees the bucket empty after.
 	if err := s.Drain(); err != nil {
@@ -386,7 +412,7 @@ func (s *Store) CreateRun(_ context.Context, rec *driver.RunRecord, excluding []
 				return err
 			}
 		}
-		if err := putRun(tx, rec); err != nil {
+		if err := s.putRun(tx, rec); err != nil {
 			return err
 		}
 		if err := slots.Put(slotKey(rec), []byte(rec.RunID)); err != nil {
@@ -412,11 +438,11 @@ func putOnce(b *bolt.Bucket, what string, id kernel.RunID, k, v []byte) error {
 // putRun persists every present component of rec; used at creation (and
 // for seeded records carrying pre-existing facts). A record seeded
 // terminal is written in its terminal stage.
-func putRun(tx *bolt.Tx, rec *driver.RunRecord) error {
+func (s *Store) putRun(tx *bolt.Tx, rec *driver.RunRecord) error {
 	if rec.Outcome != nil {
 		c := rec.Clone()
 		c.CompactTerminal()
-		return putTerminal(tx, c)
+		return s.putTerminal(tx, c)
 	}
 	active := tx.Bucket(activeBucket)
 	meta, err := storagepb.MarshalRunMeta(rec)
@@ -427,7 +453,7 @@ func putRun(tx *bolt.Tx, rec *driver.RunRecord) error {
 		return err
 	}
 	if len(rec.Input) > 0 {
-		if err := putInput(active, rec.RunID, rec.Input); err != nil {
+		if err := s.putBlob(active, activeKey(rec.RunID, tagInput), rec.Input); err != nil {
 			return err
 		}
 	}
@@ -450,7 +476,7 @@ func putRun(tx *bolt.Tx, rec *driver.RunRecord) error {
 	for sid, sr := range rec.Steps {
 		for _, phase := range []kernel.Phase{kernel.PhaseForward, kernel.PhaseUnwind} {
 			if op := sr.Op(phase); op.Status != driver.OpNone {
-				if err := putOp(tx, rec.RunID, sid, phase, op); err != nil {
+				if err := s.putOp(tx, rec.RunID, sid, phase, op); err != nil {
 					return err
 				}
 			}
@@ -522,7 +548,7 @@ func (s *Store) ApplyTransition(_ context.Context, id kernel.RunID, t driver.Tra
 			rec.Outcome = &oc
 			rec.Output = t.Output
 			rec.CompactTerminal()
-			if err := putTerminal(tx, rec); err != nil {
+			if err := s.putTerminal(tx, rec); err != nil {
 				return err
 			}
 			if err := tx.Bucket(stagedBucket).Put([]byte(id), []byte{}); err != nil {
@@ -548,7 +574,7 @@ func (s *Store) ApplyTransition(_ context.Context, id kernel.RunID, t driver.Tra
 		}
 		for _, ow := range t.Ops {
 			op := ow.Record
-			if err := putOp(tx, id, ow.StepID, ow.Phase, &op); err != nil {
+			if err := s.putOp(tx, id, ow.StepID, ow.Phase, &op); err != nil {
 				return err
 			}
 		}
@@ -560,15 +586,23 @@ func (s *Store) ApplyTransition(_ context.Context, id kernel.RunID, t driver.Tra
 	return err
 }
 
-// putTerminal writes the terminal row and its expiry index key, which
-// orders terminal runs by commit time for reap.
-func putTerminal(tx *bolt.Tx, rec *driver.RunRecord) error {
-	b, err := storagepb.MarshalTerminal(rec)
+// putTerminal writes the terminal row, its output blob when there is
+// one, and its expiry index key, which orders terminal runs by commit
+// time for reap.
+func (s *Store) putTerminal(tx *bolt.Tx, rec *driver.RunRecord) error {
+	beside := len(rec.Output) > s.blobRowMax
+	b, err := storagepb.MarshalTerminal(rec, beside)
 	if err != nil {
 		return err
 	}
-	if err := tx.Bucket(terminalBucket).Put([]byte(rec.RunID), b); err != nil {
+	terminal := tx.Bucket(terminalBucket)
+	if err := terminal.Put([]byte(rec.RunID), b); err != nil {
 		return err
+	}
+	if beside {
+		if err := s.putBlob(terminal, outputKey(rec.RunID), rec.Output); err != nil {
+			return err
+		}
 	}
 	return tx.Bucket(expiryBucket).Put(expiryKey(rec.UpdatedAt, rec.RunID), []byte{})
 }
@@ -587,11 +621,83 @@ func expiryKey(t time.Time, id kernel.RunID) []byte {
 	return append(expiryPrefix(t), id...)
 }
 
-// deleteNonterminalStage removes a run's active rows (the input's nested
-// bucket among them) and cursor. Active rows hang off the run id; they
-// are collected before deletion since bbolt forbids mutating a bucket
-// while iterating it. Deleting nothing is fine: a run may be reaped
-// before its drain.
+// blobRowMaxFor is the largest value kept in place: half a page, the
+// size at which bbolt splits a leaf node (its default fill is 50%).
+// Measured on the perf suite: at bbolt's inline-bucket limit instead
+// (a quarter page) the suite's 1 KB states all became buckets, a page
+// each and a bucket open per read, for 20% more bytes in Recovery and
+// 20 to 80% more allocations everywhere; as rows of their own beside
+// the record they cost 7 to 13% more bytes than in it.
+func blobRowMaxFor(pageSize int) int {
+	return pageSize / 2
+}
+
+// stateKey addresses the state blob beside the operation row at opKey.
+func stateKey(opKey []byte) []byte {
+	return append(bytes.Clone(opKey), stateSuffix...)
+}
+
+// outputKey addresses a terminal run's output blob, beside its row.
+func outputKey(id kernel.RunID) []byte {
+	return append(append([]byte(id), 0), 'O')
+}
+
+// putBlob stores v under key in b: as the row's value when it is at
+// most blobRowMax, otherwise as a nested bucket holding the one value,
+// which gets pages of its own. Nothing may be under key already; a
+// caller replacing a blob deletes it first.
+func (s *Store) putBlob(b *bolt.Bucket, key, v []byte) error {
+	if len(v) <= s.blobRowMax {
+		return b.Put(key, v)
+	}
+	nb, err := b.CreateBucket(key)
+	if err != nil {
+		return err
+	}
+	return nb.Put(blobKey, v)
+}
+
+// getBlob returns a copy of the blob under key, nil when there is none:
+// one seek, and a bucket open only when the key is there as a bucket.
+func getBlob(b *bolt.Bucket, key []byte) []byte {
+	k, v := b.Cursor().Seek(key)
+	if !bytes.Equal(k, key) {
+		return nil
+	}
+	return blobAt(b, key, v)
+}
+
+// blobAt returns a copy of the blob a cursor stopped on: v when the key
+// is a row, the bucket's value when it is not.
+func blobAt(b *bolt.Bucket, key, v []byte) []byte {
+	if v != nil {
+		return bytes.Clone(v)
+	}
+	return blobFromBucket(b, key)
+}
+
+func blobFromBucket(b *bolt.Bucket, key []byte) []byte {
+	if nb := b.Bucket(key); nb != nil {
+		return bytes.Clone(nb.Get(blobKey))
+	}
+	return nil
+}
+
+// deleteBlob removes whatever is under key, row or bucket; nothing is
+// fine.
+func deleteBlob(b *bolt.Bucket, key []byte) error {
+	if err := b.Delete(key); errors.Is(err, berrors.ErrIncompatibleValue) {
+		return b.DeleteBucket(key)
+	} else if err != nil {
+		return err
+	}
+	return nil
+}
+
+// deleteNonterminalStage removes a run's active rows (blob buckets among
+// them) and cursor. Active rows hang off the run id; they are collected
+// before deletion since bbolt forbids mutating a bucket while iterating
+// it. Deleting nothing is fine: a run may be reaped before its drain.
 func deleteNonterminalStage(tx *bolt.Tx, id kernel.RunID) error {
 	active := tx.Bucket(activeBucket)
 	prefix := runPrefix(id)
@@ -601,38 +707,11 @@ func deleteNonterminalStage(tx *bolt.Tx, id kernel.RunID) error {
 		keys = append(keys, bytes.Clone(k))
 	}
 	for _, k := range keys {
-		var err error
-		if k[len(prefix)] == tagInput {
-			err = active.DeleteBucket(k)
-		} else {
-			err = active.Delete(k)
-		}
-		if err != nil {
+		if err := deleteBlob(active, k); err != nil {
 			return err
 		}
 	}
 	return tx.Bucket(cursorBucket).Delete([]byte(id))
-}
-
-// inputKey is the one key of a run's input bucket.
-var inputKey = []byte{'i'}
-
-// putInput stores the input as the sole value of a nested bucket under
-// the run's input tag. A bucket larger than a quarter page gets pages of
-// its own, so creating and deleting it writes the run's own pages plus
-// one small entry in the active leaf — never the neighbours' inputs,
-// which sharing a leaf node would rewrite on every insert and delete —
-// and, living under the run prefix, it costs the terminality commit no
-// extra tree.
-func putInput(active *bolt.Bucket, id kernel.RunID, input []byte) error {
-	ib, err := active.CreateBucket(activeKey(id, tagInput))
-	if err != nil {
-		if errors.Is(err, berrors.ErrBucketExists) {
-			return fmt.Errorf("bbolt: input of run %s already written", id)
-		}
-		return err
-	}
-	return ib.Put(inputKey, input)
 }
 
 // findOp locates the run's row for step and phase, whatever its order.
@@ -651,23 +730,49 @@ func findOp(active *bolt.Bucket, id kernel.RunID, step kernel.StepID, phase kern
 	return nil, nil
 }
 
-// putOp writes the run's one row for the operation. A row already there
-// under another order — an unresolved flush resolving to its real order,
-// or the contract's upsert — is removed so the step and phase keep one
-// row.
-func putOp(tx *bolt.Tx, id kernel.RunID, step kernel.StepID, phase kernel.Phase, op *driver.OperationRecord) error {
-	b, err := storagepb.MarshalOperationRecord(op)
+// putOp writes the run's one row for the operation and, for a forward
+// operation carrying committed state, the state blob beside it. A row
+// already there under another order — an unresolved flush resolving to
+// its real order, or the contract's upsert — is removed so the step and
+// phase keep one row.
+func (s *Store) putOp(tx *bolt.Tx, id kernel.RunID, step kernel.StepID, phase kernel.Phase, op *driver.OperationRecord) error {
+	beside := phase == kernel.PhaseForward && len(op.State) > s.blobRowMax
+	row := *op
+	if beside {
+		row.State = nil
+	}
+	b, err := storagepb.MarshalOperationRecord(&row)
 	if err != nil {
 		return err
 	}
 	active := tx.Bucket(activeBucket)
 	key := opKey(id, op.Order, step, phase)
-	if old, _ := findOp(active, id, step, phase); old != nil && !bytes.Equal(old, key) {
-		if err := active.Delete(bytes.Clone(old)); err != nil {
+	old, _ := findOp(active, id, step, phase)
+	if old != nil {
+		old = bytes.Clone(old)
+	}
+	if old != nil && !bytes.Equal(old, key) {
+		if err := active.Delete(old); err != nil {
 			return err
 		}
 	}
-	return active.Put(key, b)
+	if err := active.Put(key, b); err != nil {
+		return err
+	}
+	if phase != kernel.PhaseForward {
+		return nil
+	}
+	// A state beside a row can only be there if a row was: replacing a
+	// row replaces it, and a fresh row has none to delete.
+	if old != nil {
+		if err := deleteBlob(active, stateKey(old)); err != nil {
+			return err
+		}
+	}
+	if beside {
+		return s.putBlob(active, stateKey(key), op.State)
+	}
+	return nil
 }
 
 func putRootFailure(tx *bolt.Tx, id kernel.RunID, rf *kernel.Failure) error {
@@ -686,10 +791,15 @@ func putRootFailure(tx *bolt.Tx, id kernel.RunID, rf *kernel.Failure) error {
 func getRun(tx *bolt.Tx, id kernel.RunID) (*driver.RunRecord, error) {
 	// The terminal row is authoritative: the stage may linger until it
 	// drains.
-	if tb := tx.Bucket(terminalBucket).Get([]byte(id)); tb != nil {
+	terminal := tx.Bucket(terminalBucket)
+	if tb := terminal.Get([]byte(id)); tb != nil {
 		rec := &driver.RunRecord{}
-		if err := storagepb.UnmarshalTerminalInto(tb, rec); err != nil {
+		beside, err := storagepb.UnmarshalTerminalInto(tb, rec)
+		if err != nil {
 			return nil, err
+		}
+		if beside {
+			rec.Output = getBlob(terminal, outputKey(id))
 		}
 		return rec, nil
 	}
@@ -718,9 +828,7 @@ func getNonterminal(tx *bolt.Tx, id kernel.RunID) (*driver.RunRecord, error) {
 		}
 		switch tag {
 		case tagInput:
-			if ib := active.Bucket(k); ib != nil {
-				rec.Input = bytes.Clone(ib.Get(inputKey))
-			}
+			rec.Input = blobAt(active, k, v)
 		case tagCancel:
 			cr, err := storagepb.UnmarshalCancel(v)
 			if err != nil {
@@ -734,6 +842,14 @@ func getNonterminal(tx *bolt.Tx, id kernel.RunID) (*driver.RunRecord, error) {
 			}
 			rec.Failure = &f
 		case tagOp:
+			if bytes.HasSuffix(rest, stateSuffix) {
+				_, step, phase, ok := splitOpRest(rest[:len(rest)-len(stateSuffix)])
+				if !ok || phase != kernel.PhaseForward {
+					return nil, fmt.Errorf("bbolt: malformed state key %q", k)
+				}
+				rec.Step(step).Forward.State = blobAt(active, k, v)
+				continue
+			}
 			_, step, phase, ok := splitOpRest(rest)
 			if !ok {
 				return nil, fmt.Errorf("bbolt: malformed operation key %q", k)
@@ -807,6 +923,9 @@ func (s *Store) ReapTerminal(_ context.Context, before time.Time, limit int) (in
 				return err
 			}
 			if err := tx.Bucket(terminalBucket).Delete(id); err != nil {
+				return err
+			}
+			if err := deleteBlob(tx.Bucket(terminalBucket), outputKey(kernel.RunID(id))); err != nil {
 				return err
 			}
 			if err := expiry.Delete(k); err != nil {

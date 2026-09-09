@@ -635,7 +635,9 @@ type OperationRecord struct {
 	Status   OpStatus               `protobuf:"varint,1,opt,name=status,proto3,enum=durable.storage.v1.OpStatus" json:"status,omitempty"`
 	Attempts uint64                 `protobuf:"varint,2,opt,name=attempts,proto3" json:"attempts,omitempty"`
 	// Committed step state: forward operations of state-producing steps,
-	// on success.
+	// on success. A store may keep a large state beside the row instead,
+	// as a value of its own, so it never shares a page with rows that
+	// change; the record then carries none.
 	State []byte `protobuf:"bytes,3,opt,name=state,proto3" json:"state,omitempty"`
 	// Set exactly when status is FAILED.
 	Failure *FailureRecord `protobuf:"bytes,4,opt,name=failure,proto3" json:"failure,omitempty"`
@@ -808,8 +810,10 @@ func (x *FailureRecord) GetReason() string {
 // every other operation row, and the cursor's scheduling state do not
 // survive terminality.
 type Terminal struct {
-	state       protoimpl.MessageState `protogen:"open.v1"`
-	Outcome     Outcome                `protobuf:"varint,1,opt,name=outcome,proto3,enum=durable.storage.v1.Outcome" json:"outcome,omitempty"`
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Outcome Outcome                `protobuf:"varint,1,opt,name=outcome,proto3,enum=durable.storage.v1.Outcome" json:"outcome,omitempty"`
+	// The output; a store may keep a large one beside the row instead, as
+	// a value of its own, and says so with output_beside.
 	Output      []byte                 `protobuf:"bytes,2,opt,name=output,proto3" json:"output,omitempty"`
 	RunId       string                 `protobuf:"bytes,3,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
 	PipelineId  string                 `protobuf:"bytes,4,opt,name=pipeline_id,json=pipelineId,proto3" json:"pipeline_id,omitempty"`
@@ -828,7 +832,10 @@ type Terminal struct {
 	// The run's failure, when the forward phase ended in one.
 	Failure *FailureRecord `protobuf:"bytes,11,opt,name=failure,proto3" json:"failure,omitempty"`
 	// The cancellation request, when one was recorded before terminality.
-	Cancel        *CancelRequest `protobuf:"bytes,12,opt,name=cancel,proto3" json:"cancel,omitempty"`
+	Cancel *CancelRequest `protobuf:"bytes,12,opt,name=cancel,proto3" json:"cancel,omitempty"`
+	// True when the store keeps the output beside the row rather than in
+	// it, so a reader knows to look without probing for every run.
+	OutputBeside  bool `protobuf:"varint,13,opt,name=output_beside,json=outputBeside,proto3" json:"output_beside,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -947,6 +954,13 @@ func (x *Terminal) GetCancel() *CancelRequest {
 	return nil
 }
 
+func (x *Terminal) GetOutputBeside() bool {
+	if x != nil {
+		return x.OutputBeside
+	}
+	return false
+}
+
 type CancelRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Cause         string                 `protobuf:"bytes,1,opt,name=cause,proto3" json:"cause,omitempty"`
@@ -1052,7 +1066,7 @@ const file_durable_storage_v1_storage_proto_rawDesc = "" +
 	"\amessage\x18\x04 \x01(\tR\amessage\x12*\n" +
 	"\x02at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\x02at\x123\n" +
 	"\x04kind\x18\x06 \x01(\x0e2\x1f.durable.storage.v1.FailureKindR\x04kind\x12\x16\n" +
-	"\x06reason\x18\a \x01(\tR\x06reason\"\xa5\x06\n" +
+	"\x06reason\x18\a \x01(\tR\x06reason\"\xca\x06\n" +
 	"\bTerminal\x125\n" +
 	"\aoutcome\x18\x01 \x01(\x0e2\x1b.durable.storage.v1.OutcomeR\aoutcome\x12\x16\n" +
 	"\x06output\x18\x02 \x01(\fR\x06output\x12\x15\n" +
@@ -1069,7 +1083,8 @@ const file_durable_storage_v1_storage_proto_rawDesc = "" +
 	"\x0efailed_unwinds\x18\n" +
 	" \x03(\v2/.durable.storage.v1.Terminal.FailedUnwindsEntryR\rfailedUnwinds\x12;\n" +
 	"\afailure\x18\v \x01(\v2!.durable.storage.v1.FailureRecordR\afailure\x129\n" +
-	"\x06cancel\x18\f \x01(\v2!.durable.storage.v1.CancelRequestR\x06cancel\x1a>\n" +
+	"\x06cancel\x18\f \x01(\v2!.durable.storage.v1.CancelRequestR\x06cancel\x12#\n" +
+	"\routput_beside\x18\r \x01(\bR\foutputBeside\x1a>\n" +
 	"\x10AnnotationsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1ae\n" +

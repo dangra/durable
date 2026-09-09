@@ -45,6 +45,11 @@ const (
 	inputSize = 32 << 10
 	stateSize = 1 << 10
 	numSteps  = 8
+
+	// The fat-blob scenarios: a state and an output large enough that a
+	// bbolt leaf node holding one spills across several pages.
+	fatStateSize  = 16 << 10
+	fatOutputSize = 32 << 10
 )
 
 // scale shrinks scenario populations under -short (and in -race runs,
@@ -157,7 +162,15 @@ type stepSpec struct {
 }
 
 func machinePipeline(id durable.PipelineID, specs [numSteps]stepSpec) *pipelinedef.Definition {
-	state := wrapperspb.Bytes(make([]byte, stateSize))
+	return sizedPipeline(id, specs, stateSize, 0)
+}
+
+// sizedPipeline is machinePipeline with the committed state size chosen
+// and, when outputBytes is positive, a reducer producing an output of
+// that size. The fat-blob scenarios use it to put a large value where
+// the store must keep it away from rows that change.
+func sizedPipeline(id durable.PipelineID, specs [numSteps]stepSpec, stateBytes, outputBytes int) *pipelinedef.Definition {
+	state := wrapperspb.Bytes(make([]byte, stateBytes))
 	var steps []pipelinedef.Step
 	for i, spec := range specs {
 		spec := spec
@@ -183,11 +196,16 @@ func machinePipeline(id durable.PipelineID, specs [numSteps]stepSpec) *pipelined
 		}
 		steps = append(steps, sc)
 	}
-	return pipelinedef.New(pipelinedef.Config{
+	cfg := pipelinedef.Config{
 		ID:       id,
 		Steps:    steps,
 		NewInput: func() proto.Message { return &wrapperspb.BytesValue{} },
-	})
+	}
+	if outputBytes > 0 {
+		output := wrapperspb.Bytes(make([]byte, outputBytes))
+		cfg.Reduce = func(durable.ReduceView) proto.Message { return output }
+	}
+	return pipelinedef.New(cfg)
 }
 
 // runPopulation schedules n runs concurrently and waits for all of them,

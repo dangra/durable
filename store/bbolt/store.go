@@ -148,6 +148,15 @@ func Open(path string) (*Store, error) {
 		// the remap lock. Reserves virtual address space only.
 		FreelistType:    bolt.FreelistMapType,
 		InitialMmapSize: 1 << 30,
+		// bbolt otherwise writes its freelist on every commit, and that
+		// page grows with the number of free pages, so a store that
+		// releases a run's input and states when the run ends would pay
+		// for every page it freed on every later write. With the sync
+		// off the freelist is rebuilt at Open by scanning the file — a
+		// cost proportional to the database, which the stage split keeps
+		// proportional to the runs in flight and the retained terminal
+		// rows.
+		NoFreelistSync: true,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("bbolt: opening %s: %w", path, err)

@@ -38,8 +38,13 @@ func (s *enteredSignal) signal() { s.once.Do(func() { close(s.ch) }) }
 // introspects the blocker's input, cancels it (unwinding its work), and
 // reschedules. One cycle = conflict + introspection + cancel + unwind +
 // fresh run to completion, per resource, across a concurrent population.
+//
+// The population is sized so the store's trees are past a single leaf
+// page for every layout before most cycles run (see BenchmarkRecovery);
+// the engine's concurrency, not the cycle count, bounds how many stale
+// runs hold a slot at once.
 func BenchmarkSupersedeCycle(b *testing.B) {
-	cycles := scale(b, 60)
+	cycles := scale(b, 300)
 
 	var (
 		mu      sync.Mutex

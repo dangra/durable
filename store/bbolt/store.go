@@ -93,7 +93,10 @@
 // read of a run costs one copy per blob instead of a seek, a bucket
 // open, and a clone from the file. Entries are filled by the writes
 // that store the blobs, dropped at terminality, and refilled from the
-// file on the first read after a restart.
+// file on the first read after a restart. A second, least-recently-used
+// cache holds the large outputs of terminal runs for the read that
+// follows Wait. Both are bounded in bytes by Open's options
+// (WithBlobCache, WithOutputCache) or the URI's query (see Scheme).
 package bbolt
 
 import (
@@ -167,11 +170,13 @@ type Store struct {
 	// and rides alone through every later rewrite.
 	blobRowMax int
 	// blobs caches the immutable blobs of the runs in flight; see
-	// blobCache.
-	blobs *blobCache
-	stop  chan struct{}
-	done  chan struct{}
-	once  sync.Once
+	// blobCache. outputs caches the large outputs of terminal runs; see
+	// outputCache.
+	blobs   *blobCache
+	outputs *outputCache
+	stop    chan struct{}
+	done    chan struct{}
+	once    sync.Once
 }
 
 const (
@@ -189,9 +194,40 @@ const (
 	stageDrainPerSweep = 256
 )
 
+// Option configures a Store at Open.
+type Option func(*config)
+
+type config struct {
+	blobCache, outputCache int
+}
+
+// DefaultOutputCache is the output cache's default limit in bytes (see
+// WithOutputCache).
+const DefaultOutputCache = 16 << 20
+
+// WithBlobCache bounds, in bytes, the in-memory cache of the blobs of
+// the runs in flight — each run's input and the states kept beside their
+// rows — which serves reads of a nonterminal run without touching the
+// file. Memory is otherwise bounded by the runs in flight, roughly the
+// input plus the large states of each; a run past the limit is not
+// cached and reads from the file. Zero disables the cache. The default
+// is DefaultBlobCache.
+func WithBlobCache(limit int) Option { return func(c *config) { c.blobCache = limit } }
+
+// WithOutputCache bounds, in bytes, the in-memory cache of the large
+// outputs of terminal runs, which serves the read that follows Wait
+// without touching the file. Terminal runs live until reap, so this
+// cache evicts least recently used entries past the limit. Zero disables
+// it. The default is DefaultOutputCache.
+func WithOutputCache(limit int) Option { return func(c *config) { c.outputCache = limit } }
+
 // Open opens (creating if needed) the database at path. It fails if another
 // process holds the file lock, enforcing exclusive ownership.
-func Open(path string) (*Store, error) {
+func Open(path string, opts ...Option) (*Store, error) {
+	cfg := config{blobCache: DefaultBlobCache, outputCache: DefaultOutputCache}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
 	db, err := bolt.Open(path, 0o600, &bolt.Options{
 		Timeout: time.Second,
 		// Hashmap freelists stay fast as churn grows (array freelists
@@ -226,7 +262,7 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("bbolt: initializing buckets: %w", err)
 	}
 	db.MaxBatchDelay = 2 * time.Millisecond
-	s := &Store{db: db, stop: make(chan struct{}), done: make(chan struct{}), blobRowMax: blobRowMaxFor(db.Info().PageSize), blobs: newBlobCache(blobCacheLimit)}
+	s := &Store{db: db, stop: make(chan struct{}), done: make(chan struct{}), blobRowMax: blobRowMaxFor(db.Info().PageSize), blobs: newBlobCache(cfg.blobCache), outputs: newOutputCache(cfg.outputCache)}
 	// Whatever the previous process left staged is drained now; the
 	// counter starts at zero and the sweep sees the bucket empty after.
 	if err := s.Drain(); err != nil {
@@ -605,6 +641,9 @@ func (s *Store) ApplyTransition(_ context.Context, id kernel.RunID, t driver.Tra
 	if t.Outcome != nil {
 		s.staged.Add(1)
 		s.blobs.drop(id)
+		if len(t.Output) > s.blobRowMax {
+			s.outputs.put(id, t.Output)
+		}
 		return nil
 	}
 	// A forward row written with a state beside it caches that state;
@@ -835,7 +874,12 @@ func (s *Store) getRun(tx *bolt.Tx, id kernel.RunID) (*driver.RunRecord, error) 
 			return nil, err
 		}
 		if beside {
-			rec.Output = getBlob(terminal, outputKey(id))
+			if out := s.outputs.get(id); out != nil {
+				rec.Output = out
+			} else {
+				rec.Output = getBlob(terminal, outputKey(id))
+				s.outputs.put(id, rec.Output)
+			}
 		}
 		return rec, nil
 	}
@@ -1011,6 +1055,7 @@ func (s *Store) ReapTerminal(_ context.Context, before time.Time, limit int) (in
 			if err := tx.Bucket(stagedBucket).Delete(id); err != nil {
 				return err
 			}
+			s.outputs.drop(kernel.RunID(id))
 			deleted++
 		}
 		return nil

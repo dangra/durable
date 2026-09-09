@@ -6,10 +6,9 @@ import (
 	"github.com/dangra/durable/kernel"
 )
 
-// blobCacheLimit bounds the blob cache in bytes. Past it a run's blobs
-// are not cached and its reads fall back to bbolt; nothing already
-// cached is evicted, since entries leave at terminality anyway.
-const blobCacheLimit = 64 << 20
+// DefaultBlobCache is the blob cache's default limit in bytes (see
+// WithBlobCache).
+const DefaultBlobCache = 64 << 20
 
 // blobCache holds the immutable blobs of the runs in flight — each run's
 // input and the committed states kept beside their rows — so a read of

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/dangra/durable/store"
 	"github.com/dangra/durable/store/driver"
 	"path/filepath"
 	"reflect"
@@ -957,3 +958,100 @@ func TestBlobCacheServesReads(t *testing.T) {
 }
 
 func (s *Store) pageSizeOrDefault() int { return s.db.Info().PageSize }
+
+// TestOptions pins the options and their URI forms: the byte counts
+// parse with binary units, an unknown key is rejected, and zero disables
+// a cache.
+func TestOptions(t *testing.T) {
+	for in, want := range map[string]int{"0": 0, "4096": 4096, "64K": 64 << 10, "128MiB": 128 << 20, "1g": 1 << 30, " 2 kib ": 2 << 10} {
+		if got, err := parseBytes(in); err != nil || got != want {
+			t.Errorf("parseBytes(%q) = %d, %v; want %d", in, got, err, want)
+		}
+	}
+	for _, bad := range []string{"", "x", "-1", "1.5M", "1TiB"} {
+		if _, err := parseBytes(bad); err == nil {
+			t.Errorf("parseBytes(%q) accepted", bad)
+		}
+	}
+	dir := t.TempDir()
+	if _, err := store.Open("bbolt:" + filepath.Join(dir, "a.db") + "?blob_cache=1&bogus=2"); err == nil {
+		t.Fatal("an unknown option must be rejected")
+	}
+	st, err := store.Open("bbolt:" + filepath.Join(dir, "b.db") + "?blob_cache=0&output_cache=1MiB")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := st.(*Store)
+	defer s.Close()
+	if s.blobs.limit != 0 || s.outputs.limit != 1<<20 {
+		t.Fatalf("limits = %d, %d", s.blobs.limit, s.outputs.limit)
+	}
+	// A disabled blob cache never caches; reads still come from the file.
+	ctx := context.Background()
+	now := time.Unix(1_700_000_000, 0).UTC()
+	input := bytes.Repeat([]byte{1}, 8192)
+	if _, created, err := s.CreateRun(ctx, &driver.RunRecord{RunID: "r", PipelineID: "p", ResourceID: "r", Phase: durable.PhaseForward, Input: input, CreatedAt: now, UpdatedAt: now}, nil); err != nil || !created {
+		t.Fatal(err)
+	}
+	if _, cached := s.blobs.input("r"); cached {
+		t.Fatal("a zero limit must cache nothing")
+	}
+	if got, err := s.GetRun(ctx, "r"); err != nil || !bytes.Equal(got.Input, input) {
+		t.Fatalf("GetRun = %d bytes, %v", len(got.Input), err)
+	}
+}
+
+// TestOutputCache pins the output cache: a large output is cached when
+// its terminality commits and served to the read after Wait — shown by
+// planting other bytes — least recently used entries leave past the
+// limit, and reap drops a victim's entry.
+func TestOutputCache(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(filepath.Join(t.TempDir(), "out.db"), WithOutputCache(3*8192))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	now := time.Unix(1_700_000_000, 0).UTC()
+	oc := durable.OutcomeSuccess
+	finish := func(id durable.RunID, fill byte) {
+		t.Helper()
+		out := bytes.Repeat([]byte{fill}, 8192)
+		rec := &driver.RunRecord{RunID: id, PipelineID: "p", ResourceID: durable.ResourceID(id), Phase: durable.PhaseForward, CreatedAt: now, UpdatedAt: now}
+		if _, created, err := s.CreateRun(ctx, rec, nil); err != nil || !created {
+			t.Fatal(err)
+		}
+		if err := s.ApplyTransition(ctx, id, driver.Transition{Cursor: driver.Cursor{Phase: durable.PhaseDone, UpdatedAt: now}, Outcome: &oc, Output: out}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	finish("a", 1)
+	if s.outputs.get("a") == nil {
+		t.Fatal("terminality must cache a large output")
+	}
+	planted := bytes.Repeat([]byte{9}, 8192)
+	s.outputs.put("a", planted)
+	if got, err := s.GetRun(ctx, "a"); err != nil || !bytes.Equal(got.Output, planted) {
+		t.Fatalf("GetRun = %x…, %v; want the cache's bytes", got.Output[:1], err)
+	}
+	// Three fit; a fourth evicts the least recently used, which is "a"
+	// unless it was read last.
+	finish("b", 2)
+	finish("c", 3)
+	s.outputs.get("a")
+	finish("d", 4)
+	if s.outputs.get("b") != nil || s.outputs.get("a") == nil || s.outputs.get("d") == nil {
+		t.Fatal("eviction must drop the least recently used entry")
+	}
+	// A miss reads the file and refills.
+	if got, err := s.GetRun(ctx, "b"); err != nil || got.Output[0] != 2 || s.outputs.get("b") == nil {
+		t.Fatalf("GetRun(b) = %v; the miss must read the file and refill", err)
+	}
+	// Reap drops victims.
+	if n, err := s.ReapTerminal(ctx, now.Add(time.Second), 10); err != nil || n != 4 {
+		t.Fatalf("ReapTerminal = %d, %v", n, err)
+	}
+	if s.outputs.get("d") != nil || s.outputs.size != 0 {
+		t.Fatalf("reap must drop every victim's entry; size = %d", s.outputs.size)
+	}
+}

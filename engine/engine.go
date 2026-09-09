@@ -755,18 +755,22 @@ func (e *Engine) processRun(id durable.RunID) (time.Duration, bool) {
 }
 
 // requestCancel is the one path a cancel request takes to the store.
-// Once written, the Run is marked dirty so its worker re-reads, the
+// Once accepted, the Run is marked dirty so its worker re-reads, the
 // in-flight attempt is preempted, and the Run is dispatched. A terminal
 // Run returns durable.ErrRunTerminal, a missing one durable.ErrRunNotFound;
-// a later request is a no-op.
+// a request after the first is a no-op, since the first did all of this.
 func (e *Engine) requestCancel(ctx context.Context, id durable.RunID, cause string) error {
 	cause = e.boundText(cause)
 	accepted, err := e.store.RequestCancel(ctx, id, driver.CancelRequest{Cause: cause, At: e.clock.Now()})
 	if err != nil {
 		return err
 	}
+	if !accepted {
+		// The first request won and its own call did all of this.
+		return nil
+	}
 	e.dirty.Mark(id)
-	if accepted && e.debugLog() {
+	if e.debugLog() {
 		e.logger.Debug("durable: cancel requested", "run", string(id), "cause", cause)
 	}
 	e.preemptAttempt(id, cause)

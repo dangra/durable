@@ -421,7 +421,10 @@ commit time against the carried record's, the fingerprint of the last
 transition; a disagreement is a contract fault, logged, and the loop
 re-reads in full rather than trust memory. A cancel request is
 write-once, so a pass whose record holds one reads nothing further. A
-failed transition ends the pass, and the next dispatch reads fresh.
+failed transition ends the pass, and the next dispatch reads fresh. The
+discipline is checked, not assumed: every transition advances the
+record's commit time, even under a clock that does not, and an
+iteration that continued without one is treated as the same fault.
 
 ---
 

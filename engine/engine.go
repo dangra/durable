@@ -593,15 +593,20 @@ func (e *Engine) takePreempted(id durable.RunID) (string, bool) {
 // Run's cursor, operations, failure, and outcome comes from that worker,
 // which mutates the record in memory and then persists exactly that, so
 // after a successful apply the record it holds is the store's. The loop
-// carries it across iterations; a continue is valid only after a
+// carries it across iterations. A continue is valid only after a
 // successful apply, and every path that fails one returns, so the next
-// dispatch reads fresh. The one row another goroutine writes is the
-// cancel request: each later iteration reads the head for it, and the
-// head's cursor doubles as a check on the carry — a disagreement is a
-// contract bug, logged, and the loop falls back to a full read rather
-// than trust memory.
+// dispatch reads fresh; the loop checks that discipline rather than
+// assume it (see refreshCarried). The one row another goroutine writes
+// is the cancel request: each later iteration reads the head for it,
+// and the head's commit time doubles as a check on the carry — a
+// disagreement is a contract bug, logged, and the loop falls back to a
+// full read rather than trust memory.
 func (e *Engine) processRun(id durable.RunID) (time.Duration, bool) {
 	var rec *driver.RunRecord
+	// stamp is the carried record's commit time when the previous
+	// iteration began; apply advances it, so an iteration that continued
+	// without one is caught.
+	var stamp time.Time
 	for {
 		if e.baseCtx.Err() != nil {
 			return 0, false
@@ -617,22 +622,18 @@ func (e *Engine) processRun(id durable.RunID) (time.Duration, bool) {
 				e.logger.Error("durable: store read failed", "run", id, "error", err)
 				return time.Second, true
 			}
-		} else if !rec.Terminal() && rec.Cancel == nil {
-			// A cancel request is write-once, so once the record holds
-			// one nothing in the store can change under the worker and
-			// the rest of the pass reads nothing.
-			head, err := e.store.GetRunHead(e.baseCtx, id)
+		} else if !rec.Terminal() {
+			var err error
+			rec, err = e.refreshCarried(id, rec, stamp)
 			if err != nil {
 				e.logger.Error("durable: store read failed", "run", id, "error", err)
 				return time.Second, true
 			}
-			if !carriedAgrees(rec, head) {
-				e.logger.Error("durable: carried run record disagrees with the store; re-reading", "run", id)
-				rec = nil
+			if rec == nil {
 				continue
 			}
-			rec.Cancel = head.Cancel
 		}
+		stamp = rec.UpdatedAt
 		if rec.Terminal() {
 			e.waiters.Notify(id)
 			e.awaitTargetDone(id)
@@ -760,6 +761,33 @@ func (e *Engine) processRun(id durable.RunID) (time.Duration, bool) {
 			return 0, false
 		}
 	}
+}
+
+// refreshCarried is the prologue of an iteration that carries rec from
+// the previous one. It returns rec, current, or nil when the carry must
+// be abandoned for a full read: the previous iteration continued without
+// a transition (its commit time did not advance past stamp), which the
+// loop's discipline forbids, or the store's head disagrees with the
+// record. A cancel request is write-once, so a record holding one has
+// nothing left to learn and reads nothing.
+func (e *Engine) refreshCarried(id durable.RunID, rec *driver.RunRecord, stamp time.Time) (*driver.RunRecord, error) {
+	if !rec.UpdatedAt.After(stamp) {
+		e.logger.Error("durable: carried run record continued without a transition; re-reading", "run", id)
+		return nil, nil
+	}
+	if rec.Cancel != nil {
+		return rec, nil
+	}
+	head, err := e.store.GetRunHead(e.baseCtx, id)
+	if err != nil {
+		return nil, err
+	}
+	if !carriedAgrees(rec, head) {
+		e.logger.Error("durable: carried run record disagrees with the store; re-reading", "run", id)
+		return nil, nil
+	}
+	rec.Cancel = head.Cancel
+	return rec, nil
 }
 
 // carriedAgrees reports whether the head the store returns is the
@@ -1550,7 +1578,14 @@ func idleCursor(rec *driver.RunRecord) driver.Cursor { return activeCursor(rec, 
 // unwind operation displaced by topology change) is flushed as a step row
 // so its attempt count survives.
 func (e *Engine) apply(rec *driver.RunRecord, t driver.Transition) bool {
-	rec.UpdatedAt = e.clock.Now()
+	// The commit time advances on every transition, even under a clock
+	// that does not: the reconcile loop reads it as the proof that an
+	// iteration made one.
+	now := e.clock.Now()
+	if !now.After(rec.UpdatedAt) {
+		now = rec.UpdatedAt.Add(time.Nanosecond)
+	}
+	rec.UpdatedAt = now
 	t.Cursor.UpdatedAt = rec.UpdatedAt
 	for id, sr := range rec.Steps {
 		if id == t.Cursor.StepID {

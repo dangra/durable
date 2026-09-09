@@ -887,3 +887,78 @@ func TestBlobRule(t *testing.T) {
 		})
 	}
 }
+
+// TestBlobCacheServesReads pins the blob cache: once a run's input and
+// large states are written, reads come from the cache — shown by
+// deleting the blobs behind the store's back and reading them anyway —
+// the entry goes at terminality, and a reopened store fills its entry
+// from the file on the first read.
+func TestBlobCacheServesReads(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "cache.db")
+	s := open(t, path)
+	now := time.Unix(1_700_000_000, 0).UTC()
+	input := bytes.Repeat([]byte{1}, 8192)
+	state := bytes.Repeat([]byte{2}, 4*s.pageSizeOrDefault())
+	rec := &driver.RunRecord{RunID: "run-c", PipelineID: "p", ResourceID: "r", Phase: durable.PhaseForward, Input: input, CreatedAt: now, UpdatedAt: now}
+	if _, created, err := s.CreateRun(ctx, rec, nil); err != nil || !created {
+		t.Fatalf("CreateRun = %v, %v", created, err)
+	}
+	opk := opKey("run-c", 1, "a/v1", durable.PhaseForward)
+	if err := s.ApplyTransition(ctx, "run-c", driver.Transition{Cursor: driver.Cursor{Phase: durable.PhaseForward, UpdatedAt: now}, Ops: []driver.OpWrite{{
+		StepID: "a/v1", Phase: durable.PhaseForward, Record: driver.OperationRecord{Status: driver.OpSucceeded, Attempts: 1, State: state, Order: 1},
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	_ = opk
+	// Reads take the blobs from the cache: plant different bytes there
+	// and the read returns them, while the file still holds the
+	// originals.
+	planted, plantedState := bytes.Repeat([]byte{7}, len(input)), bytes.Repeat([]byte{8}, len(state))
+	s.blobs.setInput("run-c", planted)
+	s.blobs.setState("run-c", "a/v1", plantedState)
+	got, err := s.GetRun(ctx, "run-c")
+	if err != nil || !bytes.Equal(got.Input, planted) || !bytes.Equal(got.Step("a/v1").Forward.State, plantedState) {
+		t.Fatalf("GetRun = input %x…, state %x…, %v; want the cache's bytes", got.Input[:1], got.Step("a/v1").Forward.State[:1], err)
+	}
+	s.db.View(func(tx *bolt.Tx) error {
+		if in := getBlob(tx.Bucket(activeBucket), activeKey("run-c", tagInput)); !bytes.Equal(in, input) {
+			t.Fatal("the file must still hold the original input")
+		}
+		return nil
+	})
+	// The copy is the caller's: changing it does not change the next read.
+	got.Input[0] = 9
+	if again, _ := s.GetRun(ctx, "run-c"); again.Input[0] != 7 {
+		t.Fatal("a cached read must return a copy")
+	}
+	// Terminality drops the entry.
+	oc := durable.OutcomeSuccess
+	if err := s.ApplyTransition(ctx, "run-c", driver.Transition{Cursor: driver.Cursor{Phase: durable.PhaseDone, UpdatedAt: now}, Outcome: &oc}); err != nil {
+		t.Fatal(err)
+	}
+	if _, cached := s.blobs.input("run-c"); cached {
+		t.Fatal("terminality must drop the run's cache entry")
+	}
+
+	// A reopened store fills from the file on the first read.
+	rec2 := &driver.RunRecord{RunID: "run-d", PipelineID: "p", ResourceID: "r2", Phase: durable.PhaseForward, Input: input, CreatedAt: now, UpdatedAt: now}
+	if _, created, err := s.CreateRun(ctx, rec2, nil); err != nil || !created {
+		t.Fatalf("CreateRun = %v, %v", created, err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s2 := open(t, path)
+	if _, cached := s2.blobs.input("run-d"); cached {
+		t.Fatal("a fresh store starts cold")
+	}
+	if got, err := s2.GetRun(ctx, "run-d"); err != nil || !bytes.Equal(got.Input, input) {
+		t.Fatalf("GetRun after reopen = %d bytes, %v", len(got.Input), err)
+	}
+	if in, cached := s2.blobs.input("run-d"); !cached || !bytes.Equal(in, input) {
+		t.Fatal("the first read must fill the cache")
+	}
+}
+
+func (s *Store) pageSizeOrDefault() int { return s.db.Info().PageSize }

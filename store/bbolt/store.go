@@ -158,9 +158,12 @@ type Store struct {
 	// node split threshold: a value past it forces its leaf node to split
 	// and rides alone through every later rewrite.
 	blobRowMax int
-	stop       chan struct{}
-	done       chan struct{}
-	once       sync.Once
+	// blobs caches the immutable blobs of the runs in flight; see
+	// blobCache.
+	blobs *blobCache
+	stop  chan struct{}
+	done  chan struct{}
+	once  sync.Once
 }
 
 const (
@@ -215,7 +218,7 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("bbolt: initializing buckets: %w", err)
 	}
 	db.MaxBatchDelay = 2 * time.Millisecond
-	s := &Store{db: db, stop: make(chan struct{}), done: make(chan struct{}), blobRowMax: blobRowMaxFor(db.Info().PageSize)}
+	s := &Store{db: db, stop: make(chan struct{}), done: make(chan struct{}), blobRowMax: blobRowMaxFor(db.Info().PageSize), blobs: newBlobCache(blobCacheLimit)}
 	// Whatever the previous process left staged is drained now; the
 	// counter starts at zero and the sweep sees the bucket empty after.
 	if err := s.Drain(); err != nil {
@@ -399,7 +402,7 @@ func (s *Store) CreateRun(_ context.Context, rec *driver.RunRecord, excluding []
 		// occupant found is the blocker reported to the caller.
 		if activeID := slots.Get(slotKey(rec)); activeID != nil {
 			var err error
-			existing, err = getRun(tx, kernel.RunID(activeID))
+			existing, err = s.getRun(tx, kernel.RunID(activeID))
 			return err
 		}
 		for _, p := range excluding {
@@ -408,7 +411,7 @@ func (s *Store) CreateRun(_ context.Context, rec *driver.RunRecord, excluding []
 			}
 			if activeID := slots.Get(slotKeyFor(p, rec.ResourceID)); activeID != nil {
 				var err error
-				existing, err = getRun(tx, kernel.RunID(activeID))
+				existing, err = s.getRun(tx, kernel.RunID(activeID))
 				return err
 			}
 		}
@@ -423,6 +426,14 @@ func (s *Store) CreateRun(_ context.Context, rec *driver.RunRecord, excluding []
 	})
 	if err != nil {
 		return nil, false, err
+	}
+	if created {
+		s.blobs.setInput(rec.RunID, rec.Input)
+		for sid, sr := range rec.Steps {
+			if len(sr.Forward.State) > s.blobRowMax {
+				s.blobs.setState(rec.RunID, sid, sr.Forward.State)
+			}
+		}
 	}
 	return existing, created, nil
 }
@@ -523,7 +534,7 @@ func (s *Store) ApplyTransition(_ context.Context, id kernel.RunID, t driver.Tra
 			// transition's ops, then its cursor's in-flight overlay) and
 			// compacted by the shared rule, so the failed unwinds it
 			// keeps are the same ones the model keeps.
-			rec, err := getNonterminal(tx, id)
+			rec, err := s.getNonterminal(tx, id)
 			if err != nil {
 				return err
 			}
@@ -580,10 +591,27 @@ func (s *Store) ApplyTransition(_ context.Context, id kernel.RunID, t driver.Tra
 		}
 		return nil
 	})
-	if err == nil && t.Outcome != nil {
-		s.staged.Add(1)
+	if err != nil {
+		return err
 	}
-	return err
+	if t.Outcome != nil {
+		s.staged.Add(1)
+		s.blobs.drop(id)
+		return nil
+	}
+	// A forward row written with a state beside it caches that state;
+	// one written without drops whatever the step had.
+	for _, ow := range t.Ops {
+		if ow.Phase != kernel.PhaseForward {
+			continue
+		}
+		if len(ow.Record.State) > s.blobRowMax {
+			s.blobs.setState(id, ow.StepID, ow.Record.State)
+		} else {
+			s.blobs.setState(id, ow.StepID, nil)
+		}
+	}
+	return nil
 }
 
 // putTerminal writes the terminal row, its output blob when there is
@@ -788,7 +816,7 @@ func putRootFailure(tx *bolt.Tx, id kernel.RunID, rf *kernel.Failure) error {
 // prefix walk of the active rows (the input's bucket among them) and the
 // cursor with its in-flight operation overlaid as an unresolved step
 // entry.
-func getRun(tx *bolt.Tx, id kernel.RunID) (*driver.RunRecord, error) {
+func (s *Store) getRun(tx *bolt.Tx, id kernel.RunID) (*driver.RunRecord, error) {
 	// The terminal row is authoritative: the stage may linger until it
 	// drains.
 	terminal := tx.Bucket(terminalBucket)
@@ -803,14 +831,22 @@ func getRun(tx *bolt.Tx, id kernel.RunID) (*driver.RunRecord, error) {
 		}
 		return rec, nil
 	}
-	return getNonterminal(tx, id)
+	return s.getNonterminal(tx, id)
 }
 
 // getNonterminal reads a nonterminal run from one prefix walk of its
 // active rows — the meta row sorts first, so its absence is
 // ErrRunNotFound — and its cursor.
-func getNonterminal(tx *bolt.Tx, id kernel.RunID) (*driver.RunRecord, error) {
+func (s *Store) getNonterminal(tx *bolt.Tx, id kernel.RunID) (*driver.RunRecord, error) {
 	rec := &driver.RunRecord{}
+	// Blobs come from the cache when the run is in it; a run that is not
+	// (a restart, or the cache was full) reads them from the file and,
+	// on a cold miss, fills its entry.
+	cachedInput, cached := s.blobs.input(id)
+	var fill *runBlobs
+	if !cached {
+		fill = &runBlobs{}
+	}
 	prefix := runPrefix(id)
 	active := tx.Bucket(activeBucket)
 	c := active.Cursor()
@@ -821,6 +857,10 @@ func getNonterminal(tx *bolt.Tx, id kernel.RunID) (*driver.RunRecord, error) {
 	if err := storagepb.UnmarshalRunMetaInto(v, rec); err != nil {
 		return nil, err
 	}
+	// A state key follows its row: remembering the row's key and step
+	// spares parsing the state key, and the string it would allocate.
+	var lastOpKey []byte
+	var lastStep kernel.StepID
 	for k, v = c.Next(); k != nil && bytes.HasPrefix(k, prefix); k, v = c.Next() {
 		_, tag, rest, ok := splitActiveKey(k)
 		if !ok {
@@ -828,7 +868,14 @@ func getNonterminal(tx *bolt.Tx, id kernel.RunID) (*driver.RunRecord, error) {
 		}
 		switch tag {
 		case tagInput:
-			rec.Input = blobAt(active, k, v)
+			if cachedInput != nil {
+				rec.Input = cachedInput
+			} else {
+				rec.Input = blobAt(active, k, v)
+				if fill != nil {
+					fill.input = rec.Input
+				}
+			}
 		case tagCancel:
 			cr, err := storagepb.UnmarshalCancel(v)
 			if err != nil {
@@ -843,11 +890,28 @@ func getNonterminal(tx *bolt.Tx, id kernel.RunID) (*driver.RunRecord, error) {
 			rec.Failure = &f
 		case tagOp:
 			if bytes.HasSuffix(rest, stateSuffix) {
-				_, step, phase, ok := splitOpRest(rest[:len(rest)-len(stateSuffix)])
-				if !ok || phase != kernel.PhaseForward {
-					return nil, fmt.Errorf("bbolt: malformed state key %q", k)
+				var step kernel.StepID
+				if rowKey := k[:len(k)-len(stateSuffix)]; bytes.Equal(rowKey, lastOpKey) {
+					step = lastStep
+				} else {
+					var phase kernel.Phase
+					var ok bool
+					_, step, phase, ok = splitOpRest(rest[:len(rest)-len(stateSuffix)])
+					if !ok || phase != kernel.PhaseForward {
+						return nil, fmt.Errorf("bbolt: malformed state key %q", k)
+					}
 				}
-				rec.Step(step).Forward.State = blobAt(active, k, v)
+				if st := s.blobs.state(id, step); st != nil {
+					rec.Step(step).Forward.State = st
+				} else {
+					rec.Step(step).Forward.State = blobAt(active, k, v)
+					if fill != nil {
+						if fill.states == nil {
+							fill.states = make(map[kernel.StepID][]byte)
+						}
+						fill.states[step] = rec.Step(step).Forward.State
+					}
+				}
 				continue
 			}
 			_, step, phase, ok := splitOpRest(rest)
@@ -859,9 +923,14 @@ func getNonterminal(tx *bolt.Tx, id kernel.RunID) (*driver.RunRecord, error) {
 				return nil, err
 			}
 			*rec.Step(step).Op(phase) = op
+			lastOpKey, lastStep = k, step
 		default:
 			return nil, fmt.Errorf("bbolt: unknown active row tag %q in key %q", tag, k)
 		}
+	}
+
+	if fill != nil {
+		s.blobs.fill(id, fill)
 	}
 
 	cb := tx.Bucket(cursorBucket).Get([]byte(id))
@@ -895,7 +964,7 @@ func (s *Store) GetRun(_ context.Context, id kernel.RunID) (*driver.RunRecord, e
 	var rec *driver.RunRecord
 	err := s.db.View(func(tx *bolt.Tx) error {
 		var err error
-		rec, err = getRun(tx, id)
+		rec, err = s.getRun(tx, id)
 		return err
 	})
 	return rec, err
@@ -980,7 +1049,7 @@ func (s *Store) ListNonterminal(_ context.Context) ([]*driver.RunRecord, error) 
 	var out []*driver.RunRecord
 	err := s.db.View(func(tx *bolt.Tx) error {
 		return tx.Bucket(slotsBucket).ForEach(func(_, v []byte) error {
-			rec, err := getRun(tx, kernel.RunID(v))
+			rec, err := s.getRun(tx, kernel.RunID(v))
 			if err != nil {
 				return fmt.Errorf("bbolt: slot references run %s: %w", v, err)
 			}

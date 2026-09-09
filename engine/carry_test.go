@@ -2,16 +2,11 @@ package engine_test
 
 import (
 	"context"
-	"log/slog"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/dangra/durable"
-	"github.com/dangra/durable/engine"
 	"github.com/dangra/durable/pipelinedef"
-	"github.com/dangra/durable/store/driver"
-	"github.com/dangra/durable/store/mem"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -36,8 +31,8 @@ func countOps(log *eventLog) map[string]int {
 }
 
 // The reconcile loop reads the full record once per dispatch and carries
-// it: the iterations that follow each resolution read the head, for the
-// cancel request, never the record again.
+// it: the iterations that follow each resolution read nothing. The only
+// heads are Wait's own.
 func TestReconcileReadsTheFullRecordOncePerDispatch(t *testing.T) {
 	log := &eventLog{}
 	_, pipes := startObservedEngine(t, log, []*pipelinedef.Definition{threeSteps("p")})
@@ -52,64 +47,15 @@ func TestReconcileReadsTheFullRecordOncePerDispatch(t *testing.T) {
 	if counts["GetRun"] != 1 {
 		t.Fatalf("GetRun ops = %d; want exactly one, the dispatch's (%v)", counts["GetRun"], counts)
 	}
-	// Three resolutions and the completion each start an iteration that
-	// refreshes the head.
-	if counts["GetRunHead"] < 3 {
-		t.Fatalf("GetRunHead ops = %d; want at least one per iteration after the first (%v)", counts["GetRunHead"], counts)
+	// Wait reads a head after registering and one more after the wake.
+	if counts["GetRunHead"] > 2 {
+		t.Fatalf("GetRunHead ops = %d; want Wait's at most, the loop reads none (%v)", counts["GetRunHead"], counts)
 	}
 }
 
-// lyingHeads is a store whose heads never match the carried record.
-type lyingHeads struct{ driver.Store }
-
-func (s lyingHeads) GetRunHead(ctx context.Context, id durable.RunID) (*driver.RunRecord, error) {
-	h, err := s.Store.GetRunHead(ctx, id)
-	if err == nil {
-		h.UpdatedAt = h.UpdatedAt.Add(time.Hour)
-	}
-	return h, err
-}
-
-// A head that disagrees with the carried record is a contract bug: the
-// loop logs it and re-reads the full record rather than trust memory,
-// and the Run still completes.
-func TestCarriedRecordDisagreementFallsBackToFullRead(t *testing.T) {
-	log := &eventLog{}
-	buf := &lockedBuffer{}
-	logger := slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	e := engine.New(lyingHeads{mem.New()}, fastRetry, engine.WithRecoveryBackoff(0),
-		engine.WithObserver(log.observer()), engine.WithLogger(logger))
-	pipe, err := e.Bind(threeSteps("p"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := e.Start(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = e.Stop(ctx)
-	})
-	run, _, err := pipe.Schedule(context.Background(), "r", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if res, err := run.Wait(context.Background()); err != nil || !res.Succeeded() {
-		t.Fatalf("Wait = %+v, %v", res, err)
-	}
-	if counts := countOps(log); counts["GetRun"] < 3 {
-		t.Fatalf("GetRun ops = %d; want a full re-read per disagreement (%v)", counts["GetRun"], counts)
-	}
-	if !strings.Contains(buf.String(), "carried run record disagrees") {
-		t.Fatalf("no disagreement logged:\n%s", buf.String())
-	}
-}
-
-// A cancel request is write-once, so once the carried record holds one
-// nothing in the store can change under the worker: the rest of the
-// pass — the doomed operation's resolution, the cancel transition, every
-// unwind — reads nothing at all.
+// A cancel request reaches the worker through the engine's mark, so a
+// pass reads nothing after its dispatch: the doomed operation's
+// resolution, the cancel transition, every unwind.
 func TestCanceledPassReadsNothing(t *testing.T) {
 	log := &eventLog{}
 	blocked := make(chan struct{})
@@ -135,8 +81,6 @@ func TestCanceledPassReadsNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	<-blocked
-	// Step a resolved before the cancel, and its iteration refreshed the
-	// head as any would; the claim is about what follows the cancel.
 	before := countOps(log)
 	if err := run.Cancel(context.Background(), "op"); err != nil {
 		t.Fatal(err)
@@ -157,12 +101,66 @@ func TestCanceledPassReadsNothing(t *testing.T) {
 	}
 	counts := countOps(log)
 	if heads := counts["GetRunHead"] - before["GetRunHead"]; heads != 0 {
-		t.Fatalf("GetRunHead ops after the cancel = %d; a pass holding a cancel must read no head (%v)", heads, counts)
+		t.Fatalf("GetRunHead ops after the cancel = %d; the loop reads no head (%v)", heads, counts)
 	}
 	if counts["GetRun"] < 2 {
 		t.Fatalf("GetRun ops = %d; want one per dispatch, and the retry redispatched (%v)", counts["GetRun"], counts)
 	}
 	if res, err := run.Wait(context.Background()); err != nil || !res.Canceled() {
 		t.Fatalf("Wait = %+v, %v; want canceled", res, err)
+	}
+}
+
+// A cancel that lands between two resolutions of one pass is seen by the
+// next iteration through the engine's mark, with no re-read: the pass
+// that started forward ends canceled and unwound on its one dispatch.
+func TestCancelMidPassIsTakenFromTheMark(t *testing.T) {
+	log := &eventLog{}
+	blocked, release := make(chan struct{}), make(chan struct{})
+	noUnwind := func(ctx context.Context, inv durable.Invocation) error { return nil }
+	def := pipelinedef.New(pipelinedef.Config{
+		ID: "p",
+		Steps: []pipelinedef.Step{
+			{ID: "a/v1", Unwind: true, Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) { return nil, nil }, UnwindFunc: noUnwind},
+			{ID: "b/v1", Unwind: true, Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
+				// Resolves cleanly whatever the context says: the pass
+				// continues rather than retries.
+				close(blocked)
+				<-release
+				return nil, nil
+			}, UnwindFunc: noUnwind},
+			stateless("c/v1", noUnwind),
+		},
+	})
+	_, pipes := startObservedEngine(t, log, []*pipelinedef.Definition{def})
+	run, _, err := pipes[0].Schedule(context.Background(), "r", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-blocked
+	if err := run.Cancel(context.Background(), "op"); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	if res, err := run.Wait(context.Background()); err != nil || !res.Canceled() {
+		t.Fatalf("Wait = %+v, %v; want canceled", res, err)
+	}
+	// c never ran: the cancel was seen before it was selected, on the
+	// record the pass carried.
+	var cRan bool
+	log.locked(func() {
+		for _, a := range log.attempts {
+			if a.StepID == "c/v1" {
+				cRan = true
+			}
+		}
+	})
+	if cRan {
+		t.Fatal("step c ran: the mid-pass cancel was not seen on the carried record")
+	}
+	// One full read for the pass, at most one more for the cancel's
+	// re-poke after the worker exited.
+	if counts := countOps(log); counts["GetRun"] > 2 {
+		t.Fatalf("GetRun ops = %d; want the dispatch and at most the re-poke (%v)", counts["GetRun"], counts)
 	}
 }

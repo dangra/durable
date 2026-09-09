@@ -236,6 +236,11 @@ type Engine struct {
 	// lets a returned Fail wrapping *PreemptedError be attributed as
 	// FailureKindCanceled truthfully. Consumed by the next resolution.
 	preempted map[durable.RunID]string
+	// cancels holds, per Run, the cancel request the store accepted since
+	// the Run's worker last looked. Every cancel goes through the engine,
+	// so the worker takes the request from here instead of reading the
+	// store for it: after the dispatch's read, a pass reads nothing.
+	cancels map[durable.RunID]*driver.CancelRequest
 
 	// pipelines and stepOwner are written by register, under mu, and
 	// frozen by Start; a Put after that panics, and workers read them
@@ -284,6 +289,7 @@ func New(store driver.Store, opts ...Option) *Engine {
 		invalid:       make(map[durable.RunID]*InvalidRunError),
 		attemptCancel: make(map[durable.RunID]context.CancelCauseFunc),
 		preempted:     make(map[durable.RunID]string),
+		cancels:       make(map[durable.RunID]*driver.CancelRequest),
 		classCapacity: make(map[string]int),
 		awaitTimers:   make(map[durable.RunID]chan struct{}),
 	}
@@ -597,10 +603,10 @@ func (e *Engine) takePreempted(id durable.RunID) (string, bool) {
 // successful apply, and every path that fails one returns, so the next
 // dispatch reads fresh; the loop checks that discipline rather than
 // assume it (see refreshCarried). The one row another goroutine writes
-// is the cancel request: each later iteration reads the head for it,
-// and the head's commit time doubles as a check on the carry — a
-// disagreement is a contract bug, logged, and the loop falls back to a
-// full read rather than trust memory.
+// is the cancel request, and every cancel goes through the engine
+// (requestCancel), which marks the Run once the store accepts it: the
+// loop takes the mark, so after the dispatch's read a pass reads
+// nothing.
 func (e *Engine) processRun(id durable.RunID) (time.Duration, bool) {
 	var rec *driver.RunRecord
 	// stamp is the carried record's commit time when the previous
@@ -622,19 +628,17 @@ func (e *Engine) processRun(id durable.RunID) (time.Duration, bool) {
 				e.logger.Error("durable: store read failed", "run", id, "error", err)
 				return time.Second, true
 			}
+			// The read may have preceded the store's acceptance of a
+			// cancel whose mark is already set; taking it is idempotent.
+			e.takeCancel(id, rec)
 		} else if !rec.Terminal() {
-			var err error
-			rec, err = e.refreshCarried(id, rec, stamp)
-			if err != nil {
-				e.logger.Error("durable: store read failed", "run", id, "error", err)
-				return time.Second, true
-			}
-			if rec == nil {
+			if rec = e.refreshCarried(id, rec, stamp); rec == nil {
 				continue
 			}
 		}
 		stamp = rec.UpdatedAt
 		if rec.Terminal() {
+			e.dropCancel(id)
 			e.waiters.Notify(id)
 			e.awaitTargetDone(id)
 			return 0, false
@@ -767,39 +771,61 @@ func (e *Engine) processRun(id durable.RunID) (time.Duration, bool) {
 // the previous one. It returns rec, current, or nil when the carry must
 // be abandoned for a full read: the previous iteration continued without
 // a transition (its commit time did not advance past stamp), which the
-// loop's discipline forbids, or the store's head disagrees with the
-// record. A cancel request is write-once, so a record holding one has
-// nothing left to learn and reads nothing.
-func (e *Engine) refreshCarried(id durable.RunID, rec *driver.RunRecord, stamp time.Time) (*driver.RunRecord, error) {
+// loop's discipline forbids. A cancel request accepted since the pass
+// began is taken from the engine's mark; nothing is read.
+func (e *Engine) refreshCarried(id durable.RunID, rec *driver.RunRecord, stamp time.Time) *driver.RunRecord {
 	if !rec.UpdatedAt.After(stamp) {
 		e.logger.Error("durable: carried run record continued without a transition; re-reading", "run", id)
-		return nil, nil
+		return nil
 	}
-	if rec.Cancel != nil {
-		return rec, nil
-	}
-	head, err := e.store.GetRunHead(e.baseCtx, id)
-	if err != nil {
-		return nil, err
-	}
-	if !carriedAgrees(rec, head) {
-		e.logger.Error("durable: carried run record disagrees with the store; re-reading", "run", id)
-		return nil, nil
-	}
-	rec.Cancel = head.Cancel
-	return rec, nil
+	e.takeCancel(id, rec)
+	return rec
 }
 
-// carriedAgrees reports whether the head the store returns is the
-// record the loop carries. UpdatedAt is the fingerprint: every apply
-// sets it to the clock and persists it with the cursor, and every other
-// field the head carries — stage, retry time, failure, in-flight
-// operation — was written in that same transition, so an equal
-// UpdatedAt says the store holds the transition the loop last wrote.
-// A terminal head means another writer committed the run, which the
-// one-worker-per-Run rule excludes; memory is dropped either way.
-func carriedAgrees(rec, head *driver.RunRecord) bool {
-	return !head.Terminal() && head.UpdatedAt.Equal(rec.UpdatedAt)
+// requestCancel is the one path a cancel request takes to the store.
+// Once the store accepts it the Run is marked so its worker learns of
+// it without a read, the in-flight attempt is preempted, and the Run is
+// dispatched. A terminal Run returns durable.ErrRunTerminal, a missing
+// one durable.ErrRunNotFound; a later request is a no-op.
+func (e *Engine) requestCancel(ctx context.Context, id durable.RunID, cause string) error {
+	cause = e.boundText(cause)
+	req := driver.CancelRequest{Cause: cause, At: e.clock.Now()}
+	accepted, err := e.store.RequestCancel(ctx, id, req)
+	if err != nil {
+		return err
+	}
+	if accepted {
+		e.mu.Lock()
+		e.cancels[id] = &req
+		e.mu.Unlock()
+		if e.debugLog() {
+			e.logger.Debug("durable: cancel requested", "run", string(id), "cause", cause)
+		}
+	}
+	e.preemptAttempt(id, cause)
+	e.disp.Wake(id)
+	e.disp.Dispatch(id, 0)
+	return nil
+}
+
+// takeCancel consumes the Run's cancel mark, if any, onto rec. The first
+// request wins, so a record already holding one keeps it.
+func (e *Engine) takeCancel(id durable.RunID, rec *driver.RunRecord) {
+	e.mu.Lock()
+	req, ok := e.cancels[id]
+	delete(e.cancels, id)
+	e.mu.Unlock()
+	if ok && rec.Cancel == nil {
+		cr := *req
+		rec.Cancel = &cr
+	}
+}
+
+// dropCancel discards a mark a terminal Run can no longer take.
+func (e *Engine) dropCancel(id durable.RunID) {
+	e.mu.Lock()
+	delete(e.cancels, id)
+	e.mu.Unlock()
 }
 
 // forwardStarted reports whether the Step's forward operation has ever

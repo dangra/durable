@@ -16,10 +16,16 @@ type carryLog struct{ strings.Builder }
 
 func (l *carryLog) Write(p []byte) (int, error) { return l.Builder.Write(p) }
 
+type fixedClock struct{ t time.Time }
+
+func (c fixedClock) Now() time.Time                       { return c.t }
+func (c fixedClock) After(time.Duration) <-chan time.Time { return nil }
+
 // The carry's discipline is checked, not assumed: an iteration that
-// continued without a transition, or whose head disagrees, abandons the
-// record for a full read; one that transitioned carries on, taking the
-// cancel request from the head; one holding a cancel reads nothing.
+// continued without a transition abandons the record for a full read;
+// one that transitioned carries on, taking a cancel request the engine
+// was handed since — the first request wins, so a record already
+// holding one keeps it — and reads nothing either way.
 func TestRefreshCarriedGuardsTheDiscipline(t *testing.T) {
 	ctx := context.Background()
 	logs := &carryLog{}
@@ -37,16 +43,15 @@ func TestRefreshCarriedGuardsTheDiscipline(t *testing.T) {
 	}
 
 	// No transition since the stamp: the continue was illegal.
-	if got, err := e.refreshCarried("r1", rec, rec.UpdatedAt); got != nil || err != nil {
-		t.Fatalf("refreshCarried without a transition = %v, %v; want nil", got, err)
+	if got := e.refreshCarried("r1", rec, rec.UpdatedAt); got != nil {
+		t.Fatalf("refreshCarried without a transition = %v; want nil", got)
 	}
 	if !strings.Contains(logs.String(), "continued without a transition") {
 		t.Fatalf("no log:\n%s", logs.String())
 	}
 
 	// A transition advances the commit time — under a stalled clock too
-	// — and the carry survives, with the cancel request taken from the
-	// store.
+	// — and the carry survives, with no mark to take.
 	stamp := rec.UpdatedAt
 	e.clock = fixedClock{now}
 	if !e.apply(rec, driver.Transition{Cursor: activeCursor(rec, "a/v1", 1)}) {
@@ -55,46 +60,29 @@ func TestRefreshCarriedGuardsTheDiscipline(t *testing.T) {
 	if !rec.UpdatedAt.After(stamp) {
 		t.Fatalf("UpdatedAt did not advance: %v vs %v", rec.UpdatedAt, stamp)
 	}
-	if _, err := st.RequestCancel(ctx, "r1", driver.CancelRequest{Cause: "op", At: now}); err != nil {
-		t.Fatal(err)
-	}
-	got, err := e.refreshCarried("r1", rec, stamp)
-	if err != nil || got != rec || got.Cancel == nil || got.Cancel.Cause != "op" {
-		t.Fatalf("refreshCarried after a transition = %+v, %v; want the record with the cancel", got, err)
+	if got := e.refreshCarried("r1", rec, stamp); got != rec || got.Cancel != nil {
+		t.Fatalf("refreshCarried after a transition = %+v; want the record, no cancel", got)
 	}
 
-	// Holding a cancel: nothing is read, so even a store that would
-	// disagree is never consulted.
-	stamp = rec.UpdatedAt
-	if !e.apply(rec, driver.Transition{Cursor: idleCursor(rec)}) {
-		t.Fatal("apply failed")
+	// A cancel accepted since is taken from the mark, once.
+	e.mu.Lock()
+	e.cancels["r1"] = &driver.CancelRequest{Cause: "op", At: now}
+	e.mu.Unlock()
+	if got := e.refreshCarried("r1", rec, stamp); got != rec || got.Cancel == nil || got.Cancel.Cause != "op" {
+		t.Fatalf("refreshCarried with a mark = %+v; want the cancel taken", got)
 	}
-	e.store = lyingStore{st}
-	if got, err := e.refreshCarried("r1", rec, stamp); err != nil || got != rec {
-		t.Fatalf("refreshCarried holding a cancel = %v, %v; want the record untouched", got, err)
+	e.mu.Lock()
+	_, lingering := e.cancels["r1"]
+	e.mu.Unlock()
+	if lingering {
+		t.Fatal("the mark must be consumed")
 	}
 
-	// Without a cancel, a disagreeing head abandons the carry.
-	rec.Cancel = nil
-	if got, err := e.refreshCarried("r1", rec, stamp); got != nil || err != nil {
-		t.Fatalf("refreshCarried with a lying head = %v, %v; want nil", got, err)
+	// The first request wins: a later mark never replaces a held one.
+	e.mu.Lock()
+	e.cancels["r1"] = &driver.CancelRequest{Cause: "later", At: now}
+	e.mu.Unlock()
+	if got := e.refreshCarried("r1", rec, stamp); got.Cancel.Cause != "op" {
+		t.Fatalf("a later mark replaced the held cancel: %+v", got.Cancel)
 	}
-	if !strings.Contains(logs.String(), "disagrees with the store") {
-		t.Fatalf("no log:\n%s", logs.String())
-	}
-}
-
-type fixedClock struct{ t time.Time }
-
-func (c fixedClock) Now() time.Time                       { return c.t }
-func (c fixedClock) After(time.Duration) <-chan time.Time { return nil }
-
-type lyingStore struct{ driver.Store }
-
-func (s lyingStore) GetRunHead(ctx context.Context, id durable.RunID) (*driver.RunRecord, error) {
-	h, err := s.Store.GetRunHead(ctx, id)
-	if err == nil {
-		h.UpdatedAt = h.UpdatedAt.Add(time.Hour)
-	}
-	return h, err
 }

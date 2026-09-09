@@ -35,51 +35,6 @@ func BenchmarkBootBurst(b *testing.B) {
 	report(b, v, runs, lat, time.Since(start))
 }
 
-// BenchmarkFatState is BenchmarkBootBurst with a large committed state
-// per step: the shape of a step that records a whole device or config
-// description rather than a handle. It pins the store's handling of a
-// large value written beside rows that keep changing — every later
-// operation row of the same run lands next to the state in key order,
-// so a layout that keeps the state in the same leaf node rewrites it on
-// each of those resolutions. Compare diskB/run against BootBurst: the
-// difference is what the fat states cost beyond their own bytes.
-func BenchmarkFatState(b *testing.B) {
-	runs := scale(b, 60)
-	def := sizedPipeline("fat-state", [numSteps]stepSpec{}, fatStateSize, 0)
-	v := newEnv(b, def)
-	v.start(b)
-
-	b.ResetTimer()
-	start := time.Now()
-	var lat []time.Duration
-	for i := 0; i < b.N; i++ {
-		lat = append(lat, runPopulation(b, v.pipe, runs, fmt.Sprintf("fat-state-%d", i))...)
-	}
-	report(b, v, runs, lat, time.Since(start))
-}
-
-// BenchmarkFatOutput is BenchmarkBootBurst with a large terminal output:
-// the shape of a pipeline whose result is a description the size of its
-// input. It pins the store's handling of a large value written once at
-// terminality beside the other terminal rows — commits land in order,
-// so a layout that keeps the output in the terminal row rewrites it
-// every time a neighbouring run commits into the same leaf until the
-// leaf fills. Compare diskB/run against BootBurst.
-func BenchmarkFatOutput(b *testing.B) {
-	runs := scale(b, 60)
-	def := sizedPipeline("fat-output", [numSteps]stepSpec{}, stateSize, fatOutputSize)
-	v := newEnv(b, def)
-	v.start(b)
-
-	b.ResetTimer()
-	start := time.Now()
-	var lat []time.Duration
-	for i := 0; i < b.N; i++ {
-		lat = append(lat, runPopulation(b, v.pipe, runs, fmt.Sprintf("fat-output-%d", i))...)
-	}
-	report(b, v, runs, lat, time.Since(start))
-}
-
 // BenchmarkShape is the store cost of a run by what it carries. Each of
 // the three values a run can carry — input, committed step state, and
 // output — is varied one at a time, at slim (a few fields) and fat (the

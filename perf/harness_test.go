@@ -46,11 +46,6 @@ const (
 	stateSize = 1 << 10
 	numSteps  = 8
 
-	// The fat-blob scenarios: a state and an output large enough that a
-	// bbolt leaf node holding one spills across several pages.
-	fatStateSize  = 16 << 10
-	fatOutputSize = 32 << 10
-
 	// The shape matrix: a slim value is a few fields; a fat one is the
 	// machine config's size.
 	slimValueSize = 256
@@ -167,15 +162,7 @@ type stepSpec struct {
 }
 
 func machinePipeline(id durable.PipelineID, specs [numSteps]stepSpec) *pipelinedef.Definition {
-	return sizedPipeline(id, specs, stateSize, 0)
-}
-
-// sizedPipeline is machinePipeline with the committed state size chosen
-// and, when outputBytes is positive, a reducer producing an output of
-// that size. The fat-blob scenarios use it to put a large value where
-// the store must keep it away from rows that change.
-func sizedPipeline(id durable.PipelineID, specs [numSteps]stepSpec, stateBytes, outputBytes int) *pipelinedef.Definition {
-	return shapedPipeline(id, specs, pipelineShape{input: true, stateBytes: stateBytes, outputBytes: outputBytes})
+	return shapedPipeline(id, specs, pipelineShape{input: true, stateBytes: stateSize})
 }
 
 // pipelineShape is what a pipeline's runs carry: an input at all, a

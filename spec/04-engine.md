@@ -417,9 +417,11 @@ outcome, and persists exactly the record it holds, so after a successful
 transition the record in memory is the store's and the loop carries it
 across iterations. Each later iteration reads the head for the cancel
 request — the one row another goroutine writes — and checks the head's
-cursor against the carried record; a disagreement is a contract fault,
-logged, and the loop re-reads in full rather than trust memory. A failed
-transition ends the pass, and the next dispatch reads fresh.
+commit time against the carried record's, the fingerprint of the last
+transition; a disagreement is a contract fault, logged, and the loop
+re-reads in full rather than trust memory. A cancel request is
+write-once, so a pass whose record holds one reads nothing further. A
+failed transition ends the pass, and the next dispatch reads fresh.
 
 ---
 

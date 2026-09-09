@@ -617,7 +617,10 @@ func (e *Engine) processRun(id durable.RunID) (time.Duration, bool) {
 				e.logger.Error("durable: store read failed", "run", id, "error", err)
 				return time.Second, true
 			}
-		} else if !rec.Terminal() {
+		} else if !rec.Terminal() && rec.Cancel == nil {
+			// A cancel request is write-once, so once the record holds
+			// one nothing in the store can change under the worker and
+			// the rest of the pass reads nothing.
 			head, err := e.store.GetRunHead(e.baseCtx, id)
 			if err != nil {
 				e.logger.Error("durable: store read failed", "run", id, "error", err)
@@ -759,26 +762,16 @@ func (e *Engine) processRun(id durable.RunID) (time.Duration, bool) {
 	}
 }
 
-// carriedAgrees reports whether the head the store returns matches the
-// record the loop carries: the cursor's stage and commit time, which
-// every apply rewrites, its in-flight operation, and the failure.
+// carriedAgrees reports whether the head the store returns is the
+// record the loop carries. UpdatedAt is the fingerprint: every apply
+// sets it to the clock and persists it with the cursor, and every other
+// field the head carries — stage, retry time, failure, in-flight
+// operation — was written in that same transition, so an equal
+// UpdatedAt says the store holds the transition the loop last wrote.
+// A terminal head means another writer committed the run, which the
+// one-worker-per-Run rule excludes; memory is dropped either way.
 func carriedAgrees(rec, head *driver.RunRecord) bool {
-	if head.Terminal() || head.Phase != rec.Phase || !head.UpdatedAt.Equal(rec.UpdatedAt) ||
-		!head.NextAttemptAt.Equal(rec.NextAttemptAt) || (head.Failure == nil) != (rec.Failure == nil) {
-		return false
-	}
-	for id, sr := range head.Steps {
-		hop := sr.Op(head.Phase)
-		got, ok := rec.Steps[id]
-		if !ok {
-			return false
-		}
-		op := got.Op(head.Phase)
-		if op.Status != driver.OpUnresolved || op.Attempts != hop.Attempts {
-			return false
-		}
-	}
-	return true
+	return !head.Terminal() && head.UpdatedAt.Equal(rec.UpdatedAt)
 }
 
 // forwardStarted reports whether the Step's forward operation has ever

@@ -12,6 +12,7 @@ import (
 	"github.com/dangra/durable/pipelinedef"
 	"github.com/dangra/durable/store/driver"
 	"github.com/dangra/durable/store/mem"
+	"google.golang.org/protobuf/proto"
 )
 
 func threeSteps(id durable.PipelineID) *pipelinedef.Definition {
@@ -102,5 +103,66 @@ func TestCarriedRecordDisagreementFallsBackToFullRead(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "carried run record disagrees") {
 		t.Fatalf("no disagreement logged:\n%s", buf.String())
+	}
+}
+
+// A cancel request is write-once, so once the carried record holds one
+// nothing in the store can change under the worker: the rest of the
+// pass — the doomed operation's resolution, the cancel transition, every
+// unwind — reads nothing at all.
+func TestCanceledPassReadsNothing(t *testing.T) {
+	log := &eventLog{}
+	blocked := make(chan struct{})
+	noUnwind := func(ctx context.Context, inv durable.Invocation) error { return nil }
+	def := pipelinedef.New(pipelinedef.Config{
+		ID: "p",
+		Steps: []pipelinedef.Step{
+			{ID: "a/v1", Unwind: true, Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) { return nil, nil }, UnwindFunc: noUnwind},
+			{ID: "b/v1", Unwind: true, Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
+				if inv.CancelRequested() {
+					return nil, nil
+				}
+				close(blocked)
+				<-ctx.Done()
+				return nil, ctx.Err()
+			}, UnwindFunc: noUnwind},
+			stateless("c/v1", noUnwind),
+		},
+	})
+	_, pipes := startObservedEngine(t, log, []*pipelinedef.Definition{def})
+	run, _, err := pipes[0].Schedule(context.Background(), "r", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-blocked
+	// Step a resolved before the cancel, and its iteration refreshed the
+	// head as any would; the claim is about what follows the cancel.
+	before := countOps(log)
+	if err := run.Cancel(context.Background(), "op"); err != nil {
+		t.Fatal(err)
+	}
+	// Terminality observed through the observer, so the test itself
+	// reads nothing before counting.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var done bool
+		log.locked(func() { done = len(log.terminal) == 1 })
+		if done {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("run never terminated")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	counts := countOps(log)
+	if heads := counts["GetRunHead"] - before["GetRunHead"]; heads != 0 {
+		t.Fatalf("GetRunHead ops after the cancel = %d; a pass holding a cancel must read no head (%v)", heads, counts)
+	}
+	if counts["GetRun"] < 2 {
+		t.Fatalf("GetRun ops = %d; want one per dispatch, and the retry redispatched (%v)", counts["GetRun"], counts)
+	}
+	if res, err := run.Wait(context.Background()); err != nil || !res.Canceled() {
+		t.Fatalf("Wait = %+v, %v; want canceled", res, err)
 	}
 }

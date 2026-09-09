@@ -19,6 +19,7 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
+	"github.com/dangra/durable/internal/dirtyset"
 	"github.com/dangra/durable/internal/dispatcher"
 	"github.com/dangra/durable/internal/frozen"
 	"github.com/dangra/durable/internal/joinset"
@@ -236,6 +237,12 @@ type Engine struct {
 	// lets a returned Fail wrapping *PreemptedError be attributed as
 	// FailureKindCanceled truthfully. Consumed by the next resolution.
 	preempted map[durable.RunID]string
+	// dirty marks the Runs whose store record changed under their
+	// worker's carried copy — today only by a cancel request, which goes
+	// through the engine. The worker takes the mark each iteration and
+	// re-reads the record when it was set; otherwise a pass reads
+	// nothing after its dispatch.
+	dirty dirtyset.Set[durable.RunID]
 
 	// pipelines and stepOwner are written by register, under mu, and
 	// frozen by Start; a Put after that panics, and workers read them
@@ -586,21 +593,37 @@ func (e *Engine) takePreempted(id durable.RunID) (string, bool) {
 
 // processRun advances one Run until it becomes terminal, invalid, must wait
 // for retry, or shutdown begins. It returns a redispatch delay when the Run
-// needs a future wakeup. It is the one reader of the full record: every
-// other engine read is of the head.
+// needs a future wakeup.
+//
+// It is the one reader of the full record, and it reads it once per
+// dispatch. The dispatcher runs one worker per Run and every write to a
+// Run's cursor, operations, failure, and outcome comes from that worker,
+// which mutates the record in memory and then persists exactly that, so
+// after a successful apply the record it holds is the store's. The loop
+// carries it across iterations; every path that fails an apply returns,
+// so the next dispatch reads fresh. A write to the record by anyone
+// else — today only a cancel request, which goes through the engine —
+// marks the Run dirty, and an iteration that finds the mark re-reads.
 func (e *Engine) processRun(id durable.RunID) (time.Duration, bool) {
+	var rec *driver.RunRecord // carried across iterations; nil reads it
 	for {
 		if e.baseCtx.Err() != nil {
 			return 0, false
 		}
-		rec, err := e.store.GetRun(e.baseCtx, id)
-		if err != nil {
-			if errors.Is(err, durable.ErrRunNotFound) {
-				e.logger.Error("durable: dispatched run not found", "run", id)
-				return 0, false
+		// The mark is taken before any read, so a write after the read
+		// is seen next iteration; a carried record is read again when it
+		// was set.
+		if e.dirty.Take(id) || rec == nil {
+			var err error
+			rec, err = e.store.GetRun(e.baseCtx, id)
+			if err != nil {
+				if errors.Is(err, durable.ErrRunNotFound) {
+					e.logger.Error("durable: dispatched run not found", "run", id)
+					return 0, false
+				}
+				e.logger.Error("durable: store read failed", "run", id, "error", err)
+				return time.Second, true
 			}
-			e.logger.Error("durable: store read failed", "run", id, "error", err)
-			return time.Second, true
 		}
 		if rec.Terminal() {
 			e.waiters.Notify(id)
@@ -729,6 +752,31 @@ func (e *Engine) processRun(id durable.RunID) (time.Duration, bool) {
 			return 0, false
 		}
 	}
+}
+
+// requestCancel is the one path a cancel request takes to the store.
+// Once accepted, the Run is marked dirty so its worker re-reads, the
+// in-flight attempt is preempted, and the Run is dispatched. A terminal
+// Run returns durable.ErrRunTerminal, a missing one durable.ErrRunNotFound;
+// a request after the first is a no-op, since the first did all of this.
+func (e *Engine) requestCancel(ctx context.Context, id durable.RunID, cause string) error {
+	cause = e.boundText(cause)
+	accepted, err := e.store.RequestCancel(ctx, id, driver.CancelRequest{Cause: cause, At: e.clock.Now()})
+	if err != nil {
+		return err
+	}
+	if !accepted {
+		// The first request won and its own call did all of this.
+		return nil
+	}
+	e.dirty.Mark(id)
+	if e.debugLog() {
+		e.logger.Debug("durable: cancel requested", "run", string(id), "cause", cause)
+	}
+	e.preemptAttempt(id, cause)
+	e.disp.Wake(id)
+	e.disp.Dispatch(id, 0)
+	return nil
 }
 
 // forwardStarted reports whether the Step's forward operation has ever

@@ -274,6 +274,7 @@ func report(b *testing.B, v *env, runs int, lat []time.Duration, elapsed time.Du
 	drainStore(b, v.store)
 	b.ReportMetric(float64(v.store.Stats().TxPageAllocBytes)/n, "diskB/run")
 	b.ReportMetric(float64(v.writes.Load())/n, "transitions/run")
+	b.ReportMetric(float64(v.reads.Load())/n, "reads/run")
 	if len(lat) > 0 {
 		sort.Slice(lat, func(i, j int) bool { return lat[i] < lat[j] })
 		b.ReportMetric(ms(lat[len(lat)/2]), "p50-ms")

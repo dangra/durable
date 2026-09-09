@@ -85,21 +85,10 @@ func (r Run) Wait(ctx context.Context) (Result, error) {
 // request survives restart, and on an invalid Run it takes effect when a
 // corrected deployment makes the Run reconcilable again.
 func (r Run) Cancel(ctx context.Context, cause string) error {
-	e := r.engine
-	if !e.isStarted() {
+	if !r.engine.isStarted() {
 		return ErrNotStarted
 	}
-	accepted, err := e.store.RequestCancel(ctx, r.id, driver.CancelRequest{Cause: e.boundText(cause), At: e.clock.Now()})
-	if err != nil {
-		return err
-	}
-	if accepted && e.debugLog() {
-		e.logger.Debug("durable: cancel requested", "run", string(r.id), "cause", cause)
-	}
-	e.preemptAttempt(r.id, e.boundText(cause))
-	e.disp.Wake(r.id)
-	e.disp.Dispatch(r.id, 0)
-	return nil
+	return r.engine.requestCancel(ctx, r.id, cause)
 }
 
 // Status returns a point-in-time observation of the Run. It reads the

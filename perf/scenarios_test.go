@@ -115,9 +115,17 @@ func BenchmarkUnwindWave(b *testing.B) {
 // populated with nonterminal runs parked one step from completion plus a
 // large terminal population, measuring time-to-recover and drain
 // throughput (the ListNonterminal scan cost is inside start-ms).
+//
+// The populations are sized so that every bucket of every store layout
+// is well past a single leaf page before the measured window opens: at
+// a few hundred runs a layout with many small buckets keeps each in one
+// leaf, while a layout with fewer, fuller buckets already pays a branch
+// page per write, and the byte gate then compares tree depth rather than
+// the layouts. The history is four times the in-flight population, the
+// shape of a host that has been up for a while.
 func BenchmarkRecovery(b *testing.B) {
-	nonterminal := scale(b, 500)
-	terminal := scale(b, 2000)
+	nonterminal := scale(b, 2000)
+	terminal := scale(b, 8000)
 	def := machinePipeline("recover", [numSteps]stepSpec{})
 
 	for i := 0; i < b.N; i++ {

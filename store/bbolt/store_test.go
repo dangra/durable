@@ -671,11 +671,11 @@ func TestTerminalityCompactsRun(t *testing.T) {
 		Outcome: &oc, Output: []byte{9},
 	})
 
-	// The stage lingers, queued, until the drain — and reads already
+	// The stage lingers, staged, until the drain — and reads already
 	// come from the terminal row.
 	s.db.View(func(tx *bolt.Tx) error {
 		if len(activeRows(tx, "run-t")) == 0 {
-			t.Fatal("the stage must be queued, not deleted, by the terminality commit")
+			t.Fatal("the stage must be staged, not deleted, by the terminality commit")
 		}
 		return nil
 	})
@@ -748,8 +748,8 @@ func TestTerminalityCompactsRun(t *testing.T) {
 }
 
 // TestStageDrainSurvivesCrash pins the recovery of the deferred stage
-// deletion: a terminal run whose queued drain was lost with the process
-// is found at Open, by its lingering meta row, and drained then.
+// deletion: a terminal run left staged by a crashed process is drained
+// at the next Open, from the staged bucket.
 func TestStageDrainSurvivesCrash(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "crash.db")

@@ -7,7 +7,7 @@
 // blocks (or times out) rather than executing concurrently.
 //
 // The storage representation is implementation-defined by the spec; this
-// implementation stores a run in five buckets, chosen by write cadence.
+// implementation stores a run in six buckets, chosen by write cadence.
 // With · for the NUL separator, which the Store contract keeps out of
 // every identifier, and R for a run id:
 //
@@ -30,6 +30,10 @@
 //	bucket: expiry                     retention order of terminal runs
 //	  <committed_at:8 BE>·R            -> (empty)          written with the terminal row
 //
+//	bucket: staged                     terminal runs whose stage is still on disk
+//	  R                                -> (empty)          written with the terminal row,
+//	                                                       deleted with the stage
+//
 //	bucket: slots                      admission index
 //	  <pipeline>·<resource>            -> R                held from CreateRun to terminality
 //
@@ -43,10 +47,10 @@
 // from then on the run reads from that row alone, so the input and
 // step states, folded into the output by then, are released when the
 // run ends rather than when retention reaps it — deletes the slot, and
-// queues R. The drain later deletes everything under R· in active, the
-// input bucket included, plus the cursor row, in batches (see Store),
-// because deleting adjacent runs together lets bbolt free whole leaves
-// instead of rewriting one per run. Reap walks the expiry index from its
+// stages R. The drain later deletes everything under R· in active, the
+// input bucket included, plus the cursor row and the staged key, in
+// batches (see Store), because deleting adjacent runs together lets
+// bbolt free whole leaves instead of rewriting one per run. Reap walks the expiry index from its
 // oldest key and stops at the first run that has not expired, deleting
 // each victim's terminal row and index key: proportional to the victims,
 // decoding nothing. The terminal row is authoritative wherever both
@@ -95,6 +99,7 @@ var (
 	cursorBucket   = []byte("cursor")
 	terminalBucket = []byte("terminal")
 	expiryBucket   = []byte("expiry")
+	stagedBucket   = []byte("staged")
 	slotsBucket    = []byte("slots")
 )
 
@@ -115,22 +120,21 @@ type Store struct {
 	// coalesce into shared transactions.
 	pending atomic.Int64
 
-	// stage queues the terminal runs whose nonterminal stage is still on
-	// disk. Deleting one run's rows per transaction costs a copied
-	// root-to-leaf path and a rewritten leaf each time; deleting a batch
-	// of adjacent runs empties whole leaves, which bbolt frees without
-	// writing. So terminality only queues, and the stage is deleted in
-	// batches: inside the next write transaction (see stageDrain), by
-	// the sweep goroutine on stageDrainInterval when writes are idle, at
-	// Close, and — for a queue lost to a crash — by reconcileStages at
-	// Open. Reads never see the lingering rows: every path checks the
-	// terminal row first.
-	stageMu sync.Mutex
-	stage   []kernel.RunID
-	queued  atomic.Int64 // len(stage), readable without the lock
-	stop    chan struct{}
-	done    chan struct{}
-	once    sync.Once
+	// staged counts the terminal runs whose nonterminal stage is still
+	// on disk — the size of the staged bucket, kept in memory as a hint
+	// for the write path. Deleting one run's rows per transaction costs
+	// a copied root-to-leaf path and a rewritten leaf each time; deleting
+	// a batch of adjacent runs empties whole leaves, which bbolt frees
+	// without writing. So terminality only stages, and the stage is
+	// deleted in batches: inside the next write transaction once a full
+	// batch is staged (see drainStaged), by the sweep goroutine on
+	// stageDrainInterval when writes are idle, at Close, and at Open,
+	// which drains whatever a crash left staged. The bucket is the
+	// truth; the counter only decides whether a write bothers to look.
+	staged atomic.Int64
+	stop   chan struct{}
+	done   chan struct{}
+	once   sync.Once
 }
 
 const (
@@ -173,7 +177,7 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("bbolt: opening %s: %w", path, err)
 	}
 	err = db.Update(func(tx *bolt.Tx) error {
-		for _, name := range [][]byte{activeBucket, cursorBucket, terminalBucket, expiryBucket, slotsBucket} {
+		for _, name := range [][]byte{activeBucket, cursorBucket, terminalBucket, expiryBucket, stagedBucket, slotsBucket} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return err
 			}
@@ -186,115 +190,70 @@ func Open(path string) (*Store, error) {
 	}
 	db.MaxBatchDelay = 2 * time.Millisecond
 	s := &Store{db: db, stop: make(chan struct{}), done: make(chan struct{})}
-	if err := s.reconcileStages(); err != nil {
+	// Whatever the previous process left staged is drained now; the
+	// counter starts at zero and the sweep sees the bucket empty after.
+	if err := s.Drain(); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("bbolt: reconciling terminal runs: %w", err)
+		return nil, fmt.Errorf("bbolt: draining staged runs: %w", err)
 	}
 	go s.sweep()
 	return s, nil
 }
 
-// reconcileStages queues the stage of every run that has both a meta
-// row and a terminal row — terminal runs whose queued deletion a crash
-// lost — and drains them. It walks the active bucket, which holds the
-// runs in flight and those orphans, not the retained history.
-func (s *Store) reconcileStages() error {
-	var orphans []kernel.RunID
-	err := s.db.View(func(tx *bolt.Tx) error {
-		terminal := tx.Bucket(terminalBucket)
-		return tx.Bucket(activeBucket).ForEach(func(k, _ []byte) error {
-			if id, tag, _, ok := splitActiveKey(k); ok && tag == tagMeta && terminal.Get(id) != nil {
-				orphans = append(orphans, kernel.RunID(id))
-			}
-			return nil
-		})
-	})
-	if err != nil {
-		return err
+// drainStaged deletes the stages of up to n staged runs inside tx,
+// walking the staged bucket from its first key, and reports how many it
+// took. It reads the bucket afresh on every call, so a closure Batch
+// runs twice does no harm, and a run staged twice or reaped before its
+// drain costs a seek.
+func (s *Store) drainStaged(tx *bolt.Tx, n int) (int, error) {
+	staged := tx.Bucket(stagedBucket)
+	var ids [][]byte
+	c := staged.Cursor()
+	for k, _ := c.First(); k != nil && len(ids) < n; k, _ = c.Next() {
+		ids = append(ids, bytes.Clone(k))
 	}
-	s.enqueueStage(orphans...)
-	return s.Drain()
-}
-
-func (s *Store) enqueueStage(ids ...kernel.RunID) {
-	if len(ids) == 0 {
-		return
-	}
-	s.stageMu.Lock()
-	s.stage = append(s.stage, ids...)
-	s.queued.Store(int64(len(s.stage)))
-	s.stageMu.Unlock()
-}
-
-// claimStage takes up to n queued runs. It never returns nil, so a
-// caller can tell "claimed nothing" from "not yet claimed".
-func (s *Store) claimStage(n int) []kernel.RunID {
-	s.stageMu.Lock()
-	defer s.stageMu.Unlock()
-	n = min(n, len(s.stage))
-	claimed := append([]kernel.RunID{}, s.stage[:n]...)
-	s.stage = s.stage[n:]
-	s.queued.Store(int64(len(s.stage)))
-	return claimed
-}
-
-// stageDrain rides one write transaction: it claims a batch of queued
-// runs the first time the closure runs and deletes their stages, and
-// returns them to the queue if the transaction ultimately fails. The
-// claim is made once because Batch may run a closure twice — a
-// rolled-back batch re-runs each closure alone — and a second claim
-// would lose the first batch.
-type stageDrain struct {
-	s       *Store
-	n       int
-	claimed []kernel.RunID
-}
-
-func (d *stageDrain) run(tx *bolt.Tx) error {
-	if d.claimed == nil {
-		d.claimed = d.s.claimStage(d.n)
-	}
-	for _, id := range d.claimed {
-		if err := deleteNonterminalStage(tx, id); err != nil {
-			return err
+	for _, id := range ids {
+		if err := deleteNonterminalStage(tx, kernel.RunID(id)); err != nil {
+			return 0, err
+		}
+		if err := staged.Delete(id); err != nil {
+			return 0, err
 		}
 	}
-	return nil
-}
-
-func (d *stageDrain) finish(err error) {
-	if err != nil {
-		d.s.enqueueStage(d.claimed...)
-	}
+	return len(ids), nil
 }
 
 // writeDrain is the drain a caller's write transaction carries: a full
-// batch when one is queued, nothing otherwise — the idle path allocates
-// nothing, since the two functions returned capture no state.
-func (s *Store) writeDrain() (run func(*bolt.Tx) error, finish func(error)) {
-	if s.queued.Load() < stageDrainPerWrite {
-		return noDrain, noFinish
+// batch when at least that many runs are staged, nothing otherwise —
+// the idle path allocates nothing.
+func (s *Store) writeDrain(tx *bolt.Tx) error {
+	if s.staged.Load() < stageDrainPerWrite {
+		return nil
 	}
-	d := &stageDrain{s: s, n: stageDrainPerWrite}
-	return d.run, d.finish
+	n, err := s.drainStaged(tx, stageDrainPerWrite)
+	if err == nil {
+		s.staged.Add(int64(-n))
+	}
+	return err
 }
 
-func noDrain(*bolt.Tx) error { return nil }
-func noFinish(error)         {}
-
-// Drain deletes the nonterminal stage of every queued terminal run now,
+// Drain deletes the nonterminal stage of every staged terminal run now,
 // in bounded transactions. The store drains on its own — inside write
-// transactions, on a timer, and at Close — so callers need it only to
-// observe the on-disk state deterministically.
+// transactions, on a timer, at Open, and at Close — so callers need it
+// only to observe the on-disk state deterministically.
 func (s *Store) Drain() error {
 	for {
-		d := &stageDrain{s: s, n: stageDrainPerSweep}
-		err := s.db.Update(d.run)
-		d.finish(err)
+		var n int
+		err := s.db.Update(func(tx *bolt.Tx) error {
+			var err error
+			n, err = s.drainStaged(tx, stageDrainPerSweep)
+			return err
+		})
 		if err != nil {
 			return err
 		}
-		if len(d.claimed) < stageDrainPerSweep {
+		s.staged.Add(int64(-n))
+		if n < stageDrainPerSweep {
 			return nil
 		}
 	}
@@ -311,8 +270,8 @@ func (s *Store) sweep() {
 		case <-s.stop:
 			return
 		case <-t.C:
-			if s.queued.Load() > 0 {
-				_ = s.Drain() // a failed sweep requeues; the next tick retries
+			if s.staged.Load() > 0 {
+				_ = s.Drain() // a failed sweep leaves the bucket; the next tick retries
 			}
 		}
 	}
@@ -405,9 +364,8 @@ func (s *Store) CreateRun(_ context.Context, rec *driver.RunRecord, excluding []
 	created := false
 	commit, done := s.groupCommit()
 	defer done()
-	drain, finish := s.writeDrain()
 	err := commit(func(tx *bolt.Tx) error {
-		if err := drain(tx); err != nil {
+		if err := s.writeDrain(tx); err != nil {
 			return err
 		}
 		slots := tx.Bucket(slotsBucket)
@@ -437,7 +395,6 @@ func (s *Store) CreateRun(_ context.Context, rec *driver.RunRecord, excluding []
 		created = true
 		return nil
 	})
-	finish(err)
 	if err != nil {
 		return nil, false, err
 	}
@@ -519,9 +476,8 @@ func putRun(tx *bolt.Tx, rec *driver.RunRecord) error {
 func (s *Store) ApplyTransition(_ context.Context, id kernel.RunID, t driver.Transition) error {
 	commit, done := s.groupCommit()
 	defer done()
-	drain, finish := s.writeDrain()
 	err := commit(func(tx *bolt.Tx) error {
-		if err := drain(tx); err != nil {
+		if err := s.writeDrain(tx); err != nil {
 			return err
 		}
 		// A terminal run accepts no further transitions, and the engine
@@ -534,10 +490,9 @@ func (s *Store) ApplyTransition(_ context.Context, id kernel.RunID, t driver.Tra
 			return kernel.ErrRunNotFound
 		}
 		if t.Outcome != nil {
-			// The terminality commit: one terminal record is written and
-			// the slot is released; the nonterminal stage — active rows,
-			// cursor — is queued for batched deletion once the commit
-			// succeeds. The record is assembled the way the reference
+			// The terminality commit: one terminal record is written, the
+			// run is staged, and the slot is released; the nonterminal
+			// stage — active rows, cursor — is deleted later in a batch. The record is assembled the way the reference
 			// store's would be after this transition (rows, then the
 			// transition's ops, then its cursor's in-flight overlay) and
 			// compacted by the shared rule, so the failed unwinds it
@@ -570,6 +525,9 @@ func (s *Store) ApplyTransition(_ context.Context, id kernel.RunID, t driver.Tra
 			if err := putTerminal(tx, rec); err != nil {
 				return err
 			}
+			if err := tx.Bucket(stagedBucket).Put([]byte(id), []byte{}); err != nil {
+				return err
+			}
 			key := slotKey(rec)
 			if active := tx.Bucket(slotsBucket).Get(key); active != nil && string(active) == string(id) {
 				return tx.Bucket(slotsBucket).Delete(key)
@@ -596,9 +554,8 @@ func (s *Store) ApplyTransition(_ context.Context, id kernel.RunID, t driver.Tra
 		}
 		return nil
 	})
-	finish(err)
 	if err == nil && t.Outcome != nil {
-		s.enqueueStage(id)
+		s.staged.Add(1)
 	}
 	return err
 }
@@ -633,8 +590,8 @@ func expiryKey(t time.Time, id kernel.RunID) []byte {
 // deleteNonterminalStage removes a run's active rows (the input's nested
 // bucket among them) and cursor. Active rows hang off the run id; they
 // are collected before deletion since bbolt forbids mutating a bucket
-// while iterating it. Deleting nothing is fine: a run may be drained
-// twice, or reaped before its drain.
+// while iterating it. Deleting nothing is fine: a run may be reaped
+// before its drain.
 func deleteNonterminalStage(tx *bolt.Tx, id kernel.RunID) error {
 	active := tx.Bucket(activeBucket)
 	prefix := runPrefix(id)
@@ -853,6 +810,9 @@ func (s *Store) ReapTerminal(_ context.Context, before time.Time, limit int) (in
 				return err
 			}
 			if err := expiry.Delete(k); err != nil {
+				return err
+			}
+			if err := tx.Bucket(stagedBucket).Delete(id); err != nil {
 				return err
 			}
 			deleted++

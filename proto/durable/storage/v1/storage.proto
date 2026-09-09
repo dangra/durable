@@ -11,12 +11,12 @@
 // volume is independent of input and state sizes.
 //
 // The components split into two lifecycle stages. While a run is
-// nonterminal it is RunMeta, Cursor, and its OperationRecord rows. The
-// terminality commit replaces all three with one Terminal record carrying
-// the identity forward, so a terminal run is Terminal alone: the input
+// nonterminal it is RunMeta, Cursor, its OperationRecord rows, and its
+// FailureRecord and CancelRequest rows. The terminality commit replaces
+// all of them with one Terminal record carrying the identity, failure,
+// and cancel request forward, so a terminal run is one row: the input
 // and the step states, already folded into the output by then, are
-// released the moment the run ends rather than at retention. FailureRecord
-// and CancelRequest span both stages.
+// released the moment the run ends rather than at retention.
 syntax = "proto3";
 
 package durable.storage.v1;
@@ -141,9 +141,9 @@ message FailureRecord {
   string reason = 7;
 }
 
-// Terminal is the whole of a terminal run bar its failure and cancel
-// records: the identity carried over from RunMeta, the outcome and
-// output, when it committed, and the failed unwind operations. Input,
+// Terminal is the whole of a terminal run: the identity carried over
+// from RunMeta, the outcome and output, when it committed, the run's
+// failure and cancel request, and the failed unwind operations. Input,
 // every other operation row, and the cursor's scheduling state do not
 // survive terminality.
 message Terminal {
@@ -163,6 +163,10 @@ message Terminal {
   // run's unwind failures, kept because they are the durable evidence
   // that compensation did not happen. Bounded text, no state bytes.
   map<string, OperationRecord> failed_unwinds = 10;
+  // The run's failure, when the forward phase ended in one.
+  FailureRecord failure = 11;
+  // The cancellation request, when one was recorded before terminality.
+  CancelRequest cancel = 12;
 }
 
 message CancelRequest {

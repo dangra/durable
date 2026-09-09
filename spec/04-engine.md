@@ -618,12 +618,12 @@ terminal                      written once, replacing meta, rows, cursor
 ```
 
 A Run has two storage stages. Nonterminal, it is meta, its step fact
-rows, and the cursor. The terminality commit replaces all three with
-one terminal record — identity, outcome, output, commit time, and the
+rows, the cursor, and its failure and cancel records. The terminality
+commit replaces all of them with one terminal record — identity,
+outcome, output, commit time, failure, cancel request, and the
 permanently failed unwind operations — in the same atomic step, so a
-terminal Run is that record plus its failure and cancel records. The
-Input and the committed Step States have been folded into the Output
-by then; nothing reachable through a terminal Run needs them, and
+terminal Run is one row. The Input and the committed Step States have
+been folded into the Output by then; nothing reachable through a terminal Run needs them, and
 releasing them at terminality rather than at retention keeps the
 retained history proportional to outputs. The failed unwind
 operations stay because they are the durable evidence that

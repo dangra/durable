@@ -135,9 +135,10 @@ type Transition struct {
 // A Run has two storage stages. Nonterminal, the record is complete.
 // Terminal, it is what CompactTerminal leaves: identity, Annotations,
 // Phase, Outcome, Output, Failure, Cancel, CreatedAt, UpdatedAt (the
-// terminality commit time), and the failed unwind operations. The
-// terminality commit releases Input, every other operation record, and
-// the cursor's scheduling fields, which read back as zero from then on.
+// terminality commit time), and the failed unwind operations — a
+// terminal Run is one row. The terminality commit releases Input, every
+// other operation record, and the cursor's scheduling fields, which
+// read back as zero from then on.
 // Input and Step State have been folded into the Output by the time a
 // Run ends, so nothing the engine or a caller can reach through a
 // terminal Run needs them, and releasing them at terminality rather than

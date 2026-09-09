@@ -199,6 +199,8 @@ func TestTerminalRoundTrip(t *testing.T) {
 			},
 		},
 		Phase: kernel.PhaseDone, Outcome: &oc, Output: []byte{9, 9},
+		Failure:   &kernel.Failure{StepID: "b", Phase: kernel.PhaseForward, Attempt: 1, Message: "boom", At: at(120), Kind: kernel.FailureKindUser, Reason: "why"},
+		Cancel:    &driver.CancelRequest{Cause: "late", At: at(130)},
 		CreatedAt: at(100), UpdatedAt: at(200),
 	}
 	b, err := MarshalTerminal(rec)
@@ -216,6 +218,8 @@ func TestTerminalRoundTrip(t *testing.T) {
 			"b": {Unwind: driver.OperationRecord{Status: driver.OpFailed, Attempts: 3, Order: 4, Failure: &kernel.Failure{StepID: "b", Phase: kernel.PhaseUnwind, Attempt: 3, Message: "stuck", At: at(150), Reason: "r"}}},
 		},
 		Phase: kernel.PhaseDone, Outcome: &oc, Output: []byte{9, 9},
+		Failure:   &kernel.Failure{StepID: "b", Phase: kernel.PhaseForward, Attempt: 1, Message: "boom", At: at(120), Kind: kernel.FailureKindUser, Reason: "why"},
+		Cancel:    &driver.CancelRequest{Cause: "late", At: at(130)},
 		CreatedAt: at(100), UpdatedAt: at(200),
 	}
 	if !reflect.DeepEqual(got, want) {

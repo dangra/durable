@@ -275,14 +275,20 @@ func MarshalTerminal(rec *driver.RunRecord) ([]byte, error) {
 		}
 		pb.FailedUnwinds[string(id)] = operationRecordToProto(&sr.Unwind)
 	}
+	if rec.Failure != nil {
+		pb.Failure = failureRecordToProto(rec.Failure)
+	}
+	if rec.Cancel != nil {
+		pb.Cancel = &CancelRequest{Cause: rec.Cancel.Cause, At: ts(rec.Cancel.At)}
+	}
 	return marshal("terminal", pb)
 }
 
 // UnmarshalTerminalInto decodes a terminal record into rec: identity,
-// outcome, output, phase, the commit time as UpdatedAt, and the failed
-// unwind operations as Steps entries. It leaves the fields the terminal
-// stage does not carry — Input, the cursor's scheduling state, Failure,
-// Cancel — untouched.
+// outcome, output, phase, the commit time as UpdatedAt, Failure, Cancel,
+// and the failed unwind operations as Steps entries. It leaves the
+// fields the terminal stage does not carry — Input, the cursor's
+// scheduling state — untouched.
 func UnmarshalTerminalInto(b []byte, rec *driver.RunRecord) error {
 	pb := &Terminal{}
 	if err := unmarshal("terminal", b, pb); err != nil {
@@ -302,6 +308,13 @@ func UnmarshalTerminalInto(b []byte, rec *driver.RunRecord) error {
 	rec.Output = pb.GetOutput()
 	for id, op := range pb.GetFailedUnwinds() {
 		rec.Step(kernel.StepID(id)).Unwind = operationRecordFromProto(op)
+	}
+	if pb.GetFailure() != nil {
+		f := failureRecordFromProto(pb.GetFailure())
+		rec.Failure = &f
+	}
+	if c := pb.GetCancel(); c != nil {
+		rec.Cancel = &driver.CancelRequest{Cause: c.GetCause(), At: fromTS(c.GetAt())}
 	}
 	return nil
 }

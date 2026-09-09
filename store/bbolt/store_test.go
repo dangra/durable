@@ -543,9 +543,9 @@ func TestTerminalityCompactsRun(t *testing.T) {
 		Outcome: &oc, Output: []byte{9},
 	})
 
-	// The nonterminal stage is gone from disk.
+	// The nonterminal stage is gone from disk: a terminal run is one row.
 	s.db.View(func(tx *bolt.Tx) error {
-		for _, bucket := range [][]byte{metaBucket, cursorBucket} {
+		for _, bucket := range [][]byte{metaBucket, cursorBucket, failuresBucket, cancelBucket} {
 			if tx.Bucket(bucket).Get([]byte("run-t")) != nil {
 				t.Errorf("bucket %s still holds the terminal run", bucket)
 			}
@@ -603,10 +603,8 @@ func TestTerminalityCompactsRun(t *testing.T) {
 		t.Fatalf("GetRun after reap = %v", err)
 	}
 	s.db.View(func(tx *bolt.Tx) error {
-		for _, b := range [][]byte{terminalBucket, failuresBucket, cancelBucket} {
-			if k, _ := tx.Bucket(b).Cursor().First(); k != nil {
-				t.Fatalf("bucket %s still holds %q after reap", b, k)
-			}
+		if k, _ := tx.Bucket(terminalBucket).Cursor().First(); k != nil {
+			t.Fatalf("terminal bucket still holds %q after reap", k)
 		}
 		return nil
 	})

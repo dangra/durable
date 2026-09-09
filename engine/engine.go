@@ -603,17 +603,20 @@ func (e *Engine) takePreempted(id durable.RunID) (string, bool) {
 // carries it across iterations; every path that fails an apply returns,
 // so the next dispatch reads fresh. A write to the record by anyone
 // else — today only a cancel request, which goes through the engine —
-// marks the Run dirty, and an iteration that finds the mark re-reads;
-// the mark is taken before the read, so a write after the read is seen
-// by the next iteration.
+// marks the Run dirty, and an iteration that finds the mark re-reads.
 func (e *Engine) processRun(id durable.RunID) (time.Duration, bool) {
-	var rec *driver.RunRecord
+	var rec *driver.RunRecord // carried across iterations; nil reads it
 	for {
 		if e.baseCtx.Err() != nil {
 			return 0, false
 		}
+		// The mark is taken before any read, so a write after the read
+		// is seen next iteration. It drops a carried record — except a
+		// terminal one, which the store lets no one change.
+		if e.dirty.Take(id) && rec != nil && !rec.Terminal() {
+			rec = nil
+		}
 		if rec == nil {
-			e.dirty.Take(id)
 			var err error
 			rec, err = e.store.GetRun(e.baseCtx, id)
 			if err != nil {
@@ -624,12 +627,8 @@ func (e *Engine) processRun(id durable.RunID) (time.Duration, bool) {
 				e.logger.Error("durable: store read failed", "run", id, "error", err)
 				return time.Second, true
 			}
-		} else if !rec.Terminal() && e.dirty.Take(id) {
-			rec = nil
-			continue
 		}
 		if rec.Terminal() {
-			e.dirty.Take(id) // nothing left to re-read
 			e.waiters.Notify(id)
 			e.awaitTargetDone(id)
 			return 0, false

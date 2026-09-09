@@ -154,6 +154,13 @@ func (s *observedStore) GetRun(ctx context.Context, id durable.RunID) (*driver.R
 	return rec, err
 }
 
+func (s *observedStore) GetRunHead(ctx context.Context, id durable.RunID) (*driver.RunRecord, error) {
+	start := s.engine.clock.Now()
+	rec, err := s.inner.GetRunHead(ctx, id)
+	s.op("GetRunHead", false, start, err)
+	return rec, err
+}
+
 func (s *observedStore) ApplyTransition(ctx context.Context, id durable.RunID, t driver.Transition) error {
 	start := s.engine.clock.Now()
 	err := s.inner.ApplyTransition(ctx, id, t)

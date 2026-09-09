@@ -86,6 +86,11 @@
 // holds every nonterminal run: CreateRun admits against it,
 // GetActiveRunID reads it, and ListNonterminal walks it, so recovery
 // cost follows the runs in flight rather than the retained history.
+// A run's head — what status, waiting, lookups, and recovery need — is
+// the first rows under its prefix (meta, cancel, failure) and the
+// cursor, or the terminal row: GetRunHead never decodes an operation
+// row nor touches a blob, so an observer polling many idle runs costs
+// the engine nothing in cache churn.
 //
 // The blobs a nonterminal run carries — its input and the states kept
 // beside their rows — never change once written, so the store keeps
@@ -981,13 +986,24 @@ func (s *Store) getNonterminal(tx *bolt.Tx, id kernel.RunID) (*driver.RunRecord,
 		s.blobs.fill(id, fill)
 	}
 
-	cb := tx.Bucket(cursorBucket).Get([]byte(id))
+	if err := overlayCursor(tx, rec); err != nil {
+		return nil, err
+	}
+	return rec, nil
+}
+
+// overlayCursor reads the run's cursor onto rec: its scheduling fields,
+// and its in-flight operation as an unresolved step entry — the forward
+// operation in PhaseForward, the unwind one in PhaseUnwind (the Cursor
+// contract).
+func overlayCursor(tx *bolt.Tx, rec *driver.RunRecord) error {
+	cb := tx.Bucket(cursorBucket).Get([]byte(rec.RunID))
 	if cb == nil {
-		return nil, fmt.Errorf("bbolt: run %s has no cursor", id)
+		return fmt.Errorf("bbolt: run %s has no cursor", rec.RunID)
 	}
 	cur, err := storagepb.UnmarshalCursor(cb)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	rec.Phase = cur.Phase
 	rec.NextAttemptAt = cur.NextAttemptAt
@@ -996,14 +1012,59 @@ func (s *Store) getNonterminal(tx *bolt.Tx, id kernel.RunID) (*driver.RunRecord,
 	rec.Awaited = cur.Awaited
 	rec.UpdatedAt = cur.UpdatedAt
 	if cur.StepID != "" {
-		sr := rec.Step(cur.StepID)
-		if cur.Phase == kernel.PhaseUnwind && sr.Forward.Status == driver.OpSucceeded {
-			sr.Unwind.Status = driver.OpUnresolved
-			sr.Unwind.Attempts = cur.Attempts
-		} else {
-			sr.Forward.Status = driver.OpUnresolved
-			sr.Forward.Attempts = cur.Attempts
+		op := rec.Step(cur.StepID).Op(cur.Phase)
+		op.Status = driver.OpUnresolved
+		op.Attempts = cur.Attempts
+	}
+	return nil
+}
+
+// getHead reads a run's head: the terminal row, or the meta, cancel,
+// and failure rows and the cursor. No operation row is decoded and no
+// blob is touched, so a head never fills or reorders the blob caches.
+func (s *Store) getHead(tx *bolt.Tx, id kernel.RunID) (*driver.RunRecord, error) {
+	if tb := tx.Bucket(terminalBucket).Get([]byte(id)); tb != nil {
+		rec := &driver.RunRecord{}
+		if _, err := storagepb.UnmarshalTerminalInto(tb, rec); err != nil {
+			return nil, err
 		}
+		rec.Output = nil
+		return rec, nil
+	}
+	// The head rows sort first under the run's prefix (M, c, f), so one
+	// seek and at most two steps read them; a point read per row would
+	// cost a cursor each.
+	prefix := runPrefix(id)
+	c := tx.Bucket(activeBucket).Cursor()
+	k, v := c.Seek(prefix)
+	if k == nil || !bytes.HasPrefix(k, prefix) || k[len(prefix)] != tagMeta {
+		return nil, kernel.ErrRunNotFound
+	}
+	rec := &driver.RunRecord{}
+	if err := storagepb.UnmarshalRunMetaInto(v, rec); err != nil {
+		return nil, err
+	}
+head:
+	for k, v = c.Next(); k != nil && bytes.HasPrefix(k, prefix); k, v = c.Next() {
+		switch k[len(prefix)] {
+		case tagCancel:
+			cr, err := storagepb.UnmarshalCancel(v)
+			if err != nil {
+				return nil, err
+			}
+			rec.Cancel = cr
+		case tagFailure:
+			f, err := storagepb.UnmarshalFailureRecord(v)
+			if err != nil {
+				return nil, err
+			}
+			rec.Failure = &f
+		default:
+			break head // the input and the operation rows follow
+		}
+	}
+	if err := overlayCursor(tx, rec); err != nil {
+		return nil, err
 	}
 	return rec, nil
 }
@@ -1013,6 +1074,16 @@ func (s *Store) GetRun(_ context.Context, id kernel.RunID) (*driver.RunRecord, e
 	err := s.db.View(func(tx *bolt.Tx) error {
 		var err error
 		rec, err = s.getRun(tx, id)
+		return err
+	})
+	return rec, err
+}
+
+func (s *Store) GetRunHead(_ context.Context, id kernel.RunID) (*driver.RunRecord, error) {
+	var rec *driver.RunRecord
+	err := s.db.View(func(tx *bolt.Tx) error {
+		var err error
+		rec, err = s.getHead(tx, id)
 		return err
 	})
 	return rec, err
@@ -1092,13 +1163,13 @@ func (s *Store) RequestCancel(_ context.Context, id kernel.RunID, req driver.Can
 // CreateRun transaction until the terminal transition releases it, so the
 // slot values are exactly the nonterminal run ids. The walk is
 // proportional to the runs in flight, not to the retained history in
-// meta. A slot naming a run with no meta row is corruption, reported
-// rather than skipped.
+// meta, and each run is read as its head. A slot naming a run with no
+// meta row is corruption, reported rather than skipped.
 func (s *Store) ListNonterminal(_ context.Context) ([]*driver.RunRecord, error) {
 	var out []*driver.RunRecord
 	err := s.db.View(func(tx *bolt.Tx) error {
 		return tx.Bucket(slotsBucket).ForEach(func(_, v []byte) error {
-			rec, err := s.getRun(tx, kernel.RunID(v))
+			rec, err := s.getHead(tx, kernel.RunID(v))
 			if err != nil {
 				return fmt.Errorf("bbolt: slot references run %s: %w", v, err)
 			}

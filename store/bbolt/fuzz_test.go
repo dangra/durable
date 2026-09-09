@@ -169,6 +169,35 @@ func FuzzStoreContract(f *testing.F) {
 			mr, merr := ms.GetRun(ctx, id)
 			mustEqual(fmt.Sprintf("GetRun(%s) error", id), berr, merr)
 			mustEqual(fmt.Sprintf("GetRun(%s)", id), canonicalize(br), canonicalize(mr))
+			// The head agrees between stores and is a projection of the
+			// full record: same identity and cursor fields, no blobs,
+			// and for a nonterminal run at most the cursor's operation.
+			bh, bherr := bs.GetRunHead(ctx, id)
+			mh, mherr := ms.GetRunHead(ctx, id)
+			mustEqual(fmt.Sprintf("GetRunHead(%s) error", id), bherr, mherr)
+			mustEqual(fmt.Sprintf("GetRunHead(%s)", id), canonicalize(bh), canonicalize(mh))
+			if bherr == nil {
+				mustEqual("head vs GetRun error", bherr, berr)
+				want, got := canonicalize(br), canonicalize(bh)
+				if got.Input != nil || got.Output != nil {
+					t.Fatalf("head of %s carries blobs: %+v", id, got)
+				}
+				want.Input, want.Output = nil, nil
+				if !br.Terminal() {
+					if len(bh.Steps) > 1 {
+						t.Fatalf("nonterminal head of %s has %d steps", id, len(bh.Steps))
+					}
+					for sid, sr := range bh.Steps {
+						op := sr.Op(br.Phase)
+						full := br.Steps[sid].Op(br.Phase)
+						if op.Status != driver.OpUnresolved || full.Status != driver.OpUnresolved || op.Attempts != full.Attempts {
+							t.Fatalf("head of %s step %s = %+v; full %+v", id, sid, *op, *full)
+						}
+					}
+					want.Steps, got.Steps = nil, nil
+				}
+				mustEqual(fmt.Sprintf("GetRunHead(%s) projection", id), got, want)
+			}
 		}
 		// The slot index is load-bearing twice over: CreateRun admits
 		// against it and ListNonterminal (recovery) walks it. The model

@@ -35,34 +35,27 @@ func (r Run) Wait(ctx context.Context) (Result, error) {
 		return Result{}, ErrNotStarted
 	}
 	for {
-		rec, err := e.store.GetRun(ctx, r.id)
+		// Register first, then read once: a notification between the
+		// read and the sleep then closes ch. A Run found terminal pays
+		// a registration and its cancel, an order of magnitude less
+		// than the read a check before registering would cost.
+		ch, cancel := e.waiters.Watch(r.id)
+		rec, err := e.store.GetRunHead(ctx, r.id)
 		if err != nil {
+			cancel()
 			return Result{}, err
 		}
 		if rec.Terminal() {
+			cancel()
 			return resultOf(rec), nil
 		}
 		if ie := e.invalidFor(r.id); ie != nil {
+			cancel()
 			return Result{}, ie
 		}
 		if inAttempt(ctx) {
+			cancel()
 			return Result{}, ErrRunInProgress
-		}
-		ch, cancel := e.waiters.Watch(r.id)
-		// Re-check after registering so a notification between the read
-		// and the registration is not missed.
-		rec, err = e.store.GetRun(ctx, r.id)
-		if err != nil {
-			cancel()
-			return Result{}, err
-		}
-		if rec.Terminal() {
-			cancel()
-			return resultOf(rec), nil
-		}
-		if ie := e.invalidFor(r.id); ie != nil {
-			cancel()
-			return Result{}, ie
 		}
 		select {
 		case <-ch:
@@ -109,10 +102,12 @@ func (r Run) Cancel(ctx context.Context, cause string) error {
 	return nil
 }
 
-// Status returns a point-in-time observation of the Run.
+// Status returns a point-in-time observation of the Run. It reads the
+// Run's head: no blob is touched, so polling is cheap however large the
+// Input and States are.
 func (r Run) Status(ctx context.Context) (Status, error) {
 	e := r.engine
-	rec, err := e.store.GetRun(ctx, r.id)
+	rec, err := e.store.GetRunHead(ctx, r.id)
 	if err != nil {
 		return Status{}, err
 	}
@@ -176,7 +171,7 @@ func (r Run) Status(ctx context.Context) (Status, error) {
 // Annotations returns a caller-owned copy of the Run's immutable
 // acceptance-time annotations, nil when none were supplied.
 func (r Run) Annotations(ctx context.Context) (map[string]string, error) {
-	rec, err := r.engine.store.GetRun(ctx, r.id)
+	rec, err := r.engine.store.GetRunHead(ctx, r.id)
 	if err != nil {
 		return nil, err
 	}

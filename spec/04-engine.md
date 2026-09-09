@@ -654,7 +654,10 @@ The contract is the `store/driver` package: `Store`, `RunRecord`,
 park, and failure-record vocabulary of the `kernel` package, which the
 `durable` package aliases. Store implementations persist every Cursor
 field, answer `GetActiveRunID` from the same index `CreateRun` enforces
-the resource slot with (never by scanning), and register a URI scheme
+the resource slot with (never by scanning), answer `GetRunHead` — the
+record without its blobs and operation history, which is what status,
+waiting, lookups, await bookkeeping, and recovery read — in point reads
+that touch no Input, State, or Output, and register a URI scheme
 with `store.Register`, so applications open them through `store.Open`
 and link only the drivers they import.
 The in-memory `store/mem` is the executable reference, and `store/bbolt`

@@ -361,6 +361,19 @@ type Store interface {
 	// GetRun returns the record for id, or kernel.ErrRunNotFound.
 	GetRun(ctx context.Context, id kernel.RunID) (*RunRecord, error)
 
+	// GetRunHead returns the head of the Run for id, or
+	// kernel.ErrRunNotFound: the record without its blobs and its
+	// operation history. A nonterminal head carries the identity,
+	// annotations, creation time, every Cursor field, the cancel
+	// request, and the Failure; its Steps hold exactly the Cursor's
+	// in-flight operation as an unresolved entry (none when the Cursor
+	// is idle), and Input and States are absent. A terminal head is the
+	// terminal record without its Output. It is the read for
+	// observation — status, waiting, lookups, await bookkeeping — and a
+	// persistent store answers it in point reads: no walk of the
+	// operation rows and no blob access.
+	GetRunHead(ctx context.Context, id kernel.RunID) (*RunRecord, error)
+
 	// ApplyTransition atomically applies one durable state change to the
 	// Run: the Cursor is written, step facts are upserted, failures
 	// recorded, and a Transition carrying an Outcome commits terminality
@@ -385,7 +398,8 @@ type Store interface {
 	// a terminal Run returns kernel.ErrRunTerminal.
 	RequestCancel(ctx context.Context, id kernel.RunID, req CancelRequest) (accepted bool, err error)
 
-	// ListNonterminal returns all Runs without a terminal outcome.
+	// ListNonterminal returns the heads (as GetRunHead) of all Runs
+	// without a terminal outcome.
 	ListNonterminal(ctx context.Context) ([]*RunRecord, error)
 
 	// GetActiveRunID returns the RunID occupying the (pipeline, resource)

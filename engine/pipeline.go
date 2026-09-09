@@ -134,7 +134,7 @@ func (p *Pipeline) Schedule(ctx context.Context, resource durable.ResourceID, in
 // pipeline. A missing Run returns durable.ErrRunNotFound; a mismatch
 // *PipelineMismatchError.
 func (p *Pipeline) GetRun(ctx context.Context, id durable.RunID) (Run, error) {
-	rec, err := p.engine.store.GetRun(ctx, id)
+	rec, err := p.engine.store.GetRunHead(ctx, id)
 	if err != nil {
 		return Run{}, err
 	}

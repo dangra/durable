@@ -518,6 +518,11 @@ func (e *Engine) baseContext() (context.Context, bool) {
 	return e.baseCtx, e.baseCtx != nil
 }
 
+// hasUnresolvedOp reports whether the Run reserved an attempt that never
+// resolved. Recovery reads heads, whose Steps hold the cursor's
+// operation alone; an unresolved operation displaced by a topology
+// change and flushed as a row is not seen here, which costs it only the
+// recovery backoff it would otherwise get.
 func hasUnresolvedOp(rec *driver.RunRecord) bool {
 	for _, sr := range rec.Steps {
 		if sr.Forward.Status == driver.OpUnresolved || sr.Unwind.Status == driver.OpUnresolved {
@@ -581,7 +586,8 @@ func (e *Engine) takePreempted(id durable.RunID) (string, bool) {
 
 // processRun advances one Run until it becomes terminal, invalid, must wait
 // for retry, or shutdown begins. It returns a redispatch delay when the Run
-// needs a future wakeup.
+// needs a future wakeup. It is the one reader of the full record: every
+// other engine read is of the head.
 func (e *Engine) processRun(id durable.RunID) (time.Duration, bool) {
 	for {
 		if e.baseCtx.Err() != nil {
@@ -1005,7 +1011,7 @@ func (e *Engine) wake(rec *driver.RunRecord, done []durable.RunID, expired bool)
 // targetDone reports whether an await target no longer needs waiting on:
 // it is terminal, or it never existed / was reaped by retention.
 func (e *Engine) targetDone(target durable.RunID) (bool, error) {
-	trec, err := e.store.GetRun(e.baseCtx, target)
+	trec, err := e.store.GetRunHead(e.baseCtx, target)
 	if errors.Is(err, durable.ErrRunNotFound) {
 		return true, nil
 	}
@@ -1089,7 +1095,7 @@ func (e *Engine) awaitCycle(self durable.RunID, targets []durable.RunID) (bool, 
 			continue
 		}
 		visited[cur] = struct{}{}
-		rec, err := e.store.GetRun(e.baseCtx, cur)
+		rec, err := e.store.GetRunHead(e.baseCtx, cur)
 		if errors.Is(err, durable.ErrRunNotFound) {
 			continue
 		}

@@ -50,6 +50,11 @@ const (
 	// bbolt leaf node holding one spills across several pages.
 	fatStateSize  = 16 << 10
 	fatOutputSize = 32 << 10
+
+	// The shape matrix: a slim value is a few fields; a fat one is the
+	// machine config's size.
+	slimValueSize = 256
+	fatValueSize  = 32 << 10
 )
 
 // scale shrinks scenario populations under -short (and in -race runs,
@@ -170,13 +175,29 @@ func machinePipeline(id durable.PipelineID, specs [numSteps]stepSpec) *pipelined
 // that size. The fat-blob scenarios use it to put a large value where
 // the store must keep it away from rows that change.
 func sizedPipeline(id durable.PipelineID, specs [numSteps]stepSpec, stateBytes, outputBytes int) *pipelinedef.Definition {
-	state := wrapperspb.Bytes(make([]byte, stateBytes))
+	return shapedPipeline(id, specs, pipelineShape{input: true, stateBytes: stateBytes, outputBytes: outputBytes})
+}
+
+// pipelineShape is what a pipeline's runs carry: an input at all, a
+// committed state of stateBytes per step (zero for stateless steps), and
+// an output of outputBytes (zero for none).
+type pipelineShape struct {
+	input                   bool
+	stateBytes, outputBytes int
+}
+
+// shapedPipeline is the machine pipeline in any shape.
+func shapedPipeline(id durable.PipelineID, specs [numSteps]stepSpec, shape pipelineShape) *pipelinedef.Definition {
+	var state *wrapperspb.BytesValue
+	if shape.stateBytes > 0 {
+		state = wrapperspb.Bytes(make([]byte, shape.stateBytes))
+	}
 	var steps []pipelinedef.Step
 	for i, spec := range specs {
 		spec := spec
 		sc := pipelinedef.Step{
 			ID:               durable.StepID(fmt.Sprintf("%s-step-%d/v1", id, i)),
-			HasState:         true,
+			HasState:         state != nil,
 			Unwind:           spec.unwind,
 			ConcurrencyClass: spec.class,
 			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
@@ -185,6 +206,9 @@ func sizedPipeline(id durable.PipelineID, specs [numSteps]stepSpec, stateBytes, 
 				}
 				if spec.permanent {
 					return nil, durable.Fail(errPermanent)
+				}
+				if state == nil {
+					return nil, nil
 				}
 				return state, nil
 			},
@@ -196,13 +220,12 @@ func sizedPipeline(id durable.PipelineID, specs [numSteps]stepSpec, stateBytes, 
 		}
 		steps = append(steps, sc)
 	}
-	cfg := pipelinedef.Config{
-		ID:       id,
-		Steps:    steps,
-		NewInput: func() proto.Message { return &wrapperspb.BytesValue{} },
+	cfg := pipelinedef.Config{ID: id, Steps: steps}
+	if shape.input {
+		cfg.NewInput = func() proto.Message { return &wrapperspb.BytesValue{} }
 	}
-	if outputBytes > 0 {
-		output := wrapperspb.Bytes(make([]byte, outputBytes))
+	if shape.outputBytes > 0 {
+		output := wrapperspb.Bytes(make([]byte, shape.outputBytes))
 		cfg.Reduce = func(durable.ReduceView) proto.Message { return output }
 	}
 	return pipelinedef.New(cfg)
@@ -211,6 +234,12 @@ func sizedPipeline(id durable.PipelineID, specs [numSteps]stepSpec, stateBytes, 
 // runPopulation schedules n runs concurrently and waits for all of them,
 // returning per-run schedule-to-terminal latencies.
 func runPopulation(b *testing.B, pipe *engine.Pipeline, n int, prefix string) []time.Duration {
+	return runPopulationWith(b, pipe, n, prefix, fatInput)
+}
+
+// runPopulationWith is runPopulation with the input chosen; nil schedules
+// an input-less pipeline.
+func runPopulationWith(b *testing.B, pipe *engine.Pipeline, n int, prefix string, input proto.Message) []time.Duration {
 	b.Helper()
 	var (
 		wg  sync.WaitGroup
@@ -222,7 +251,7 @@ func runPopulation(b *testing.B, pipe *engine.Pipeline, n int, prefix string) []
 		go func(i int) {
 			defer wg.Done()
 			start := time.Now()
-			run, _, err := pipe.Schedule(context.Background(), durable.ResourceID(fmt.Sprintf("%s-%d", prefix, i)), fatInput)
+			run, _, err := pipe.Schedule(context.Background(), durable.ResourceID(fmt.Sprintf("%s-%d", prefix, i)), input)
 			if err != nil {
 				b.Error(err)
 				return

@@ -611,9 +611,8 @@ func (e *Engine) processRun(id durable.RunID) (time.Duration, bool) {
 			return 0, false
 		}
 		// The mark is taken before any read, so a write after the read
-		// is seen next iteration. It drops a carried record — except a
-		// terminal one, which the store lets no one change.
-		if e.dirty.Take(id) && rec != nil && !rec.Terminal() {
+		// is seen next iteration; it drops a carried record.
+		if e.dirty.Take(id) {
 			rec = nil
 		}
 		if rec == nil {

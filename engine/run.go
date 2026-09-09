@@ -191,9 +191,10 @@ func (r Run) Annotations(ctx context.Context) (map[string]string, error) {
 }
 
 // InputBytes returns the Run's immutable serialized Pipeline Input (nil
-// for an Input-less pipeline). It is intended for generated code, which
-// wraps it with a typed Input accessor; the typed accessor returns a
-// defensive caller-owned copy via a fresh unmarshal.
+// for an Input-less pipeline). The slice is shared with the store and
+// must not be modified. It is intended for generated code, which wraps
+// it with a typed Input accessor; the typed accessor returns a
+// caller-owned message via a fresh unmarshal.
 //
 // The Input is released when the Run reaches its terminal outcome: it
 // has been folded into the Output by then, and the store keeps only the
@@ -211,9 +212,10 @@ func (r Run) InputBytes(ctx context.Context) ([]byte, error) {
 
 // OutputBytes returns the committed terminal output of a Run: the
 // Pipeline Output of a successful Run, or the failure Output of a failed
-// Run whose pipeline declares one; nil otherwise. It is intended for
-// generated code, which wraps it with typed Output and FailureOutput
-// accessors keyed on the outcome.
+// Run whose pipeline declares one; nil otherwise. The slice is shared
+// with the store and must not be modified. It is intended for generated
+// code, which wraps it with typed Output and FailureOutput accessors
+// keyed on the outcome.
 func (r Run) OutputBytes(ctx context.Context) ([]byte, error) {
 	rec, err := r.engine.store.GetRun(ctx, r.id)
 	if err != nil {

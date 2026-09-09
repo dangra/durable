@@ -38,7 +38,8 @@ type OperationRecord struct {
 	Status   OpStatus
 	Attempts uint64
 	// State is the committed Step State: set on the forward operation of a
-	// state-producing Step once it succeeded, nil otherwise.
+	// state-producing Step once it succeeded, nil otherwise. Immutable and
+	// shareable, like Input and Output (see Store).
 	State []byte
 	// Failure is the permanent failure that resolved the operation, set
 	// exactly when Status is OpFailed.
@@ -154,6 +155,8 @@ type RunRecord struct {
 	// identity: the active Run's annotations win on a dedup hit.
 	Annotations map[string]string
 
+	// Input is the serialized Pipeline Input, immutable for the life of
+	// the Run and shareable (see Store). Released at terminality.
 	Input []byte
 
 	Phase kernel.Phase
@@ -161,6 +164,8 @@ type RunRecord struct {
 
 	Failure *kernel.Failure
 
+	// Output is the committed terminal output, immutable and shareable
+	// (see Store).
 	Output []byte
 	// Outcome is set only once the Run is terminal.
 	Outcome *kernel.Outcome
@@ -193,8 +198,8 @@ type RunRecord struct {
 	UpdatedAt time.Time
 }
 
+// clone copies the record; State is immutable and shared (see Store).
 func (o OperationRecord) clone() OperationRecord {
-	o.State = append([]byte(nil), o.State...)
 	if o.Failure != nil {
 		f := *o.Failure
 		o.Failure = &f
@@ -285,7 +290,8 @@ func maxU32(a uint32, rest ...uint32) uint32 {
 	return a
 }
 
-// Clone returns a deep copy of the record.
+// Clone returns a deep copy of the record, sharing the immutable byte
+// slices — Input, Step States, Output — as the Store contract allows.
 func (r *RunRecord) Clone() *RunRecord {
 	c := *r
 	c.Steps = make(map[kernel.StepID]*StepRecord, len(r.Steps))
@@ -295,8 +301,7 @@ func (r *RunRecord) Clone() *RunRecord {
 		sc.Unwind = sr.Unwind.clone()
 		c.Steps[id] = &sc
 	}
-	c.Input = append([]byte(nil), r.Input...)
-	c.Output = append([]byte(nil), r.Output...)
+	// Input and Output are immutable and shared (see Store).
 	if r.Annotations != nil {
 		c.Annotations = make(map[string]string, len(r.Annotations))
 		for k, v := range r.Annotations {
@@ -324,9 +329,14 @@ func (r *RunRecord) Clone() *RunRecord {
 // against a Store at a time in v1; implementations SHOULD enforce or detect
 // exclusive ownership where practical.
 //
-// Implementations must treat records as opaque values: return defensive
-// copies (or decode fresh values) so callers never share mutable state with
-// the store.
+// Implementations must treat records as opaque values and return copies
+// of them, so callers never share mutable state with the store — with
+// one exception. The byte slices of a Run's Input, its Step States, and
+// its Output are immutable: a store may retain the slice a caller passes
+// in and may return the same backing memory on every read, from its own
+// cache if it keeps one, and callers must never modify such a slice,
+// neither one they passed in after the call nor one they read back. The
+// engine only ever decodes them.
 //
 // Identifiers reaching a Store are NUL-free valid UTF-8, and free-text
 // fields (messages, reasons, causes) and annotation keys and values are

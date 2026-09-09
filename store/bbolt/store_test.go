@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/dangra/durable/store"
 	"github.com/dangra/durable/store/driver"
 	"path/filepath"
 	"reflect"
@@ -885,5 +886,228 @@ func TestBlobRule(t *testing.T) {
 				return nil
 			})
 		})
+	}
+}
+
+// TestBlobCacheServesReads pins the blob cache: once a run's input and
+// large states are written, reads come from the cache — shown by
+// planting other bytes in the cache and reading them back while the file
+// still holds the originals — the entry goes at terminality, and a
+// reopened store fills its entry from the file on the first read.
+func TestBlobCacheServesReads(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "cache.db")
+	s := open(t, path)
+	now := time.Unix(1_700_000_000, 0).UTC()
+	input := bytes.Repeat([]byte{1}, 8192)
+	state := bytes.Repeat([]byte{2}, 4*s.pageSizeOrDefault())
+	rec := &driver.RunRecord{RunID: "run-c", PipelineID: "p", ResourceID: "r", Phase: durable.PhaseForward, Input: input, CreatedAt: now, UpdatedAt: now}
+	if _, created, err := s.CreateRun(ctx, rec, nil); err != nil || !created {
+		t.Fatalf("CreateRun = %v, %v", created, err)
+	}
+	opk := opKey("run-c", 1, "a/v1", durable.PhaseForward)
+	if err := s.ApplyTransition(ctx, "run-c", driver.Transition{Cursor: driver.Cursor{Phase: durable.PhaseForward, UpdatedAt: now}, Ops: []driver.OpWrite{{
+		StepID: "a/v1", Phase: durable.PhaseForward, Record: driver.OperationRecord{Status: driver.OpSucceeded, Attempts: 1, State: state, Order: 1},
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	_ = opk
+	// Reads take the blobs from the cache: plant different bytes there
+	// and the read returns them, while the file still holds the
+	// originals.
+	planted, plantedState := bytes.Repeat([]byte{7}, len(input)), bytes.Repeat([]byte{8}, len(state))
+	s.blobs.setInput("run-c", planted)
+	s.blobs.setState("run-c", "a/v1", plantedState)
+	got, err := s.GetRun(ctx, "run-c")
+	if err != nil || !bytes.Equal(got.Input, planted) || !bytes.Equal(got.Step("a/v1").Forward.State, plantedState) {
+		t.Fatalf("GetRun = input %x…, state %x…, %v; want the cache's bytes", got.Input[:1], got.Step("a/v1").Forward.State[:1], err)
+	}
+	s.db.View(func(tx *bolt.Tx) error {
+		if in := getBlob(tx.Bucket(activeBucket), activeKey("run-c", tagInput)); !bytes.Equal(in, input) {
+			t.Fatal("the file must still hold the original input")
+		}
+		return nil
+	})
+	// Terminality drops the entry.
+	oc := durable.OutcomeSuccess
+	if err := s.ApplyTransition(ctx, "run-c", driver.Transition{Cursor: driver.Cursor{Phase: durable.PhaseDone, UpdatedAt: now}, Outcome: &oc}); err != nil {
+		t.Fatal(err)
+	}
+	if _, cached := s.blobs.input("run-c"); cached {
+		t.Fatal("terminality must drop the run's cache entry")
+	}
+
+	// A reopened store fills from the file on the first read.
+	rec2 := &driver.RunRecord{RunID: "run-d", PipelineID: "p", ResourceID: "r2", Phase: durable.PhaseForward, Input: input, CreatedAt: now, UpdatedAt: now}
+	if _, created, err := s.CreateRun(ctx, rec2, nil); err != nil || !created {
+		t.Fatalf("CreateRun = %v, %v", created, err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s2 := open(t, path)
+	if _, cached := s2.blobs.input("run-d"); cached {
+		t.Fatal("a fresh store starts cold")
+	}
+	if got, err := s2.GetRun(ctx, "run-d"); err != nil || !bytes.Equal(got.Input, input) {
+		t.Fatalf("GetRun after reopen = %d bytes, %v", len(got.Input), err)
+	}
+	if in, cached := s2.blobs.input("run-d"); !cached || !bytes.Equal(in, input) {
+		t.Fatal("the first read must fill the cache")
+	}
+}
+
+func (s *Store) pageSizeOrDefault() int { return s.db.Info().PageSize }
+
+// TestOptions pins the options and their URI forms: the byte counts
+// parse with binary units, an unknown key is rejected, and zero disables
+// a cache.
+func TestOptions(t *testing.T) {
+	for in, want := range map[string]int{"0": 0, "4096": 4096, "64K": 64 << 10, "128MiB": 128 << 20, "1g": 1 << 30, " 2 kib ": 2 << 10} {
+		if got, err := parseBytes(in); err != nil || got != want {
+			t.Errorf("parseBytes(%q) = %d, %v; want %d", in, got, err, want)
+		}
+	}
+	for _, bad := range []string{"", "x", "-1", "1.5M", "1TiB"} {
+		if _, err := parseBytes(bad); err == nil {
+			t.Errorf("parseBytes(%q) accepted", bad)
+		}
+	}
+	dir := t.TempDir()
+	if _, err := store.Open("bbolt:" + filepath.Join(dir, "a.db") + "?blob_cache=1&bogus=2"); err == nil {
+		t.Fatal("an unknown option must be rejected")
+	}
+	st, err := store.Open("bbolt:" + filepath.Join(dir, "b.db") + "?blob_cache=0&output_cache=1MiB")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := st.(*Store)
+	defer s.Close()
+	if s.blobs.limit != 0 || s.outputs.limit != 1<<20 {
+		t.Fatalf("limits = %d, %d", s.blobs.limit, s.outputs.limit)
+	}
+	// A disabled blob cache never caches; reads still come from the file.
+	ctx := context.Background()
+	now := time.Unix(1_700_000_000, 0).UTC()
+	input := bytes.Repeat([]byte{1}, 8192)
+	if _, created, err := s.CreateRun(ctx, &driver.RunRecord{RunID: "r", PipelineID: "p", ResourceID: "r", Phase: durable.PhaseForward, Input: input, CreatedAt: now, UpdatedAt: now}, nil); err != nil || !created {
+		t.Fatal(err)
+	}
+	if _, cached := s.blobs.input("r"); cached {
+		t.Fatal("a zero limit must cache nothing")
+	}
+	if got, err := s.GetRun(ctx, "r"); err != nil || !bytes.Equal(got.Input, input) {
+		t.Fatalf("GetRun = %d bytes, %v", len(got.Input), err)
+	}
+}
+
+// TestOutputCache pins the outputs instance of the cache: a large output
+// is cached when its terminality commits and served to the read after
+// Wait — shown by planting other bytes — least recently used entries
+// leave past the limit, and reap drops a victim's entry.
+func TestOutputCache(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(filepath.Join(t.TempDir(), "out.db"), WithOutputCache(3*8192))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	now := time.Unix(1_700_000_000, 0).UTC()
+	oc := durable.OutcomeSuccess
+	finish := func(id durable.RunID, fill byte) {
+		t.Helper()
+		out := bytes.Repeat([]byte{fill}, 8192)
+		rec := &driver.RunRecord{RunID: id, PipelineID: "p", ResourceID: durable.ResourceID(id), Phase: durable.PhaseForward, CreatedAt: now, UpdatedAt: now}
+		if _, created, err := s.CreateRun(ctx, rec, nil); err != nil || !created {
+			t.Fatal(err)
+		}
+		if err := s.ApplyTransition(ctx, id, driver.Transition{Cursor: driver.Cursor{Phase: durable.PhaseDone, UpdatedAt: now}, Outcome: &oc, Output: out}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	finish("a", 1)
+	if s.outputs.output("a") == nil {
+		t.Fatal("terminality must cache a large output")
+	}
+	planted := bytes.Repeat([]byte{9}, 8192)
+	s.outputs.setOutput("a", planted)
+	if got, err := s.GetRun(ctx, "a"); err != nil || !bytes.Equal(got.Output, planted) {
+		t.Fatalf("GetRun = %x…, %v; want the cache's bytes", got.Output[:1], err)
+	}
+	// Three fit; a fourth evicts the least recently used, which is "a"
+	// unless it was read last.
+	finish("b", 2)
+	finish("c", 3)
+	s.outputs.output("a")
+	finish("d", 4)
+	if s.outputs.output("b") != nil || s.outputs.output("a") == nil || s.outputs.output("d") == nil {
+		t.Fatal("eviction must drop the least recently used entry")
+	}
+	// A miss reads the file and refills.
+	if got, err := s.GetRun(ctx, "b"); err != nil || got.Output[0] != 2 || s.outputs.output("b") == nil {
+		t.Fatalf("GetRun(b) = %v; the miss must read the file and refill", err)
+	}
+	// Reap drops victims.
+	if n, err := s.ReapTerminal(ctx, now.Add(time.Second), 10); err != nil || n != 4 {
+		t.Fatalf("ReapTerminal = %d, %v", n, err)
+	}
+	if s.outputs.output("d") != nil || s.outputs.size != 0 {
+		t.Fatalf("reap must drop every victim's entry; size = %d", s.outputs.size)
+	}
+}
+
+// TestBlobCacheEvictsColdRuns pins that the blobs of runs in flight are
+// not pinned by being in flight: past the limit the least recently used
+// run leaves, and it re-enters from the file on its next read while the
+// run that was hot stays.
+func TestBlobCacheEvictsColdRuns(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(filepath.Join(t.TempDir(), "cold.db"), WithBlobCache(3*8192))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	now := time.Unix(1_700_000_000, 0).UTC()
+	create := func(id durable.RunID, fill byte) {
+		t.Helper()
+		rec := &driver.RunRecord{RunID: id, PipelineID: "p", ResourceID: durable.ResourceID(id), Phase: durable.PhaseForward,
+			Input: bytes.Repeat([]byte{fill}, 8192), CreatedAt: now, UpdatedAt: now}
+		if _, created, err := s.CreateRun(ctx, rec, nil); err != nil || !created {
+			t.Fatal(err)
+		}
+	}
+	cached := s.blobs.has
+	create("cold", 1) // a run that will sit for days
+	create("b", 2)
+	create("c", 3)
+	if !cached("cold") || !cached("b") || !cached("c") {
+		t.Fatal("three runs fit")
+	}
+	// Reads keep b and c hot; cold is never read.
+	s.GetRun(ctx, "b")
+	s.GetRun(ctx, "c")
+	create("d", 4)
+	if cached("cold") || !cached("b") || !cached("d") {
+		t.Fatal("the fourth run must evict the cold one, not a hot one")
+	}
+	// The cold run wakes: it reads from the file and re-enters, and the
+	// least recently used of the rest leaves.
+	if got, err := s.GetRun(ctx, "cold"); err != nil || got.Input[0] != 1 {
+		t.Fatalf("GetRun(cold) = %v", err)
+	}
+	if !cached("cold") || cached("b") {
+		t.Fatal("a woken run must re-enter and evict the least recently used")
+	}
+	// A run larger than the whole cache is simply not cached.
+	big := &driver.RunRecord{RunID: "big", PipelineID: "p", ResourceID: "big", Phase: durable.PhaseForward,
+		Input: bytes.Repeat([]byte{5}, 4*8192), CreatedAt: now, UpdatedAt: now}
+	if _, created, err := s.CreateRun(ctx, big, nil); err != nil || !created {
+		t.Fatal(err)
+	}
+	if cached("big") || s.blobs.size > s.blobs.limit {
+		t.Fatalf("an oversized run must not be cached; size = %d", s.blobs.size)
+	}
+	if got, err := s.GetRun(ctx, "big"); err != nil || len(got.Input) != 4*8192 {
+		t.Fatalf("GetRun(big) = %d bytes, %v", len(got.Input), err)
 	}
 }

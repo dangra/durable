@@ -100,7 +100,7 @@ func classify(unit string) class {
 	// and paired slices cancel shared weather.
 	case "ns/op", "p50-ms", "p99-ms", "start-ms", "wake-p50-ms":
 		return class{threshold: 1.00, pairedThreshold: 1.00, bestOf: true, wall: true, hardThreshold: 4.00}
-	case "runs/sec", "unwinds/sec", "cycles/sec":
+	case "runs/sec", "unwinds/sec", "cycles/sec", "polls/sec":
 		return class{threshold: 0.50, pairedThreshold: 0.50, lowerIsBad: true, bestOf: true, wall: true, hardThreshold: 0.80}
 	// wake-max-ms (a population max — one scheduler stall away from
 	// doubling) and anything unrecognized: report, never gate.

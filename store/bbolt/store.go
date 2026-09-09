@@ -7,37 +7,58 @@
 // blocks (or times out) rather than executing concurrently.
 //
 // The storage representation is implementation-defined by the spec; this
-// implementation stores each run as components with distinct write
-// cadences (the internal durable.storage.v1 protobuf schema): write-once
-// meta (identity + input), one operation row per step phase written at
-// that operation's resolution and carrying its own failure, the run's
-// write-once run failure and cancel records, and the small cursor
-// rewritten per attempt. Per-attempt write volume is therefore
-// independent of input and state sizes, an unwind never rewrites the
-// forward row's state, and no row is read back to be rewritten on the
-// attempt path.
+// implementation stores a run in five buckets, chosen by write cadence
+// and value size:
 //
-// A run has two storage stages. Nonterminal, it is meta, cursor,
-// operation rows, and its failure and cancel rows. The terminality
-// commit reads the run once and replaces all of them with one terminal
+//	input     run id                    -> input bytes         written once
+//	active    run id · tag [· ...]      -> small facts          append-only
+//	cursor    run id                    -> Cursor               rewritten per attempt
+//	terminal  run id                    -> Terminal             written once
+//	slots     pipeline · resource       -> run id               index
+//
+// (· is the NUL separator, which the Store contract keeps out of every
+// identifier.) A nonterminal run is its input, its active rows, and its
+// cursor; the terminality commit replaces all of them with one terminal
 // record — identity, outcome, output, commit time, failure, cancel
-// request, and the permanently failed unwinds — in the same
-// transaction, so the input and step states, folded into the output by
-// then, are released when the run ends rather than when retention
-// reaps it, and a terminal run is one row. Exactly one of meta and
-// terminal exists for a run; GetRun dispatches on which.
+// request, and the permanently failed unwinds — in the same transaction,
+// so the input and step states, folded into the output by then, are
+// released when the run ends rather than when retention reaps it.
+// Exactly one of a run's meta row and terminal row exists; GetRun
+// dispatches on which.
 //
-// An active-slot index keyed by (PipelineID, ResourceID) holds every
-// nonterminal run: CreateRun admits against it, GetActiveRunID reads it,
-// and ListNonterminal walks it, so recovery cost follows the runs in
-// flight rather than the retained history.
+// The active bucket holds every write-once fact of a nonterminal run
+// under the run id, so one prefix walk assembles it and one prefix walk
+// deletes it. The tag byte after the run id says what a row is, and tags
+// sort in the order a reader wants them:
+//
+//	M   RunMeta (identity, annotations, created_at)
+//	c   CancelRequest
+//	f   the run's FailureRecord
+//	o   an operation row: o · order (4 bytes, big-endian) · step · phase
+//
+// Operation rows lead with their resolution order, so the walk returns a
+// run's operations in the order they resolved; an unresolved operation
+// flushed to its row (a topology change displaced it) carries order zero
+// and sorts ahead of the resolved history until it resolves, when its
+// row moves to its real order. Meta and failure rows are written once and
+// the store refuses a second write; operation rows are one per step and
+// phase, replaced only as the contract's upsert allows.
+//
+// Per-attempt write volume is the cursor's, independent of input and
+// state sizes: the input sits alone in its bucket because bbolt rewrites
+// a whole leaf node on any write to it, so a large value must not share
+// a node with rows that change. An active-slot index keyed by
+// (PipelineID, ResourceID) holds every nonterminal run: CreateRun admits
+// against it, GetActiveRunID reads it, and ListNonterminal walks it, so
+// recovery cost follows the runs in flight rather than the retained
+// history.
 package bbolt
 
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"fmt"
-	"github.com/dangra/durable/store/driver"
 	"sort"
 	"sync/atomic"
 	"time"
@@ -45,17 +66,24 @@ import (
 	bolt "go.etcd.io/bbolt"
 
 	"github.com/dangra/durable/kernel"
+	"github.com/dangra/durable/store/driver"
 	"github.com/dangra/durable/store/internal/storagepb"
 )
 
 var (
-	metaBucket     = []byte("meta")
+	inputBucket    = []byte("input")
+	activeBucket   = []byte("active")
 	cursorBucket   = []byte("cursor")
-	stepsBucket    = []byte("steps")
-	failuresBucket = []byte("failures")
 	terminalBucket = []byte("terminal")
-	cancelBucket   = []byte("cancel")
 	slotsBucket    = []byte("slots")
+)
+
+// Row tags of the active bucket, in sort order.
+const (
+	tagMeta    byte = 'M'
+	tagCancel  byte = 'c'
+	tagFailure byte = 'f'
+	tagOp      byte = 'o'
 )
 
 // Store is a driver.Store backed by a bbolt database file.
@@ -83,7 +111,7 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("bbolt: opening %s: %w", path, err)
 	}
 	err = db.Update(func(tx *bolt.Tx) error {
-		for _, name := range [][]byte{metaBucket, cursorBucket, stepsBucket, failuresBucket, terminalBucket, cancelBucket, slotsBucket} {
+		for _, name := range [][]byte{inputBucket, activeBucket, cursorBucket, terminalBucket, slotsBucket} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return err
 			}
@@ -109,14 +137,29 @@ func slotKeyFor(pipeline kernel.PipelineID, resource kernel.ResourceID) []byte {
 	return []byte(string(pipeline) + "\x00" + string(resource))
 }
 
-// opKey addresses one operation row: run id, step id, and a phase byte,
-// NUL-separated. runPrefix(id) covers every operation of a run; the
-// forward row sorts before the unwind row of the same step.
-func opKey(id kernel.RunID, step kernel.StepID, phase kernel.Phase) []byte {
-	return []byte(string(id) + "\x00" + string(step) + "\x00" + string(phaseByte(phase)))
+// runPrefix covers every active row of a run.
+func runPrefix(id kernel.RunID) []byte { return []byte(string(id) + "\x00") }
+
+// activeKey addresses a run's single-row fact: meta, cancel, or failure.
+func activeKey(id kernel.RunID, tag byte) []byte {
+	return append(runPrefix(id), tag)
 }
 
-func runPrefix(id kernel.RunID) []byte { return []byte(string(id) + "\x00") }
+// opPrefix covers every operation row of a run.
+func opPrefix(id kernel.RunID) []byte {
+	return append(activeKey(id, tagOp), 0)
+}
+
+// opKey addresses one operation row: run id, the op tag, the resolution
+// order big-endian so rows sort by it, the step id, and a phase byte.
+func opKey(id kernel.RunID, order uint32, step kernel.StepID, phase kernel.Phase) []byte {
+	k := opPrefix(id)
+	k = binary.BigEndian.AppendUint32(k, order)
+	k = append(k, 0)
+	k = append(k, step...)
+	k = append(k, 0, phaseByte(phase))
+	return k
+}
 
 func phaseByte(phase kernel.Phase) byte {
 	if phase == kernel.PhaseUnwind {
@@ -125,17 +168,30 @@ func phaseByte(phase kernel.Phase) byte {
 	return 'f'
 }
 
-// splitOpKey recovers the step id and phase from a key under runPrefix.
-func splitOpKey(id kernel.RunID, k []byte) (kernel.StepID, kernel.Phase, bool) {
-	rest := k[len(id)+1:]
-	if len(rest) < 2 || rest[len(rest)-2] != 0 {
-		return "", 0, false
+// splitActiveKey recovers the run id and tag of an active key, and the
+// bytes after the tag.
+func splitActiveKey(k []byte) (id kernel.RunID, tag byte, rest []byte, ok bool) {
+	i := bytes.IndexByte(k, 0)
+	if i < 0 || i+1 >= len(k) {
+		return "", 0, nil, false
 	}
-	phase := kernel.PhaseForward
-	if rest[len(rest)-1] == 'u' {
+	return kernel.RunID(k[:i]), k[i+1], k[i+2:], true
+}
+
+// splitOpRest recovers order, step id, and phase from the bytes after an
+// operation row's tag.
+func splitOpRest(rest []byte) (order uint32, step kernel.StepID, phase kernel.Phase, ok bool) {
+	// · order(4) · step · phase
+	if len(rest) < 1+4+1+2 || rest[0] != 0 || rest[5] != 0 || rest[len(rest)-2] != 0 {
+		return 0, "", 0, false
+	}
+	order = binary.BigEndian.Uint32(rest[1:5])
+	tail := rest[6:]
+	phase = kernel.PhaseForward
+	if tail[len(tail)-1] == 'u' {
 		phase = kernel.PhaseUnwind
 	}
-	return kernel.StepID(rest[:len(rest)-2]), phase, true
+	return order, kernel.StepID(tail[:len(tail)-2]), phase, true
 }
 
 // groupCommit picks the adaptive commit strategy for one write call: a
@@ -190,6 +246,14 @@ func (s *Store) CreateRun(_ context.Context, rec *driver.RunRecord, excluding []
 	return existing, created, nil
 }
 
+// putOnce writes a write-once row, refusing to overwrite one.
+func putOnce(b *bolt.Bucket, what string, id kernel.RunID, k, v []byte) error {
+	if b.Get(k) != nil {
+		return fmt.Errorf("bbolt: %s of run %s already written", what, id)
+	}
+	return b.Put(k, v)
+}
+
 // putRun persists every present component of rec; used at creation (and
 // for seeded records carrying pre-existing facts). A record seeded
 // terminal is written in its terminal stage.
@@ -199,17 +263,18 @@ func putRun(tx *bolt.Tx, rec *driver.RunRecord) error {
 		c.CompactTerminal()
 		return putTerminal(tx, c)
 	}
-	if rec.Failure != nil {
-		if err := putRootFailure(tx, rec.RunID, rec.Failure); err != nil {
-			return err
-		}
-	}
+	active := tx.Bucket(activeBucket)
 	meta, err := storagepb.MarshalRunMeta(rec)
 	if err != nil {
 		return err
 	}
-	if err := tx.Bucket(metaBucket).Put([]byte(rec.RunID), meta); err != nil {
+	if err := putOnce(active, "meta", rec.RunID, activeKey(rec.RunID, tagMeta), meta); err != nil {
 		return err
+	}
+	if len(rec.Input) > 0 {
+		if err := tx.Bucket(inputBucket).Put([]byte(rec.RunID), rec.Input); err != nil {
+			return err
+		}
 	}
 	cursor, err := storagepb.MarshalCursor(driver.Cursor{
 		Phase:         rec.Phase,
@@ -236,6 +301,20 @@ func putRun(tx *bolt.Tx, rec *driver.RunRecord) error {
 			}
 		}
 	}
+	if rec.Failure != nil {
+		if err := putRootFailure(tx, rec.RunID, rec.Failure); err != nil {
+			return err
+		}
+	}
+	if rec.Cancel != nil {
+		b, err := storagepb.MarshalCancel(rec.Cancel)
+		if err != nil {
+			return err
+		}
+		if err := putOnce(active, "cancel request", rec.RunID, activeKey(rec.RunID, tagCancel), b); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -243,7 +322,7 @@ func (s *Store) ApplyTransition(_ context.Context, id kernel.RunID, t driver.Tra
 	commit, done := s.groupCommit()
 	defer done()
 	return commit(func(tx *bolt.Tx) error {
-		metaBytes := tx.Bucket(metaBucket).Get([]byte(id))
+		metaBytes := tx.Bucket(activeBucket).Get(activeKey(id, tagMeta))
 		if metaBytes == nil {
 			// A terminal run has no meta; it accepts no further
 			// transitions, and the engine never sends one.
@@ -253,14 +332,13 @@ func (s *Store) ApplyTransition(_ context.Context, id kernel.RunID, t driver.Tra
 			return kernel.ErrRunNotFound
 		}
 		if t.Outcome != nil {
-			// The terminality commit: the nonterminal stage — meta,
-			// cursor, operation, failure, and cancel rows — gives way to
-			// one terminal record, and the slot is released. The record is
-			// assembled the way the reference store's would be after this
-			// transition (rows, then the transition's ops, then its
-			// cursor's in-flight overlay) and compacted by the shared
-			// rule, so the failed unwinds it keeps are the same ones the
-			// model keeps.
+			// The terminality commit: the nonterminal stage — input,
+			// active rows, cursor — gives way to one terminal record, and
+			// the slot is released. The record is assembled the way the
+			// reference store's would be after this transition (rows,
+			// then the transition's ops, then its cursor's in-flight
+			// overlay) and compacted by the shared rule, so the failed
+			// unwinds it keeps are the same ones the model keeps.
 			rec, err := getNonterminal(tx, id, metaBytes)
 			if err != nil {
 				return err
@@ -328,23 +406,23 @@ func putTerminal(tx *bolt.Tx, rec *driver.RunRecord) error {
 	return tx.Bucket(terminalBucket).Put([]byte(rec.RunID), b)
 }
 
-// deleteNonterminalStage removes a run's meta, cursor, failure, cancel,
-// and operation rows. Operation rows hang off the run id; they are
-// collected before deletion since bbolt forbids mutating a bucket while
-// iterating it.
+// deleteNonterminalStage removes a run's input, active rows, and cursor.
+// Active rows hang off the run id; they are collected before deletion
+// since bbolt forbids mutating a bucket while iterating it.
 func deleteNonterminalStage(tx *bolt.Tx, id kernel.RunID) error {
+	active := tx.Bucket(activeBucket)
 	prefix := runPrefix(id)
-	sc := tx.Bucket(stepsBucket).Cursor()
-	var opKeys [][]byte
-	for k, _ := sc.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, _ = sc.Next() {
-		opKeys = append(opKeys, bytes.Clone(k))
+	c := active.Cursor()
+	var keys [][]byte
+	for k, _ := c.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, _ = c.Next() {
+		keys = append(keys, bytes.Clone(k))
 	}
-	for _, k := range opKeys {
-		if err := tx.Bucket(stepsBucket).Delete(k); err != nil {
+	for _, k := range keys {
+		if err := active.Delete(k); err != nil {
 			return err
 		}
 	}
-	for _, bucket := range [][]byte{cursorBucket, failuresBucket, cancelBucket, metaBucket} {
+	for _, bucket := range [][]byte{inputBucket, cursorBucket} {
 		if err := tx.Bucket(bucket).Delete([]byte(id)); err != nil {
 			return err
 		}
@@ -352,12 +430,37 @@ func deleteNonterminalStage(tx *bolt.Tx, id kernel.RunID) error {
 	return nil
 }
 
+// findOp locates the run's row for step and phase, whatever its order.
+// It returns nil when there is none.
+func findOp(active *bolt.Bucket, id kernel.RunID, step kernel.StepID, phase kernel.Phase) (key, value []byte) {
+	prefix := opPrefix(id)
+	c := active.Cursor()
+	for k, v := c.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, v = c.Next() {
+		_, st, ph, ok := splitOpRest(k[len(prefix)-1:])
+		if ok && st == step && ph == phase {
+			return k, v
+		}
+	}
+	return nil, nil
+}
+
+// putOp writes the run's one row for the operation. A row already there
+// under another order — an unresolved flush resolving to its real order,
+// or the contract's upsert — is removed so the step and phase keep one
+// row.
 func putOp(tx *bolt.Tx, id kernel.RunID, step kernel.StepID, phase kernel.Phase, op *driver.OperationRecord) error {
 	b, err := storagepb.MarshalOperationRecord(op)
 	if err != nil {
 		return err
 	}
-	return tx.Bucket(stepsBucket).Put(opKey(id, step, phase), b)
+	active := tx.Bucket(activeBucket)
+	key := opKey(id, op.Order, step, phase)
+	if old, _ := findOp(active, id, step, phase); old != nil && !bytes.Equal(old, key) {
+		if err := active.Delete(bytes.Clone(old)); err != nil {
+			return err
+		}
+	}
+	return active.Put(key, b)
 }
 
 func putRootFailure(tx *bolt.Tx, id kernel.RunID, rf *kernel.Failure) error {
@@ -365,27 +468,15 @@ func putRootFailure(tx *bolt.Tx, id kernel.RunID, rf *kernel.Failure) error {
 	if err != nil {
 		return err
 	}
-	return tx.Bucket(failuresBucket).Put([]byte(id), b)
-}
-
-func readRootFailure(tx *bolt.Tx, id kernel.RunID) (*kernel.Failure, error) {
-	b := tx.Bucket(failuresBucket).Get([]byte(id))
-	if b == nil {
-		return nil, nil
-	}
-	f, err := storagepb.UnmarshalFailureRecord(b)
-	if err != nil {
-		return nil, err
-	}
-	return &f, nil
+	return putOnce(tx.Bucket(activeBucket), "failure", id, activeKey(id, tagFailure), b)
 }
 
 // getRun assembles the read model from the run's components, dispatching
-// on its stage. Nonterminal: meta, step rows, the cursor with its
-// in-flight operation overlaid as an unresolved step entry, and the
-// failure and cancel rows. Terminal: the terminal record alone.
+// on its stage. Nonterminal: input, a prefix walk of the active rows, and
+// the cursor with its in-flight operation overlaid as an unresolved step
+// entry. Terminal: the terminal record alone.
 func getRun(tx *bolt.Tx, id kernel.RunID) (*driver.RunRecord, error) {
-	if metaBytes := tx.Bucket(metaBucket).Get([]byte(id)); metaBytes != nil {
+	if metaBytes := tx.Bucket(activeBucket).Get(activeKey(id, tagMeta)); metaBytes != nil {
 		return getNonterminal(tx, id, metaBytes)
 	}
 	tb := tx.Bucket(terminalBucket).Get([]byte(id))
@@ -404,30 +495,44 @@ func getNonterminal(tx *bolt.Tx, id kernel.RunID, metaBytes []byte) (*driver.Run
 	if err := storagepb.UnmarshalRunMetaInto(metaBytes, rec); err != nil {
 		return nil, err
 	}
-	var err error
-	if rec.Failure, err = readRootFailure(tx, id); err != nil {
-		return nil, err
-	}
-	if xb := tx.Bucket(cancelBucket).Get([]byte(id)); xb != nil {
-		cr, err := storagepb.UnmarshalCancel(xb)
-		if err != nil {
-			return nil, err
-		}
-		rec.Cancel = cr
+	if in := tx.Bucket(inputBucket).Get([]byte(id)); in != nil {
+		rec.Input = bytes.Clone(in)
 	}
 
 	prefix := runPrefix(id)
-	c := tx.Bucket(stepsBucket).Cursor()
+	c := tx.Bucket(activeBucket).Cursor()
 	for k, v := c.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, v = c.Next() {
-		step, phase, ok := splitOpKey(id, k)
+		_, tag, rest, ok := splitActiveKey(k)
 		if !ok {
-			return nil, fmt.Errorf("bbolt: malformed operation key %q", k)
+			return nil, fmt.Errorf("bbolt: malformed active key %q", k)
 		}
-		op, err := storagepb.UnmarshalOperationRecord(v)
-		if err != nil {
-			return nil, err
+		switch tag {
+		case tagMeta:
+		case tagCancel:
+			cr, err := storagepb.UnmarshalCancel(v)
+			if err != nil {
+				return nil, err
+			}
+			rec.Cancel = cr
+		case tagFailure:
+			f, err := storagepb.UnmarshalFailureRecord(v)
+			if err != nil {
+				return nil, err
+			}
+			rec.Failure = &f
+		case tagOp:
+			_, step, phase, ok := splitOpRest(rest)
+			if !ok {
+				return nil, fmt.Errorf("bbolt: malformed operation key %q", k)
+			}
+			op, err := storagepb.UnmarshalOperationRecord(v)
+			if err != nil {
+				return nil, err
+			}
+			*rec.Step(step).Op(phase) = op
+		default:
+			return nil, fmt.Errorf("bbolt: unknown active row tag %q in key %q", tag, k)
 		}
-		*rec.Step(step).Op(phase) = op
 	}
 
 	cb := tx.Bucket(cursorBucket).Get([]byte(id))
@@ -502,19 +607,21 @@ func (s *Store) ReapTerminal(_ context.Context, before time.Time, limit int) (in
 func (s *Store) RequestCancel(_ context.Context, id kernel.RunID, req driver.CancelRequest) (bool, error) {
 	accepted := false
 	err := s.db.Update(func(tx *bolt.Tx) error {
+		active := tx.Bucket(activeBucket)
+		key := activeKey(id, tagCancel)
 		switch {
 		case tx.Bucket(terminalBucket).Get([]byte(id)) != nil:
 			return kernel.ErrRunTerminal
-		case tx.Bucket(metaBucket).Get([]byte(id)) == nil:
+		case active.Get(activeKey(id, tagMeta)) == nil:
 			return kernel.ErrRunNotFound
-		case tx.Bucket(cancelBucket).Get([]byte(id)) != nil:
+		case active.Get(key) != nil:
 			return nil // first cancel wins
 		}
 		b, err := storagepb.MarshalCancel(&req)
 		if err != nil {
 			return err
 		}
-		if err := tx.Bucket(cancelBucket).Put([]byte(id), b); err != nil {
+		if err := active.Put(key, b); err != nil {
 			return err
 		}
 		accepted = true
@@ -544,28 +651,32 @@ func (s *Store) ListNonterminal(_ context.Context) ([]*driver.RunRecord, error) 
 	return out, err
 }
 
-// ListRuns scans both stages: meta for the nonterminal runs and the
-// terminal bucket for the rest.
+// ListRuns scans both stages: the meta rows of the active bucket for the
+// nonterminal runs and the terminal bucket for the rest.
 func (s *Store) ListRuns(_ context.Context, pipeline kernel.PipelineID, resource kernel.ResourceID) ([]*driver.RunRecord, error) {
 	var out []*driver.RunRecord
 	err := s.db.View(func(tx *bolt.Tx) error {
-		collect := func(k []byte, probe *driver.RunRecord) error {
+		collect := func(id kernel.RunID, probe *driver.RunRecord) error {
 			if probe.PipelineID != pipeline || probe.ResourceID != resource {
 				return nil
 			}
-			rec, err := getRun(tx, kernel.RunID(k))
+			rec, err := getRun(tx, id)
 			if err != nil {
 				return err
 			}
 			out = append(out, rec)
 			return nil
 		}
-		if err := tx.Bucket(metaBucket).ForEach(func(k, v []byte) error {
+		if err := tx.Bucket(activeBucket).ForEach(func(k, v []byte) error {
+			id, tag, _, ok := splitActiveKey(k)
+			if !ok || tag != tagMeta {
+				return nil
+			}
 			probe := &driver.RunRecord{}
 			if err := storagepb.UnmarshalRunMetaInto(v, probe); err != nil {
 				return err
 			}
-			return collect(k, probe)
+			return collect(id, probe)
 		}); err != nil {
 			return err
 		}
@@ -574,7 +685,7 @@ func (s *Store) ListRuns(_ context.Context, pipeline kernel.PipelineID, resource
 			if err := storagepb.UnmarshalTerminalInto(v, probe); err != nil {
 				return err
 			}
-			return collect(k, probe)
+			return collect(kernel.RunID(k), probe)
 		})
 	})
 	if err != nil {

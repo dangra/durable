@@ -19,8 +19,9 @@ func TestRunMetaRoundTrip(t *testing.T) {
 		RunID:      "run-1",
 		PipelineID: "provision-machine",
 		ResourceID: "machine-1",
-		Input:      []byte{0x0a, 0x03, 'o', 'r', 'd'},
-		CreatedAt:  at(1),
+		// The input is not part of meta; it must not leak into the row.
+		Input:     []byte{0x0a, 0x03, 'o', 'r', 'd'},
+		CreatedAt: at(1),
 	}
 	b, err := MarshalRunMeta(rec)
 	if err != nil {
@@ -30,8 +31,10 @@ func TestRunMetaRoundTrip(t *testing.T) {
 	if err := UnmarshalRunMetaInto(b, got); err != nil {
 		t.Fatalf("UnmarshalRunMetaInto: %v", err)
 	}
-	if !reflect.DeepEqual(rec, got) {
-		t.Fatalf("round trip mismatch:\n got: %+v\nwant: %+v", got, rec)
+	want := *rec
+	want.Input = nil
+	if !reflect.DeepEqual(&want, got) {
+		t.Fatalf("round trip mismatch:\n got: %+v\nwant: %+v", got, &want)
 	}
 }
 

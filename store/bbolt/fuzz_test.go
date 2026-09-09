@@ -275,7 +275,10 @@ func FuzzStoreContract(f *testing.F) {
 					}
 					tr.Ops = []driver.OpWrite{{StepID: steps[int(arg/2)%len(steps)], Phase: opPhase, Record: op}}
 				}
-				if arg%5 == 0 {
+				// The run failure is set at most once per Run (the
+				// Transition contract); a persistent store may refuse a
+				// second one, so the sequence never sends it.
+				if prev, err := ms.GetRun(ctx, id); arg%5 == 0 && (err != nil || prev.Failure == nil) {
 					tr.Failure = &durable.Failure{
 						StepID: steps[0], Phase: durable.PhaseForward,
 						Attempt: 1, Message: "root", At: now,

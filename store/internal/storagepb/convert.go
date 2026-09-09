@@ -3,12 +3,12 @@
 // layer between them and the public Go structs. The wire format is private
 // to this module's store implementations.
 //
-// A run is stored as components with distinct write cadences: RunMeta
-// (once), one OperationRecord row per step operation (once, at its
-// resolution, carrying its own failure), the root Failure and
+// A run is stored as components with distinct write cadences: RunMeta and
+// the raw input (once), one OperationRecord row per step operation (once,
+// at its resolution, carrying its own failure), the root Failure and
 // CancelRequest (once each), and the small Cursor (every attempt). The
-// terminality commit replaces RunMeta, the Cursor, and the operation
-// rows with one Terminal record that carries the identity forward.
+// terminality commit replaces all of them with one Terminal record that
+// carries the identity, failure, and cancel request forward.
 package storagepb
 
 import (
@@ -36,19 +36,20 @@ func unmarshal(what string, b []byte, m proto.Message) error {
 	return nil
 }
 
-// MarshalRunMeta encodes the write-once identity fields of rec.
+// MarshalRunMeta encodes the write-once identity fields of rec. The input
+// is not among them; stores keep it as a raw value of its own.
 func MarshalRunMeta(rec *driver.RunRecord) ([]byte, error) {
 	return marshal("run meta", &RunMeta{
 		RunId:       string(rec.RunID),
 		PipelineId:  string(rec.PipelineID),
 		ResourceId:  string(rec.ResourceID),
-		Input:       rec.Input,
 		CreatedAt:   ts(rec.CreatedAt),
 		Annotations: rec.Annotations,
 	})
 }
 
-// UnmarshalRunMetaInto decodes identity fields into rec.
+// UnmarshalRunMetaInto decodes identity fields into rec, leaving Input
+// untouched.
 func UnmarshalRunMetaInto(b []byte, rec *driver.RunRecord) error {
 	pb := &RunMeta{}
 	if err := unmarshal("run meta", b, pb); err != nil {
@@ -57,7 +58,6 @@ func UnmarshalRunMetaInto(b []byte, rec *driver.RunRecord) error {
 	rec.RunID = kernel.RunID(pb.GetRunId())
 	rec.PipelineID = kernel.PipelineID(pb.GetPipelineId())
 	rec.ResourceID = kernel.ResourceID(pb.GetResourceId())
-	rec.Input = pb.GetInput()
 	rec.CreatedAt = fromTS(pb.GetCreatedAt())
 	if len(pb.GetAnnotations()) > 0 {
 		rec.Annotations = pb.GetAnnotations()

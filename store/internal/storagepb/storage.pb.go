@@ -5,10 +5,10 @@
 // the Go constants by an explicit conversion layer in internal/storagepb.
 //
 // A run is persisted as components with distinct write cadences: RunMeta
-// once at creation, StepRecord rows once per operation resolution,
-// Failures/CancelRequest rarely — and Cursor, the only component
-// rewritten on every attempt, kept deliberately small so per-attempt write
-// volume is independent of input and state sizes.
+// and the raw input once at creation, OperationRecord rows once per
+// operation resolution, FailureRecord/CancelRequest rarely — and Cursor,
+// the only component rewritten on every attempt, kept deliberately small
+// so per-attempt write volume is independent of input and state sizes.
 //
 // The components split into two lifecycle stages. While a run is
 // nonterminal it is RunMeta, Cursor, its OperationRecord rows, and its
@@ -301,13 +301,14 @@ func (AwaitMode) EnumDescriptor() ([]byte, []int) {
 
 // RunMeta holds the write-once identity of a nonterminal run. It is
 // deleted by the terminality commit, which carries the identity into the
-// Terminal record.
+// Terminal record. The input is not part of it: it is the one large
+// value of the nonterminal stage and stores keep it on its own so the
+// small write-once facts never share a page with it.
 type RunMeta struct {
 	state      protoimpl.MessageState `protogen:"open.v1"`
 	RunId      string                 `protobuf:"bytes,1,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
 	PipelineId string                 `protobuf:"bytes,2,opt,name=pipeline_id,json=pipelineId,proto3" json:"pipeline_id,omitempty"`
 	ResourceId string                 `protobuf:"bytes,3,opt,name=resource_id,json=resourceId,proto3" json:"resource_id,omitempty"`
-	Input      []byte                 `protobuf:"bytes,5,opt,name=input,proto3" json:"input,omitempty"`
 	CreatedAt  *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	// Caller-supplied propagation metadata, immutable after acceptance:
 	// trace contexts, tenant tags. Never part of dedup identity.
@@ -365,13 +366,6 @@ func (x *RunMeta) GetResourceId() string {
 		return x.ResourceId
 	}
 	return ""
-}
-
-func (x *RunMeta) GetInput() []byte {
-	if x != nil {
-		return x.Input
-	}
-	return nil
 }
 
 func (x *RunMeta) GetCreatedAt() *timestamppb.Timestamp {
@@ -1022,21 +1016,20 @@ var File_durable_storage_v1_storage_proto protoreflect.FileDescriptor
 
 const file_durable_storage_v1_storage_proto_rawDesc = "" +
 	"\n" +
-	" durable/storage/v1/storage.proto\x12\x12durable.storage.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xd5\x02\n" +
+	" durable/storage/v1/storage.proto\x12\x12durable.storage.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xcc\x02\n" +
 	"\aRunMeta\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12\x1f\n" +
 	"\vpipeline_id\x18\x02 \x01(\tR\n" +
 	"pipelineId\x12\x1f\n" +
 	"\vresource_id\x18\x03 \x01(\tR\n" +
-	"resourceId\x12\x14\n" +
-	"\x05input\x18\x05 \x01(\fR\x05input\x129\n" +
+	"resourceId\x129\n" +
 	"\n" +
 	"created_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12N\n" +
 	"\vannotations\x18\a \x03(\v2,.durable.storage.v1.RunMeta.AnnotationsEntryR\vannotations\x1a>\n" +
 	"\x10AnnotationsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01J\x04\b\x04\x10\x05R\n" +
-	"slot_group\"\x8b\x01\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01J\x04\b\x04\x10\x05J\x04\b\x05\x10\x06R\n" +
+	"slot_groupR\x05input\"\x8b\x01\n" +
 	"\x05Await\x121\n" +
 	"\x04mode\x18\x01 \x01(\x0e2\x1d.durable.storage.v1.AwaitModeR\x04mode\x12\x17\n" +
 	"\arun_ids\x18\x02 \x03(\tR\x06runIds\x126\n" +

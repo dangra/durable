@@ -610,12 +610,18 @@ design rationale.
 The Store persists Runs as components with distinct write cadences:
 
 ```text
-meta (identity, input)        written once, at creation
+meta (identity)               written once, at creation
+input                         written once, at creation — the large one
 step fact rows                written once per operation resolution
 failure / cancel              written rarely
 cursor                        rewritten on every attempt — small
-terminal                      written once, replacing meta, rows, cursor
+terminal                      written once, replacing everything above
 ```
+
+The input is its own component because it is the one large value of
+the nonterminal stage: a store that keeps it apart from the small
+write-once facts never rewrites it, or a page holding it, when a fact
+lands.
 
 A Run has two storage stages. Nonterminal, it is meta, its step fact
 rows, the cursor, and its failure and cancel records. The terminality

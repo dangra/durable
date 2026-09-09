@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"github.com/dangra/durable/store/driver"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -318,17 +320,14 @@ func TestReapTerminal(t *testing.T) {
 		}
 	}
 	s.db.View(func(tx *bolt.Tx) error {
-		for _, bucket := range [][]byte{metaBucket, cursorBucket, failuresBucket, terminalBucket, cancelBucket} {
-			for _, id := range []string{"old-1", "old-2"} {
+		for _, id := range []string{"old-1", "old-2"} {
+			for _, bucket := range [][]byte{inputBucket, cursorBucket, terminalBucket} {
 				if tx.Bucket(bucket).Get([]byte(id)) != nil {
 					t.Errorf("bucket %s still holds %s", bucket, id)
 				}
 			}
-		}
-		c := tx.Bucket(stepsBucket).Cursor()
-		for k, _ := c.First(); k != nil; k, _ = c.Next() {
-			if bytes.HasPrefix(k, []byte("old-")) {
-				t.Errorf("steps bucket still holds %s", k)
+			if n := len(activeRows(tx, durable.RunID(id))); n != 0 {
+				t.Errorf("active bucket still holds %d rows of %s", n, id)
 			}
 		}
 		return nil
@@ -377,11 +376,24 @@ func TestGetActiveRunIDFollowsTheSlot(t *testing.T) {
 	}
 }
 
+// activeRows returns a run's rows in the active bucket in key order,
+// values keyed by the bytes after the run prefix.
+func activeRows(tx *bolt.Tx, id durable.RunID) []struct{ key, value []byte } {
+	var out []struct{ key, value []byte }
+	prefix := runPrefix(id)
+	c := tx.Bucket(activeBucket).Cursor()
+	for k, v := c.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, v = c.Next() {
+		out = append(out, struct{ key, value []byte }{bytes.Clone(k[len(prefix):]), bytes.Clone(v)})
+	}
+	return out
+}
+
 // TestOperationRowsAreWrittenOnce pins the row layout: one row per
-// operation under run id, step id, and phase; an unwind resolution leaves
-// the forward row's bytes untouched; a failed operation carries its own
-// failure; the failures bucket holds the root only; and reap sweeps all
-// of it.
+// operation under run id, resolution order, step id, and phase, so a
+// prefix walk returns them in execution order; an unwind resolution
+// leaves the forward row's bytes untouched; a failed operation carries
+// its own failure; the run's failure is one row; and terminality sweeps
+// all of it.
 func TestOperationRowsAreWrittenOnce(t *testing.T) {
 	ctx := context.Background()
 	s, err := Open(filepath.Join(t.TempDir(), "ops.db"))
@@ -407,7 +419,8 @@ func TestOperationRowsAreWrittenOnce(t *testing.T) {
 	rowBytes := func(step string, phase durable.Phase) []byte {
 		var b []byte
 		s.db.View(func(tx *bolt.Tx) error {
-			b = bytes.Clone(tx.Bucket(stepsBucket).Get(opKey("run-o", durable.StepID(step), phase)))
+			_, v := findOp(tx.Bucket(activeBucket), "run-o", durable.StepID(step), phase)
+			b = bytes.Clone(v)
 			return nil
 		})
 		return b
@@ -464,32 +477,116 @@ func TestOperationRowsAreWrittenOnce(t *testing.T) {
 		t.Fatalf("a/v1 = %+v", a)
 	}
 	s.db.View(func(tx *bolt.Tx) error {
-		n := 0
-		tx.Bucket(failuresBucket).ForEach(func(k, _ []byte) error { n++; return nil })
-		if n != 1 {
-			t.Fatalf("failures bucket rows = %d; want the root only", n)
+		// The walk reads meta, failure, then operations in resolution
+		// order: a forward (1), b forward (2), a unwind (3).
+		var tags []byte
+		var ops []string
+		for _, row := range activeRows(tx, "run-o") {
+			tags = append(tags, row.key[0])
+			if row.key[0] == tagOp {
+				order, step, phase, ok := splitOpRest(row.key[1:])
+				if !ok {
+					t.Fatalf("malformed operation key %q", row.key)
+				}
+				ops = append(ops, fmt.Sprintf("%d:%s/%s", order, step, phase))
+			}
 		}
-		n = 0
-		tx.Bucket(stepsBucket).ForEach(func(k, _ []byte) error { n++; return nil })
-		if n != 3 {
-			t.Fatalf("operation rows = %d; want a forward, a unwind, b forward", n)
+		if string(tags) != "Mfooo" {
+			t.Fatalf("active row tags = %q; want meta, failure, three operations", tags)
+		}
+		if want := []string{"1:a/v1/forward", "2:b/v1/forward", "3:a/v1/unwind"}; !reflect.DeepEqual(ops, want) {
+			t.Fatalf("operation rows = %v; want %v", ops, want)
 		}
 		return nil
 	})
 
 	oc := durable.OutcomeFailure
 	apply(driver.Transition{Cursor: driver.Cursor{Phase: durable.PhaseDone}, Outcome: &oc})
-	if n, err := s.ReapTerminal(ctx, now.Add(time.Second), 10); err != nil || n != 1 {
-		t.Fatalf("ReapTerminal = %d, %v", n, err)
-	}
 	s.db.View(func(tx *bolt.Tx) error {
-		for _, b := range [][]byte{stepsBucket, failuresBucket} {
-			if k, _ := tx.Bucket(b).Cursor().First(); k != nil {
-				t.Fatalf("bucket %s still holds %q after reap", b, k)
-			}
+		if k, _ := tx.Bucket(activeBucket).Cursor().First(); k != nil {
+			t.Fatalf("active bucket still holds %q after terminality", k)
 		}
 		return nil
 	})
+	if n, err := s.ReapTerminal(ctx, now.Add(time.Second), 10); err != nil || n != 1 {
+		t.Fatalf("ReapTerminal = %d, %v", n, err)
+	}
+}
+
+// TestPendingRowMovesToItsOrder pins the one non-append write of the
+// active bucket: an unresolved operation flushed at order zero sorts
+// ahead of the resolved history and, when it resolves, its row moves to
+// its real order; and the write-once rows refuse a second write.
+func TestPendingRowMovesToItsOrder(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(filepath.Join(t.TempDir(), "pending.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	now := time.Unix(1_700_000_000, 0).UTC()
+	rec := &driver.RunRecord{RunID: "run-p", PipelineID: "p", ResourceID: "r", Phase: durable.PhaseForward, CreatedAt: now, UpdatedAt: now}
+	if _, created, err := s.CreateRun(ctx, rec, nil); err != nil || !created {
+		t.Fatalf("CreateRun = %v, %v", created, err)
+	}
+	apply := func(tr driver.Transition) error {
+		tr.Cursor.UpdatedAt = now
+		return s.ApplyTransition(ctx, "run-p", tr)
+	}
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	must(apply(driver.Transition{Cursor: driver.Cursor{Phase: durable.PhaseForward}, Ops: []driver.OpWrite{{
+		StepID: "a/v1", Phase: durable.PhaseForward, Record: driver.OperationRecord{Status: driver.OpSucceeded, Attempts: 1, Order: 1},
+	}}}))
+	// b/v1 displaced while unresolved: flushed at order zero.
+	must(apply(driver.Transition{Cursor: driver.Cursor{Phase: durable.PhaseForward}, Ops: []driver.OpWrite{{
+		StepID: "b/v1", Phase: durable.PhaseForward, Record: driver.OperationRecord{Status: driver.OpUnresolved, Attempts: 2},
+	}}}))
+	orders := func() []uint32 {
+		var out []uint32
+		s.db.View(func(tx *bolt.Tx) error {
+			for _, row := range activeRows(tx, "run-p") {
+				if row.key[0] == tagOp {
+					order, _, _, _ := splitOpRest(row.key[1:])
+					out = append(out, order)
+				}
+			}
+			return nil
+		})
+		return out
+	}
+	if got := orders(); !reflect.DeepEqual(got, []uint32{0, 1}) {
+		t.Fatalf("orders with a pending row = %v; want [0 1]", got)
+	}
+	// It resolves: one row, at its order, attempts carried.
+	must(apply(driver.Transition{Cursor: driver.Cursor{Phase: durable.PhaseForward}, Ops: []driver.OpWrite{{
+		StepID: "b/v1", Phase: durable.PhaseForward, Record: driver.OperationRecord{Status: driver.OpSucceeded, Attempts: 3, Order: 2},
+	}}}))
+	if got := orders(); !reflect.DeepEqual(got, []uint32{1, 2}) {
+		t.Fatalf("orders after resolution = %v; want [1 2]", got)
+	}
+	got, err := s.GetRun(ctx, "run-p")
+	if err != nil || got.Step("b/v1").Forward.Attempts != 3 || got.NextOrder() != 3 {
+		t.Fatalf("GetRun = %+v, %v", got, err)
+	}
+
+	// Write-once rows refuse a second write.
+	root := &durable.Failure{StepID: "c/v1", Phase: durable.PhaseForward, Attempt: 1, Message: "boom", At: now}
+	must(apply(driver.Transition{Cursor: driver.Cursor{Phase: durable.PhaseUnwind}, Failure: root}))
+	if err := apply(driver.Transition{Cursor: driver.Cursor{Phase: durable.PhaseUnwind}, Failure: root}); err == nil {
+		t.Fatal("a second run failure must be refused")
+	}
+	// Reusing a live run id under another slot is outside the contract;
+	// the meta row's write-once guard is what catches it.
+	dup := *rec
+	dup.ResourceID = "other"
+	if _, _, err := s.CreateRun(ctx, &dup, nil); err == nil {
+		t.Fatal("re-creating a live run id must be refused")
+	}
 }
 
 // TestTerminalityCompactsRun pins the stage split: the terminality commit
@@ -545,13 +642,13 @@ func TestTerminalityCompactsRun(t *testing.T) {
 
 	// The nonterminal stage is gone from disk: a terminal run is one row.
 	s.db.View(func(tx *bolt.Tx) error {
-		for _, bucket := range [][]byte{metaBucket, cursorBucket, failuresBucket, cancelBucket} {
+		for _, bucket := range [][]byte{inputBucket, cursorBucket} {
 			if tx.Bucket(bucket).Get([]byte("run-t")) != nil {
 				t.Errorf("bucket %s still holds the terminal run", bucket)
 			}
 		}
-		if k, _ := tx.Bucket(stepsBucket).Cursor().Seek(runPrefix("run-t")); k != nil && bytes.HasPrefix(k, runPrefix("run-t")) {
-			t.Errorf("operation row %q survived terminality", k)
+		if rows := activeRows(tx, "run-t"); len(rows) != 0 {
+			t.Errorf("%d active rows survived terminality", len(rows))
 		}
 		if tb := tx.Bucket(terminalBucket).Get([]byte("run-t")); len(tb) > 1024 {
 			t.Errorf("terminal record = %d bytes; the input and state must not be in it", len(tb))

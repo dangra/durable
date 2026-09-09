@@ -5,10 +5,10 @@
 // the Go constants by an explicit conversion layer in internal/storagepb.
 //
 // A run is persisted as components with distinct write cadences: RunMeta
-// once at creation, StepRecord rows once per operation resolution,
-// Failures/CancelRequest rarely — and Cursor, the only component
-// rewritten on every attempt, kept deliberately small so per-attempt write
-// volume is independent of input and state sizes.
+// and the raw input once at creation, OperationRecord rows once per
+// operation resolution, FailureRecord/CancelRequest rarely — and Cursor,
+// the only component rewritten on every attempt, kept deliberately small
+// so per-attempt write volume is independent of input and state sizes.
 //
 // The components split into two lifecycle stages. While a run is
 // nonterminal it is RunMeta, Cursor, its OperationRecord rows, and its
@@ -56,16 +56,18 @@ enum FailureKind {
 
 // RunMeta holds the write-once identity of a nonterminal run. It is
 // deleted by the terminality commit, which carries the identity into the
-// Terminal record.
+// Terminal record. The input is not part of it: it is the one large
+// value of the nonterminal stage and stores keep it on its own so the
+// small write-once facts never share a page with it.
 message RunMeta {
   string run_id = 1;
   string pipeline_id = 2;
   string resource_id = 3;
   // Field 4 held the persisted exclusion scope until exclusion became an
-  // admission-time rule over the engine's current definitions.
-  reserved 4;
-  reserved "slot_group";
-  bytes input = 5;
+  // admission-time rule over the engine's current definitions. Field 5
+  // held the input until it moved out of the meta row.
+  reserved 4, 5;
+  reserved "slot_group", "input";
   google.protobuf.Timestamp created_at = 6;
   // Caller-supplied propagation metadata, immutable after acceptance:
   // trace contexts, tenant tags. Never part of dedup identity.

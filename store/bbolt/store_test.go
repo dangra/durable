@@ -92,8 +92,10 @@ func TestSlotSemantics(t *testing.T) {
 		t.Fatalf("CreateRun after slot freed = created=%v err=%v", created, err)
 	}
 
-	if runs, err := s.ListRuns(ctx, "p", "r"); err != nil || len(runs) != 2 {
-		t.Fatalf("ListRuns = %d, %v; want 2", len(runs), err)
+	for _, id := range []durable.RunID{"run-1", "run-2"} {
+		if _, err := s.GetRun(ctx, id); err != nil {
+			t.Fatalf("GetRun(%s) = %v; both runs must be readable", id, err)
+		}
 	}
 
 	if _, err := s.GetRun(ctx, "missing"); !errors.Is(err, durable.ErrRunNotFound) {
@@ -332,6 +334,16 @@ func TestReapTerminal(t *testing.T) {
 			if n := len(activeRows(tx, durable.RunID(id))); n != 0 {
 				t.Errorf("active bucket still holds %d rows of %s", n, id)
 			}
+		}
+		return nil
+	})
+
+	// The expiry index is exactly the terminal runs left, oldest first.
+	s.db.View(func(tx *bolt.Tx) error {
+		var left []string
+		tx.Bucket(expiryBucket).ForEach(func(k, _ []byte) error { left = append(left, string(k[8:])); return nil })
+		if !reflect.DeepEqual(left, []string{"recent"}) {
+			t.Errorf("expiry index = %v; want [recent]", left)
 		}
 		return nil
 	})
@@ -717,10 +729,6 @@ func TestTerminalityCompactsRun(t *testing.T) {
 	if _, err := s.RequestCancel(ctx, "run-t", driver.CancelRequest{}); !errors.Is(err, durable.ErrRunTerminal) {
 		t.Fatalf("RequestCancel(terminal) = %v, want ErrRunTerminal", err)
 	}
-	runs, err := s.ListRuns(ctx, "p", "r")
-	if err != nil || len(runs) != 1 || runs[0].RunID != "run-t" {
-		t.Fatalf("ListRuns = %+v, %v", runs, err)
-	}
 	if id, ok, _ := s.GetActiveRunID(ctx, "p", "r"); ok {
 		t.Fatalf("slot still held by %s", id)
 	}
@@ -779,8 +787,5 @@ func TestStageDrainSurvivesCrash(t *testing.T) {
 	got, err := s2.GetRun(ctx, "run-x")
 	if err != nil || got.Outcome == nil || got.Input != nil {
 		t.Fatalf("GetRun after reopen = %+v, %v", got, err)
-	}
-	if runs, err := s2.ListRuns(ctx, "p", "r"); err != nil || len(runs) != 1 {
-		t.Fatalf("ListRuns = %d, %v; want the one terminal run", len(runs), err)
 	}
 }

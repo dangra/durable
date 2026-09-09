@@ -330,20 +330,8 @@ func FuzzStoreContract(f *testing.F) {
 				mustEqual("RequestCancel accepted", bacc, macc)
 			case 3: // GetRun
 				compareRun(id)
-			case 4: // ListRuns: membership and CreatedAt order
-				p := pipelines[int(arg)%len(pipelines)]
+			case 4: // GetActiveRunID
 				res := resources[int(arg/2)%len(resources)]
-				brs, berr := bs.ListRuns(ctx, p, res)
-				mrs, merr := ms.ListRuns(ctx, p, res)
-				mustEqual("ListRuns error", berr, merr)
-				var bc, mc []*canonRecord
-				for _, rr := range brs {
-					bc = append(bc, canonicalize(rr))
-				}
-				for _, rr := range mrs {
-					mc = append(mc, canonicalize(rr))
-				}
-				mustEqual("ListRuns", bc, mc)
 				// GetActiveRunID: the indexed slot read agrees with the
 				// reference for every pipeline on the resource.
 				for _, pp := range pipelines {

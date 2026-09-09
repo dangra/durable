@@ -18,6 +18,7 @@ import (
 
 	"github.com/dangra/durable"
 	"github.com/dangra/durable/engine"
+	"github.com/dangra/durable/observe"
 	"github.com/dangra/durable/pipelinedef"
 	"github.com/dangra/durable/store/bbolt"
 	"github.com/dangra/durable/store/driver"
@@ -430,9 +431,17 @@ func testAwaitRestartDuringWokenAttempt(t *testing.T, store driver.Store) {
 			}),
 		},
 	})
+	// The store is persistent and enumerates nothing; the child count
+	// comes from the schedules the engines accept across both boots.
+	var childSchedules atomic.Int32
+	countChildren := engine.WithObserver(observe.Observer{RunScheduled: func(ev observe.RunEvent) {
+		if ev.PipelineID == "edge-child-restart" {
+			childSchedules.Add(1)
+		}
+	}})
 	boot := func() (*engine.Engine, *engine.Pipeline) {
 		gen.Add(1)
-		e := engine.New(store, fastRetry, engine.WithRecoveryBackoff(0))
+		e := engine.New(store, fastRetry, engine.WithRecoveryBackoff(0), countChildren)
 		cp, err := e.Bind(trivialChild("edge-child-restart"))
 		if err != nil {
 			t.Fatalf("Bind child: %v", err)
@@ -468,9 +477,8 @@ func testAwaitRestartDuringWokenAttempt(t *testing.T, store driver.Store) {
 		t.Fatalf("parent Wait after restart = %+v, %v", res, err)
 	}
 	entries := log.all()
-	children := runsFor(t, store, childPipe, "child-res")
-	if len(children) != 1 {
-		t.Errorf("children = %d, want 1: the attempt resumed after restart respawned the child (attempts %+v)", len(children), entries)
+	if n := childSchedules.Load(); n != 1 {
+		t.Errorf("child schedules = %d, want 1: the attempt resumed after restart respawned the child (attempts %+v)", n, entries)
 	}
 	if last := entries[len(entries)-1]; !last.woken {
 		t.Errorf("attempt %d resumed after restart lost AwaitedRunID (attempts %+v)", last.attempt, entries)

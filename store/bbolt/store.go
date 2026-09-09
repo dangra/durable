@@ -7,7 +7,7 @@
 // blocks (or times out) rather than executing concurrently.
 //
 // The storage representation is implementation-defined by the spec; this
-// implementation stores a run in four buckets, chosen by write cadence.
+// implementation stores a run in five buckets, chosen by write cadence.
 // With · for the NUL separator, which the Store contract keeps out of
 // every identifier, and R for a run id:
 //
@@ -27,6 +27,9 @@
 //	                                                       outcome, output, committed_at,
 //	                                                       failure, cancel, failed_unwinds
 //
+//	bucket: expiry                     retention order of terminal runs
+//	  <committed_at:8 BE>·R            -> (empty)          written with the terminal row
+//
 //	bucket: slots                      admission index
 //	  <pipeline>·<resource>            -> R                held from CreateRun to terminality
 //
@@ -43,9 +46,11 @@
 // queues R. The drain later deletes everything under R· in active, the
 // input bucket included, plus the cursor row, in batches (see Store),
 // because deleting adjacent runs together lets bbolt free whole leaves
-// instead of rewriting one per run. Reap deletes the terminal row. The
-// terminal row is authoritative wherever both stages exist, which is
-// what makes the deferred drain safe.
+// instead of rewriting one per run. Reap walks the expiry index from its
+// oldest key and stops at the first run that has not expired, deleting
+// each victim's terminal row and index key: proportional to the victims,
+// decoding nothing. The terminal row is authoritative wherever both
+// stages exist, which is what makes the deferred drain safe.
 //
 // What each choice bought. Tags sort M, c, f, i, o, so one prefix walk
 // reads a run in the order a reader wants it, with operations in
@@ -73,7 +78,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -90,6 +94,7 @@ var (
 	activeBucket   = []byte("active")
 	cursorBucket   = []byte("cursor")
 	terminalBucket = []byte("terminal")
+	expiryBucket   = []byte("expiry")
 	slotsBucket    = []byte("slots")
 )
 
@@ -168,7 +173,7 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("bbolt: opening %s: %w", path, err)
 	}
 	err = db.Update(func(tx *bolt.Tx) error {
-		for _, name := range [][]byte{activeBucket, cursorBucket, terminalBucket, slotsBucket} {
+		for _, name := range [][]byte{activeBucket, cursorBucket, terminalBucket, expiryBucket, slotsBucket} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return err
 			}
@@ -598,12 +603,31 @@ func (s *Store) ApplyTransition(_ context.Context, id kernel.RunID, t driver.Tra
 	return err
 }
 
+// putTerminal writes the terminal row and its expiry index key, which
+// orders terminal runs by commit time for reap.
 func putTerminal(tx *bolt.Tx, rec *driver.RunRecord) error {
 	b, err := storagepb.MarshalTerminal(rec)
 	if err != nil {
 		return err
 	}
-	return tx.Bucket(terminalBucket).Put([]byte(rec.RunID), b)
+	if err := tx.Bucket(terminalBucket).Put([]byte(rec.RunID), b); err != nil {
+		return err
+	}
+	return tx.Bucket(expiryBucket).Put(expiryKey(rec.UpdatedAt, rec.RunID), []byte{})
+}
+
+// expiryPrefix encodes a commit time as 8 big-endian bytes so keys sort
+// by it; the zero time encodes as zero and sorts first.
+func expiryPrefix(t time.Time) []byte {
+	var n uint64
+	if !t.IsZero() {
+		n = uint64(t.UnixNano())
+	}
+	return binary.BigEndian.AppendUint64(nil, n)
+}
+
+func expiryKey(t time.Time, id kernel.RunID) []byte {
+	return append(expiryPrefix(t), id...)
 }
 
 // deleteNonterminalStage removes a run's active rows (the input's nested
@@ -807,20 +831,18 @@ func (s *Store) GetRun(_ context.Context, id kernel.RunID) (*driver.RunRecord, e
 func (s *Store) ReapTerminal(_ context.Context, before time.Time, limit int) (int, error) {
 	deleted := 0
 	err := s.db.Update(func(tx *bolt.Tx) error {
-		// The terminal bucket's keys are exactly the terminal run ids,
-		// and each record carries its commit time.
+		// The expiry index orders terminal runs by commit time: the walk
+		// starts at the oldest and stops at the first run that has not
+		// expired, so reap costs its victims and decodes nothing.
+		cutoff := expiryPrefix(before)
+		expiry := tx.Bucket(expiryBucket)
 		var victims [][]byte
-		c := tx.Bucket(terminalBucket).Cursor()
-		for k, v := c.First(); k != nil && len(victims) < limit; k, v = c.Next() {
-			rec := &driver.RunRecord{}
-			if err := storagepb.UnmarshalTerminalInto(v, rec); err != nil {
-				return err
-			}
-			if rec.UpdatedAt.Before(before) {
-				victims = append(victims, bytes.Clone(k))
-			}
+		c := expiry.Cursor()
+		for k, _ := c.First(); k != nil && len(victims) < limit && bytes.Compare(k[:8], cutoff) < 0; k, _ = c.Next() {
+			victims = append(victims, bytes.Clone(k))
 		}
-		for _, id := range victims {
+		for _, k := range victims {
+			id := k[8:]
 			// A terminal run is one row, but a retention window shorter
 			// than the stage drain could reap a run whose stage is still
 			// queued; deleting an absent stage costs one seek.
@@ -828,6 +850,9 @@ func (s *Store) ReapTerminal(_ context.Context, before time.Time, limit int) (in
 				return err
 			}
 			if err := tx.Bucket(terminalBucket).Delete(id); err != nil {
+				return err
+			}
+			if err := expiry.Delete(k); err != nil {
 				return err
 			}
 			deleted++
@@ -885,52 +910,6 @@ func (s *Store) ListNonterminal(_ context.Context) ([]*driver.RunRecord, error) 
 		})
 	})
 	return out, err
-}
-
-// ListRuns scans both stages: the terminal bucket, then the meta rows of
-// the active bucket for the nonterminal runs, skipping a terminal run
-// whose stage has not drained yet.
-func (s *Store) ListRuns(_ context.Context, pipeline kernel.PipelineID, resource kernel.ResourceID) ([]*driver.RunRecord, error) {
-	var out []*driver.RunRecord
-	err := s.db.View(func(tx *bolt.Tx) error {
-		terminal := tx.Bucket(terminalBucket)
-		collect := func(id kernel.RunID, probe *driver.RunRecord) error {
-			if probe.PipelineID != pipeline || probe.ResourceID != resource {
-				return nil
-			}
-			rec, err := getRun(tx, id)
-			if err != nil {
-				return err
-			}
-			out = append(out, rec)
-			return nil
-		}
-		if err := terminal.ForEach(func(k, v []byte) error {
-			probe := &driver.RunRecord{}
-			if err := storagepb.UnmarshalTerminalInto(v, probe); err != nil {
-				return err
-			}
-			return collect(kernel.RunID(k), probe)
-		}); err != nil {
-			return err
-		}
-		return tx.Bucket(activeBucket).ForEach(func(k, v []byte) error {
-			id, tag, _, ok := splitActiveKey(k)
-			if !ok || tag != tagMeta || terminal.Get(id) != nil {
-				return nil
-			}
-			probe := &driver.RunRecord{}
-			if err := storagepb.UnmarshalRunMetaInto(v, probe); err != nil {
-				return err
-			}
-			return collect(kernel.RunID(id), probe)
-		})
-	})
-	if err != nil {
-		return nil, err
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
-	return out, nil
 }
 
 // GetActiveRunID answers from the slots bucket: one point read, the same

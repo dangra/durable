@@ -378,12 +378,6 @@ type Store interface {
 	// ListNonterminal returns all Runs without a terminal outcome.
 	ListNonterminal(ctx context.Context) ([]*RunRecord, error)
 
-	// ListRuns returns all Runs (terminal and nonterminal) of a pipeline
-	// against a resource, oldest first. It is an enumeration of store
-	// contents — the differential fuzzer and tests rely on it — and may
-	// scan.
-	ListRuns(ctx context.Context, pipeline kernel.PipelineID, resource kernel.ResourceID) ([]*RunRecord, error)
-
 	// GetActiveRunID returns the RunID occupying the (pipeline, resource)
 	// slot — the pipeline's one nonterminal Run on the resource — or
 	// ok=false when the slot is free. It is an indexed read:

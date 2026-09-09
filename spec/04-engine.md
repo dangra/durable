@@ -420,11 +420,7 @@ write to the record by anyone else — today only a cancel request, which
 reaches the store through the engine — marks the Run dirty; an iteration
 that finds the mark clears it and re-reads the record, and the mark is
 taken before a read so a write after it is seen by the next iteration.
-A failed transition ends the pass, and the next dispatch reads fresh. The
-discipline is checked, not assumed: every transition advances the
-record's commit time, even under a clock that does not, and an
-iteration that continued without one is a logged fault that re-reads in
-full rather than trust memory.
+A failed transition ends the pass, and the next dispatch reads fresh.
 
 ---
 

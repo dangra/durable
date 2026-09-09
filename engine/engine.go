@@ -600,20 +600,14 @@ func (e *Engine) takePreempted(id durable.RunID) (string, bool) {
 // Run's cursor, operations, failure, and outcome comes from that worker,
 // which mutates the record in memory and then persists exactly that, so
 // after a successful apply the record it holds is the store's. The loop
-// carries it across iterations. A continue is valid only after a
-// successful apply, and every path that fails one returns, so the next
-// dispatch reads fresh; the loop checks that discipline rather than
-// assume it (see refreshCarried). A write to the record by anyone else
-// — today only a cancel request, which goes through the engine — marks
-// the Run dirty, and an iteration that finds the mark re-reads; the
-// mark is taken before the read, so a write after the read is seen by
-// the next iteration.
+// carries it across iterations; every path that fails an apply returns,
+// so the next dispatch reads fresh. A write to the record by anyone
+// else — today only a cancel request, which goes through the engine —
+// marks the Run dirty, and an iteration that finds the mark re-reads;
+// the mark is taken before the read, so a write after the read is seen
+// by the next iteration.
 func (e *Engine) processRun(id durable.RunID) (time.Duration, bool) {
 	var rec *driver.RunRecord
-	// stamp is the carried record's commit time when the previous
-	// iteration began; apply advances it, so an iteration that continued
-	// without one is caught.
-	var stamp time.Time
 	for {
 		if e.baseCtx.Err() != nil {
 			return 0, false
@@ -630,12 +624,10 @@ func (e *Engine) processRun(id durable.RunID) (time.Duration, bool) {
 				e.logger.Error("durable: store read failed", "run", id, "error", err)
 				return time.Second, true
 			}
-		} else if !rec.Terminal() {
-			if rec = e.refreshCarried(id, rec, stamp); rec == nil {
-				continue
-			}
+		} else if !rec.Terminal() && e.dirty.Take(id) {
+			rec = nil
+			continue
 		}
-		stamp = rec.UpdatedAt
 		if rec.Terminal() {
 			e.dirty.Take(id) // nothing left to re-read
 			e.waiters.Notify(id)
@@ -764,23 +756,6 @@ func (e *Engine) processRun(id durable.RunID) (time.Duration, bool) {
 			return 0, false
 		}
 	}
-}
-
-// refreshCarried is the prologue of an iteration that carries rec from
-// the previous one. It returns rec, or nil when the carry must be
-// abandoned for a full read: the previous iteration continued without a
-// transition (its commit time did not advance past stamp), which the
-// loop's discipline forbids, or the Run was marked dirty since the last
-// look.
-func (e *Engine) refreshCarried(id durable.RunID, rec *driver.RunRecord, stamp time.Time) *driver.RunRecord {
-	if !rec.UpdatedAt.After(stamp) {
-		e.logger.Error("durable: carried run record continued without a transition; re-reading", "run", id)
-		return nil
-	}
-	if e.dirty.Take(id) {
-		return nil
-	}
-	return rec
 }
 
 // requestCancel is the one path a cancel request takes to the store.
@@ -1580,14 +1555,7 @@ func idleCursor(rec *driver.RunRecord) driver.Cursor { return activeCursor(rec, 
 // unwind operation displaced by topology change) is flushed as a step row
 // so its attempt count survives.
 func (e *Engine) apply(rec *driver.RunRecord, t driver.Transition) bool {
-	// The commit time advances on every transition, even under a clock
-	// that does not: the reconcile loop reads it as the proof that an
-	// iteration made one.
-	now := e.clock.Now()
-	if !now.After(rec.UpdatedAt) {
-		now = rec.UpdatedAt.Add(time.Nanosecond)
-	}
-	rec.UpdatedAt = now
+	rec.UpdatedAt = e.clock.Now()
 	t.Cursor.UpdatedAt = rec.UpdatedAt
 	for id, sr := range rec.Steps {
 		if id == t.Cursor.StepID {

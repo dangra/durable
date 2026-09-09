@@ -19,6 +19,7 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
+	"github.com/dangra/durable/internal/dirtyset"
 	"github.com/dangra/durable/internal/dispatcher"
 	"github.com/dangra/durable/internal/frozen"
 	"github.com/dangra/durable/internal/joinset"
@@ -238,10 +239,10 @@ type Engine struct {
 	preempted map[durable.RunID]string
 	// dirty marks the Runs whose store record changed under their
 	// worker's carried copy — today only by a cancel request, which goes
-	// through the engine. The worker tests and clears the mark each
-	// iteration and re-reads the record when it was set; otherwise a
-	// pass reads nothing after its dispatch.
-	dirty map[durable.RunID]struct{}
+	// through the engine. The worker takes the mark each iteration and
+	// re-reads the record when it was set; otherwise a pass reads
+	// nothing after its dispatch.
+	dirty dirtyset.Set[durable.RunID]
 
 	// pipelines and stepOwner are written by register, under mu, and
 	// frozen by Start; a Put after that panics, and workers read them
@@ -290,7 +291,6 @@ func New(store driver.Store, opts ...Option) *Engine {
 		invalid:       make(map[durable.RunID]*InvalidRunError),
 		attemptCancel: make(map[durable.RunID]context.CancelCauseFunc),
 		preempted:     make(map[durable.RunID]string),
-		dirty:         make(map[durable.RunID]struct{}),
 		classCapacity: make(map[string]int),
 		awaitTimers:   make(map[durable.RunID]chan struct{}),
 	}
@@ -619,7 +619,7 @@ func (e *Engine) processRun(id durable.RunID) (time.Duration, bool) {
 			return 0, false
 		}
 		if rec == nil {
-			e.takeDirty(id)
+			e.dirty.Take(id)
 			var err error
 			rec, err = e.store.GetRun(e.baseCtx, id)
 			if err != nil {
@@ -637,7 +637,7 @@ func (e *Engine) processRun(id durable.RunID) (time.Duration, bool) {
 		}
 		stamp = rec.UpdatedAt
 		if rec.Terminal() {
-			e.takeDirty(id) // nothing left to re-read
+			e.dirty.Take(id) // nothing left to re-read
 			e.waiters.Notify(id)
 			e.awaitTargetDone(id)
 			return 0, false
@@ -777,7 +777,7 @@ func (e *Engine) refreshCarried(id durable.RunID, rec *driver.RunRecord, stamp t
 		e.logger.Error("durable: carried run record continued without a transition; re-reading", "run", id)
 		return nil
 	}
-	if e.takeDirty(id) {
+	if e.dirty.Take(id) {
 		return nil
 	}
 	return rec
@@ -794,9 +794,7 @@ func (e *Engine) requestCancel(ctx context.Context, id durable.RunID, cause stri
 	if err != nil {
 		return err
 	}
-	e.mu.Lock()
-	e.dirty[id] = struct{}{}
-	e.mu.Unlock()
+	e.dirty.Mark(id)
 	if accepted && e.debugLog() {
 		e.logger.Debug("durable: cancel requested", "run", string(id), "cause", cause)
 	}
@@ -804,15 +802,6 @@ func (e *Engine) requestCancel(ctx context.Context, id durable.RunID, cause stri
 	e.disp.Wake(id)
 	e.disp.Dispatch(id, 0)
 	return nil
-}
-
-// takeDirty clears the Run's dirty mark and reports whether it was set.
-func (e *Engine) takeDirty(id durable.RunID) bool {
-	e.mu.Lock()
-	_, ok := e.dirty[id]
-	delete(e.dirty, id)
-	e.mu.Unlock()
-	return ok
 }
 
 // forwardStarted reports whether the Step's forward operation has ever

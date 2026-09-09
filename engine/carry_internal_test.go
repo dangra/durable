@@ -64,9 +64,7 @@ func TestRefreshCarriedGuardsTheDiscipline(t *testing.T) {
 	}
 
 	// Dirty: abandoned for a re-read, and the mark is consumed.
-	e.mu.Lock()
-	e.dirty["r1"] = struct{}{}
-	e.mu.Unlock()
+	e.dirty.Mark("r1")
 	if got := e.refreshCarried("r1", rec, stamp); got != nil {
 		t.Fatalf("refreshCarried when dirty = %+v; want nil", got)
 	}

@@ -5,6 +5,7 @@ package engine_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -183,5 +184,59 @@ func TestOrganicFailureBeatsCancel(t *testing.T) {
 	}
 	if res.Failure.StepID != "s/v1" {
 		t.Fatalf("Failure = %+v, want step s/v1", res.Failure)
+	}
+}
+
+// A request after the first is a no-op: the first request preempts the
+// attempt running at that moment, and the retry that follows continues
+// cooperatively, observing CancelRequested. A duplicate request must not
+// preempt that retry.
+func TestDuplicateCancelIsANoOp(t *testing.T) {
+	blocked1, blocked2, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var retryCtxErr atomic.Value
+	def := pipelinedef.New(pipelinedef.Config{
+		ID: "dup-cancel",
+		Steps: []pipelinedef.Step{
+			{
+				ID:     "a/v1",
+				Unwind: true,
+				Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
+					if inv.CancelRequested() {
+						close(blocked2)
+						<-release
+						retryCtxErr.Store(fmt.Sprint(ctx.Err()))
+						return nil, nil
+					}
+					close(blocked1)
+					<-ctx.Done() // preempted by the first request
+					return nil, ctx.Err()
+				},
+				UnwindFunc: func(ctx context.Context, inv durable.Invocation) error { return nil },
+			},
+		},
+	})
+	_, pipes := startEngine(t, mem.New(), def)
+	run, _, err := pipes[0].Schedule(context.Background(), "r", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-blocked1
+	if err := run.Cancel(context.Background(), "first"); err != nil {
+		t.Fatal(err)
+	}
+	<-blocked2
+	if err := run.Cancel(context.Background(), "second"); err != nil {
+		t.Fatalf("duplicate Cancel = %v; want nil", err)
+	}
+	close(release)
+	res, err := run.Wait(context.Background())
+	if err != nil || !res.Canceled() {
+		t.Fatalf("Wait = %+v, %v; want canceled", res, err)
+	}
+	if got := retryCtxErr.Load(); got != "<nil>" {
+		t.Fatalf("the retry's context was preempted by the duplicate request: %v", got)
+	}
+	if res.Failure == nil || res.Failure.Message != "first" {
+		t.Fatalf("Failure = %+v; want the first request's cause", res.Failure)
 	}
 }

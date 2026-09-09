@@ -93,10 +93,12 @@
 // read of a run costs one copy per blob instead of a seek, a bucket
 // open, and a clone from the file. Entries are filled by the writes
 // that store the blobs, dropped at terminality, and refilled from the
-// file on the first read after a restart. A second, least-recently-used
-// cache holds the large outputs of terminal runs for the read that
-// follows Wait. Both are bounded in bytes by Open's options
-// (WithBlobCache, WithOutputCache) or the URI's query (see Scheme).
+// file on the first read after a restart; past its limit the least
+// recently used runs leave and read from the file on their next use. A
+// second instance holds the large outputs of terminal runs for the read
+// that follows Wait, dropped at reap. Both are bounded in bytes by
+// Open's options (WithBlobCache, WithOutputCache) or the URI's query
+// (see Scheme).
 package bbolt
 
 import (
@@ -169,11 +171,10 @@ type Store struct {
 	// node split threshold: a value past it forces its leaf node to split
 	// and rides alone through every later rewrite.
 	blobRowMax int
-	// blobs caches the immutable blobs of the runs in flight; see
-	// blobCache. outputs caches the large outputs of terminal runs; see
-	// outputCache.
+	// blobs caches the immutable blobs of the runs in flight and outputs
+	// the large outputs of terminal runs; see blobCache.
 	blobs   *blobCache
-	outputs *outputCache
+	outputs *blobCache
 	stop    chan struct{}
 	done    chan struct{}
 	once    sync.Once
@@ -201,17 +202,12 @@ type config struct {
 	blobCache, outputCache int
 }
 
-// DefaultOutputCache is the output cache's default limit in bytes (see
-// WithOutputCache).
-const DefaultOutputCache = 16 << 20
-
 // WithBlobCache bounds, in bytes, the in-memory cache of the blobs of
 // the runs in flight — each run's input and the states kept beside their
 // rows — which serves reads of a nonterminal run without touching the
-// file. Memory is otherwise bounded by the runs in flight, roughly the
-// input plus the large states of each; a run past the limit is not
-// cached and reads from the file. Zero disables the cache. The default
-// is DefaultBlobCache.
+// file. Past the limit the least recently used runs leave the cache and
+// read from the file on their next use. Zero disables the cache. The
+// default is DefaultBlobCache.
 func WithBlobCache(limit int) Option { return func(c *config) { c.blobCache = limit } }
 
 // WithOutputCache bounds, in bytes, the in-memory cache of the large
@@ -262,7 +258,7 @@ func Open(path string, opts ...Option) (*Store, error) {
 		return nil, fmt.Errorf("bbolt: initializing buckets: %w", err)
 	}
 	db.MaxBatchDelay = 2 * time.Millisecond
-	s := &Store{db: db, stop: make(chan struct{}), done: make(chan struct{}), blobRowMax: blobRowMaxFor(db.Info().PageSize), blobs: newBlobCache(cfg.blobCache), outputs: newOutputCache(cfg.outputCache)}
+	s := &Store{db: db, stop: make(chan struct{}), done: make(chan struct{}), blobRowMax: blobRowMaxFor(db.Info().PageSize), blobs: newBlobCache(cfg.blobCache), outputs: newBlobCache(cfg.outputCache)}
 	// Whatever the previous process left staged is drained now; the
 	// counter starts at zero and the sweep sees the bucket empty after.
 	if err := s.Drain(); err != nil {
@@ -642,7 +638,7 @@ func (s *Store) ApplyTransition(_ context.Context, id kernel.RunID, t driver.Tra
 		s.staged.Add(1)
 		s.blobs.drop(id)
 		if len(t.Output) > s.blobRowMax {
-			s.outputs.put(id, t.Output)
+			s.outputs.setOutput(id, t.Output)
 		}
 		return nil
 	}
@@ -874,11 +870,11 @@ func (s *Store) getRun(tx *bolt.Tx, id kernel.RunID) (*driver.RunRecord, error) 
 			return nil, err
 		}
 		if beside {
-			if out := s.outputs.get(id); out != nil {
+			if out := s.outputs.output(id); out != nil {
 				rec.Output = out
 			} else {
 				rec.Output = getBlob(terminal, outputKey(id))
-				s.outputs.put(id, rec.Output)
+				s.outputs.fill(id, &runBlobs{output: rec.Output})
 			}
 		}
 		return rec, nil

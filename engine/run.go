@@ -35,34 +35,27 @@ func (r Run) Wait(ctx context.Context) (Result, error) {
 		return Result{}, ErrNotStarted
 	}
 	for {
+		// Register first, then read once: a notification between the
+		// read and the sleep then closes ch. A Run found terminal pays
+		// a registration and its cancel, an order of magnitude less
+		// than the read a check before registering would cost.
+		ch, cancel := e.waiters.Watch(r.id)
 		rec, err := e.store.GetRunHead(ctx, r.id)
 		if err != nil {
+			cancel()
 			return Result{}, err
 		}
 		if rec.Terminal() {
+			cancel()
 			return resultOf(rec), nil
 		}
 		if ie := e.invalidFor(r.id); ie != nil {
+			cancel()
 			return Result{}, ie
 		}
 		if inAttempt(ctx) {
+			cancel()
 			return Result{}, ErrRunInProgress
-		}
-		ch, cancel := e.waiters.Watch(r.id)
-		// Re-check after registering so a notification between the read
-		// and the registration is not missed.
-		rec, err = e.store.GetRunHead(ctx, r.id)
-		if err != nil {
-			cancel()
-			return Result{}, err
-		}
-		if rec.Terminal() {
-			cancel()
-			return resultOf(rec), nil
-		}
-		if ie := e.invalidFor(r.id); ie != nil {
-			cancel()
-			return Result{}, ie
 		}
 		select {
 		case <-ch:

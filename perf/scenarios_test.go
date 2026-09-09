@@ -41,7 +41,8 @@ func BenchmarkBootBurst(b *testing.B) {
 // machine config's size), against a run that carries nothing, so each
 // sub-benchmark's diskB/run is the marginal cost of that one value at
 // that size, and "none" is the floor: the store's own bookkeeping for a
-// run of eight stateless steps. A store keeps a large value away from
+// run of eight stateless steps. The output shapes read the output after
+// Wait, as the generated typed Wait does for a caller. A store keeps a large value away from
 // rows that change and a small one cheap to write and read; this is
 // where either failing shows as a number with a name, instead of inside
 // the composite machine shape the other scenarios run.
@@ -71,7 +72,7 @@ func BenchmarkShape(b *testing.B) {
 			start := time.Now()
 			var lat []time.Duration
 			for i := 0; i < b.N; i++ {
-				lat = append(lat, runPopulationWith(b, v.pipe, runs, fmt.Sprintf("%s-%d", sh.name, i), sh.input)...)
+				lat = append(lat, runPopulationWith(b, v.pipe, runs, fmt.Sprintf("%s-%d", sh.name, i), sh.input, sh.shape.outputBytes > 0)...)
 			}
 			report(b, v, runs, lat, time.Since(start))
 		})

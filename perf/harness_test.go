@@ -221,12 +221,14 @@ func shapedPipeline(id durable.PipelineID, specs [numSteps]stepSpec, shape pipel
 // runPopulation schedules n runs concurrently and waits for all of them,
 // returning per-run schedule-to-terminal latencies.
 func runPopulation(b *testing.B, pipe *engine.Pipeline, n int, prefix string) []time.Duration {
-	return runPopulationWith(b, pipe, n, prefix, fatInput)
+	return runPopulationWith(b, pipe, n, prefix, fatInput, false)
 }
 
-// runPopulationWith is runPopulation with the input chosen; nil schedules
-// an input-less pipeline.
-func runPopulationWith(b *testing.B, pipe *engine.Pipeline, n int, prefix string, input proto.Message) []time.Duration {
+// runPopulationWith is runPopulation with the input chosen — nil
+// schedules an input-less pipeline — and, when readOutput is set, each
+// run's output read after Wait, the way the generated typed Wait reads
+// it for the caller.
+func runPopulationWith(b *testing.B, pipe *engine.Pipeline, n int, prefix string, input proto.Message, readOutput bool) []time.Duration {
 	b.Helper()
 	var (
 		wg  sync.WaitGroup
@@ -246,6 +248,12 @@ func runPopulationWith(b *testing.B, pipe *engine.Pipeline, n int, prefix string
 			if _, err := run.Wait(context.Background()); err != nil {
 				b.Error(err)
 				return
+			}
+			if readOutput {
+				if _, err := run.OutputBytes(context.Background()); err != nil {
+					b.Error(err)
+					return
+				}
 			}
 			d := time.Since(start)
 			mu.Lock()

@@ -135,12 +135,12 @@ func FuzzRoundTrip(f *testing.F) {
 		if a%2 == 0 {
 			term.Annotations = map[string]string{s1: s2}
 		}
-		tb, err := MarshalTerminal(term)
+		tb, err := MarshalTerminal(term, false)
 		if err != nil {
 			t.Fatalf("MarshalTerminal: %v", err)
 		}
 		gterm := &driver.RunRecord{}
-		if err := UnmarshalTerminalInto(tb, gterm); err != nil {
+		if _, err := UnmarshalTerminalInto(tb, gterm); err != nil {
 			t.Fatalf("UnmarshalTerminalInto: %v", err)
 		}
 		if gterm.RunID != term.RunID || gterm.PipelineID != term.PipelineID || gterm.ResourceID != term.ResourceID ||
@@ -197,7 +197,7 @@ func FuzzRoundTrip(f *testing.F) {
 		_, _ = UnmarshalCursor(blob)
 		_, _ = UnmarshalOperationRecord(blob)
 		_, _ = UnmarshalFailureRecord(blob)
-		_ = UnmarshalTerminalInto(blob, &driver.RunRecord{})
+		_, _ = UnmarshalTerminalInto(blob, &driver.RunRecord{})
 		_, _ = UnmarshalCancel(blob)
 		_ = UnmarshalRunMetaInto(blob, &driver.RunRecord{})
 	})

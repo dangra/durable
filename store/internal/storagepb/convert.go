@@ -186,7 +186,8 @@ func awaitModeFromProto(m AwaitMode) kernel.AwaitMode {
 }
 
 // MarshalOperationRecord encodes one operation's facts; the row key names
-// the step and phase.
+// the step and phase. A store keeping a large state beside the row
+// passes the record without it.
 func MarshalOperationRecord(op *driver.OperationRecord) ([]byte, error) {
 	return marshal("operation record", operationRecordToProto(op))
 }
@@ -242,23 +243,27 @@ func UnmarshalFailureRecord(b []byte) (kernel.Failure, error) {
 
 // MarshalTerminal encodes the terminal stage of rec: identity, outcome,
 // output, phase, the commit time taken from rec.UpdatedAt, and the
-// failed unwind operations found in rec.Steps. rec must carry an
+// failed unwind operations found in rec.Steps. outputBeside marks an
+// output the store keeps beside the row; rec.Output is then left out. rec must carry an
 // Outcome; the caller compacts it (driver.RunRecord.CompactTerminal)
 // first, so that what is encoded is what a read returns.
-func MarshalTerminal(rec *driver.RunRecord) ([]byte, error) {
+func MarshalTerminal(rec *driver.RunRecord, outputBeside bool) ([]byte, error) {
 	if rec.Outcome == nil {
 		return nil, fmt.Errorf("storagepb: encoding terminal: record has no outcome")
 	}
 	pb := &Terminal{
-		Outcome:     outcomeToProto(*rec.Outcome),
-		Output:      rec.Output,
-		RunId:       string(rec.RunID),
-		PipelineId:  string(rec.PipelineID),
-		ResourceId:  string(rec.ResourceID),
-		CreatedAt:   ts(rec.CreatedAt),
-		Annotations: rec.Annotations,
-		Phase:       phaseToProto(rec.Phase),
-		CommittedAt: ts(rec.UpdatedAt),
+		Outcome:      outcomeToProto(*rec.Outcome),
+		OutputBeside: outputBeside,
+		RunId:        string(rec.RunID),
+		PipelineId:   string(rec.PipelineID),
+		ResourceId:   string(rec.ResourceID),
+		CreatedAt:    ts(rec.CreatedAt),
+		Annotations:  rec.Annotations,
+		Phase:        phaseToProto(rec.Phase),
+		CommittedAt:  ts(rec.UpdatedAt),
+	}
+	if !outputBeside {
+		pb.Output = rec.Output
 	}
 	for id, sr := range rec.Steps {
 		if sr.Unwind.Status != driver.OpFailed {
@@ -280,13 +285,13 @@ func MarshalTerminal(rec *driver.RunRecord) ([]byte, error) {
 
 // UnmarshalTerminalInto decodes a terminal record into rec: identity,
 // outcome, output, phase, the commit time as UpdatedAt, Failure, Cancel,
-// and the failed unwind operations as Steps entries. It leaves the
-// fields the terminal stage does not carry — Input, the cursor's
-// scheduling state — untouched.
-func UnmarshalTerminalInto(b []byte, rec *driver.RunRecord) error {
+// and the failed unwind operations as Steps entries, reporting whether
+// the store keeps the output beside the row. It leaves the fields the
+// terminal stage does not carry untouched.
+func UnmarshalTerminalInto(b []byte, rec *driver.RunRecord) (outputBeside bool, err error) {
 	pb := &Terminal{}
 	if err := unmarshal("terminal", b, pb); err != nil {
-		return err
+		return false, err
 	}
 	rec.RunID = kernel.RunID(pb.GetRunId())
 	rec.PipelineID = kernel.PipelineID(pb.GetPipelineId())
@@ -310,7 +315,7 @@ func UnmarshalTerminalInto(b []byte, rec *driver.RunRecord) error {
 	if c := pb.GetCancel(); c != nil {
 		rec.Cancel = &driver.CancelRequest{Cause: c.GetCause(), At: fromTS(c.GetAt())}
 	}
-	return nil
+	return pb.GetOutputBeside(), nil
 }
 
 func MarshalCancel(c *driver.CancelRequest) ([]byte, error) {

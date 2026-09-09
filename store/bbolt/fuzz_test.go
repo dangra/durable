@@ -200,11 +200,12 @@ func FuzzStoreContract(f *testing.F) {
 					RunID:      id,
 					PipelineID: pipelines[int(arg/4)%len(pipelines)],
 					ResourceID: resources[int(arg/8)%len(resources)],
-					Input:      normBytes([]byte{arg}),
-					Phase:      durable.PhaseForward,
-					Steps:      map[durable.StepID]*driver.StepRecord{},
-					CreatedAt:  now,
-					UpdatedAt:  now,
+					// Sizes on both sides of the blob row limit.
+					Input:     normBytes(bytes.Repeat([]byte{arg}, int(arg)*8)),
+					Phase:     durable.PhaseForward,
+					Steps:     map[durable.StepID]*driver.StepRecord{},
+					CreatedAt: now,
+					UpdatedAt: now,
 				}
 				if arg%3 == 0 {
 					rec.NextAttemptAt = now.Add(time.Hour)
@@ -263,8 +264,13 @@ func FuzzStoreContract(f *testing.F) {
 						// next two bits so failed rows do occur.
 						Status:   driver.OpStatus((arg / 4) % 4),
 						Attempts: uint64(arg % 7),
-						State:    normBytes([]byte{arg, arg}),
 						Order:    uint32(arg % 5),
+					}
+					// State belongs to forward operations only (the
+					// contract); sizes land on both sides of the blob
+					// row limit.
+					if opPhase == durable.PhaseForward {
+						op.State = normBytes(bytes.Repeat([]byte{arg}, int(arg)*16))
 					}
 					if op.Status == driver.OpFailed {
 						op.Failure = &durable.Failure{
@@ -288,7 +294,7 @@ func FuzzStoreContract(f *testing.F) {
 				if arg%7 == 0 {
 					oc := outcomes[int(arg)%len(outcomes)]
 					tr.Outcome = &oc
-					tr.Output = normBytes([]byte{1, 2, arg})
+					tr.Output = normBytes(bytes.Repeat([]byte{arg}, int(arg)*16))
 				}
 				// Uphold the engine's delta contract: every previously
 				// unresolved operation must be covered by the cursor or

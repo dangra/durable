@@ -117,7 +117,9 @@ message OperationRecord {
   OpStatus status = 1;
   uint64 attempts = 2;
   // Committed step state: forward operations of state-producing steps,
-  // on success.
+  // on success. A store may keep a large state beside the row instead,
+  // as a value of its own, so it never shares a page with rows that
+  // change; the record then carries none.
   bytes state = 3;
   // Set exactly when status is FAILED.
   FailureRecord failure = 4;
@@ -142,6 +144,8 @@ message FailureRecord {
 // survive terminality.
 message Terminal {
   Outcome outcome = 1;
+  // The output; a store may keep a large one beside the row instead, as
+  // a value of its own, and says so with output_beside.
   bytes output = 2;
   string run_id = 3;
   string pipeline_id = 4;
@@ -161,6 +165,9 @@ message Terminal {
   FailureRecord failure = 11;
   // The cancellation request, when one was recorded before terminality.
   CancelRequest cancel = 12;
+  // True when the store keeps the output beside the row rather than in
+  // it, so a reader knows to look without probing for every run.
+  bool output_beside = 13;
 }
 
 message CancelRequest {

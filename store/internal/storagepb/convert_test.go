@@ -175,12 +175,12 @@ func TestTerminalRoundTrip(t *testing.T) {
 		Cancel:    &driver.CancelRequest{Cause: "late", At: at(130)},
 		CreatedAt: at(100), UpdatedAt: at(200),
 	}
-	b, err := MarshalTerminal(rec)
+	b, err := MarshalTerminal(rec, false)
 	if err != nil {
 		t.Fatalf("MarshalTerminal: %v", err)
 	}
 	got := &driver.RunRecord{}
-	if err := UnmarshalTerminalInto(b, got); err != nil {
+	if _, err := UnmarshalTerminalInto(b, got); err != nil {
 		t.Fatalf("UnmarshalTerminalInto: %v", err)
 	}
 	want := &driver.RunRecord{
@@ -197,7 +197,7 @@ func TestTerminalRoundTrip(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("round trip = %+v, want %+v", got, want)
 	}
-	if _, err := MarshalTerminal(&driver.RunRecord{RunID: "run-2"}); err == nil {
+	if _, err := MarshalTerminal(&driver.RunRecord{RunID: "run-2"}, false); err == nil {
 		t.Fatal("MarshalTerminal of a nonterminal record must fail")
 	}
 }

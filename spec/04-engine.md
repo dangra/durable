@@ -411,6 +411,16 @@ Startup recovery SHOULD:
 8. log invalid Runs,
 9. start normal execution.
 
+A dispatched Run is read in full once, at dispatch. The worker that
+reconciles it is the only writer of its cursor, operations, failure, and
+outcome, and persists exactly the record it holds, so after a successful
+transition the record in memory is the store's and the loop carries it
+across iterations. Each later iteration reads the head for the cancel
+request — the one row another goroutine writes — and checks the head's
+cursor against the carried record; a disagreement is a contract fault,
+logged, and the loop re-reads in full rather than trust memory. A failed
+transition ends the pass, and the next dispatch reads fresh.
+
 ---
 
 ## Engine-owned Run lifetime

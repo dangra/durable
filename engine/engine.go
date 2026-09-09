@@ -586,21 +586,49 @@ func (e *Engine) takePreempted(id durable.RunID) (string, bool) {
 
 // processRun advances one Run until it becomes terminal, invalid, must wait
 // for retry, or shutdown begins. It returns a redispatch delay when the Run
-// needs a future wakeup. It is the one reader of the full record: every
-// other engine read is of the head.
+// needs a future wakeup.
+//
+// It is the one reader of the full record, and it reads it once per
+// dispatch. The dispatcher runs one worker per Run and every write to a
+// Run's cursor, operations, failure, and outcome comes from that worker,
+// which mutates the record in memory and then persists exactly that, so
+// after a successful apply the record it holds is the store's. The loop
+// carries it across iterations; a continue is valid only after a
+// successful apply, and every path that fails one returns, so the next
+// dispatch reads fresh. The one row another goroutine writes is the
+// cancel request: each later iteration reads the head for it, and the
+// head's cursor doubles as a check on the carry — a disagreement is a
+// contract bug, logged, and the loop falls back to a full read rather
+// than trust memory.
 func (e *Engine) processRun(id durable.RunID) (time.Duration, bool) {
+	var rec *driver.RunRecord
 	for {
 		if e.baseCtx.Err() != nil {
 			return 0, false
 		}
-		rec, err := e.store.GetRun(e.baseCtx, id)
-		if err != nil {
-			if errors.Is(err, durable.ErrRunNotFound) {
-				e.logger.Error("durable: dispatched run not found", "run", id)
-				return 0, false
+		if rec == nil {
+			var err error
+			rec, err = e.store.GetRun(e.baseCtx, id)
+			if err != nil {
+				if errors.Is(err, durable.ErrRunNotFound) {
+					e.logger.Error("durable: dispatched run not found", "run", id)
+					return 0, false
+				}
+				e.logger.Error("durable: store read failed", "run", id, "error", err)
+				return time.Second, true
 			}
-			e.logger.Error("durable: store read failed", "run", id, "error", err)
-			return time.Second, true
+		} else if !rec.Terminal() {
+			head, err := e.store.GetRunHead(e.baseCtx, id)
+			if err != nil {
+				e.logger.Error("durable: store read failed", "run", id, "error", err)
+				return time.Second, true
+			}
+			if !carriedAgrees(rec, head) {
+				e.logger.Error("durable: carried run record disagrees with the store; re-reading", "run", id)
+				rec = nil
+				continue
+			}
+			rec.Cancel = head.Cancel
 		}
 		if rec.Terminal() {
 			e.waiters.Notify(id)
@@ -729,6 +757,28 @@ func (e *Engine) processRun(id durable.RunID) (time.Duration, bool) {
 			return 0, false
 		}
 	}
+}
+
+// carriedAgrees reports whether the head the store returns matches the
+// record the loop carries: the cursor's stage and commit time, which
+// every apply rewrites, its in-flight operation, and the failure.
+func carriedAgrees(rec, head *driver.RunRecord) bool {
+	if head.Terminal() || head.Phase != rec.Phase || !head.UpdatedAt.Equal(rec.UpdatedAt) ||
+		!head.NextAttemptAt.Equal(rec.NextAttemptAt) || (head.Failure == nil) != (rec.Failure == nil) {
+		return false
+	}
+	for id, sr := range head.Steps {
+		hop := sr.Op(head.Phase)
+		got, ok := rec.Steps[id]
+		if !ok {
+			return false
+		}
+		op := got.Op(head.Phase)
+		if op.Status != driver.OpUnresolved || op.Attempts != hop.Attempts {
+			return false
+		}
+	}
+	return true
 }
 
 // forwardStarted reports whether the Step's forward operation has ever

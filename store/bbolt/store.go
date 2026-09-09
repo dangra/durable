@@ -44,9 +44,9 @@
 // A run moves through it like this. CreateRun writes R·M, the input
 // blob when there is one, the cursor row, and the slot, in one
 // transaction. Each attempt rewrites only the cursor. Each resolution
-// appends one R·o row, a large state beside it; an unresolved operation displaced by a topology
-// change is flushed at order zero and moves to its real order when it
-// resolves, the one delete before terminality. Cancel and failure land
+// appends one R·o row, a large state beside it; an unresolved operation
+// displaced by a topology change is flushed at order zero and moves to
+// its real order when it resolves, the one delete before terminality. Cancel and failure land
 // as R·c and R·f. The terminality commit writes the terminal row —
 // from then on the run reads from that row alone, so the input and
 // step states, folded into the output by then, are released when the
@@ -54,10 +54,10 @@
 // stages R. The drain later deletes everything under R· in active, the
 // input bucket included, plus the cursor row and the staged key, in
 // batches (see Store), because deleting adjacent runs together lets
-// bbolt free whole leaves instead of rewriting one per run. Reap walks the expiry index from its
-// oldest key and stops at the first run that has not expired, deleting
-// each victim's terminal row and index key: proportional to the victims,
-// decoding nothing. The terminal row is authoritative wherever both
+// bbolt free whole leaves instead of rewriting one per run. Reap walks
+// the expiry index from its oldest key and stops at the first run that
+// has not expired, deleting each victim's terminal row and index key:
+// proportional to the victims, decoding nothing. The terminal row is authoritative wherever both
 // stages exist, which is what makes the deferred drain safe.
 //
 // What each choice bought. Tags sort M, c, f, i, o, so one prefix walk
@@ -86,6 +86,14 @@
 // holds every nonterminal run: CreateRun admits against it,
 // GetActiveRunID reads it, and ListNonterminal walks it, so recovery
 // cost follows the runs in flight rather than the retained history.
+//
+// The blobs a nonterminal run carries — its input and the states kept
+// beside their rows — never change once written, so the store keeps
+// copies of them in memory for the runs in flight (see blobCache) and a
+// read of a run costs one copy per blob instead of a seek, a bucket
+// open, and a clone from the file. Entries are filled by the writes
+// that store the blobs, dropped at terminality, and refilled from the
+// file on the first read after a restart.
 package bbolt
 
 import (

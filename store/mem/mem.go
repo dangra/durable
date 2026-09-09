@@ -16,8 +16,9 @@ import (
 	"github.com/dangra/durable/kernel"
 )
 
-// Store is the in-memory driver.Store. It is safe for
-// concurrent use and returns defensive copies of all records.
+// Store is the in-memory driver.Store. It is safe for concurrent use and
+// returns copies of all records, sharing the immutable byte slices —
+// Input, Step States, Output — as the contract allows.
 type Store struct {
 	mu   sync.Mutex
 	runs map[kernel.RunID]*driver.RunRecord
@@ -88,7 +89,6 @@ func (s *Store) ApplyTransition(_ context.Context, id kernel.RunID, t driver.Tra
 	// Operation rows: each write replaces one half of a step's record.
 	for _, ow := range t.Ops {
 		op := ow.Record
-		op.State = append([]byte(nil), ow.Record.State...)
 		if ow.Record.Failure != nil {
 			f := *ow.Record.Failure
 			op.Failure = &f
@@ -125,7 +125,7 @@ func (s *Store) ApplyTransition(_ context.Context, id kernel.RunID, t driver.Tra
 	if t.Outcome != nil {
 		oc := *t.Outcome
 		rec.Outcome = &oc
-		rec.Output = append([]byte(nil), t.Output...)
+		rec.Output = t.Output
 		// Terminality releases the resource slot and the nonterminal
 		// stage.
 		if key := slotKey(rec.PipelineID, rec.ResourceID); s.slots[key] == id {

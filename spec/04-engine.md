@@ -686,6 +686,11 @@ Cancellation requests live in their own component, written only by
 RequestCancel — the engine worker remains the sole writer of everything
 else, with no read-modify-write races by construction.
 
+The byte slices of a Run's Input, its Step States, and its Output are
+immutable: a store may retain the slice it is given and return the same
+backing memory on every read, from a cache of its own if it keeps one,
+and no caller modifies such a slice. The engine only ever decodes them.
+
 ---
 
 ## Retention

@@ -890,9 +890,9 @@ func TestBlobRule(t *testing.T) {
 
 // TestBlobCacheServesReads pins the blob cache: once a run's input and
 // large states are written, reads come from the cache — shown by
-// deleting the blobs behind the store's back and reading them anyway —
-// the entry goes at terminality, and a reopened store fills its entry
-// from the file on the first read.
+// planting other bytes in the cache and reading them back while the file
+// still holds the originals — the entry goes at terminality, and a
+// reopened store fills its entry from the file on the first read.
 func TestBlobCacheServesReads(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "cache.db")
@@ -927,11 +927,6 @@ func TestBlobCacheServesReads(t *testing.T) {
 		}
 		return nil
 	})
-	// The copy is the caller's: changing it does not change the next read.
-	got.Input[0] = 9
-	if again, _ := s.GetRun(ctx, "run-c"); again.Input[0] != 7 {
-		t.Fatal("a cached read must return a copy")
-	}
 	// Terminality drops the entry.
 	oc := durable.OutcomeSuccess
 	if err := s.ApplyTransition(ctx, "run-c", driver.Transition{Cursor: driver.Cursor{Phase: durable.PhaseDone, UpdatedAt: now}, Outcome: &oc}); err != nil {

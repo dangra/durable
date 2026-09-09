@@ -1,7 +1,6 @@
 package bbolt
 
 import (
-	"bytes"
 	"sync"
 
 	"github.com/dangra/durable/kernel"
@@ -25,8 +24,9 @@ const blobCacheLimit = 64 << 20
 // is dropped when its terminality commit succeeds, after which reads
 // come from the terminal record and carry no blobs. A restart starts
 // cold; the first read of each run in flight fills its entry from the
-// file. Reads return copies: the store contract says callers never
-// share memory with the store.
+// file. The slices are shared, in and out: the store contract declares
+// a Run's Input and Step States immutable, so the cache keeps the
+// slice a write passes in and hands the same slice to every read.
 type blobCache struct {
 	mu    sync.Mutex
 	runs  map[kernel.RunID]*runBlobs
@@ -47,7 +47,7 @@ func newBlobCache(limit int) *blobCache {
 	return &blobCache{runs: make(map[kernel.RunID]*runBlobs), limit: limit}
 }
 
-// setInput caches a copy of the run's input.
+// setInput caches the run's input, retaining the slice.
 func (c *blobCache) setInput(id kernel.RunID, input []byte) {
 	if len(input) == 0 {
 		return
@@ -60,13 +60,13 @@ func (c *blobCache) setInput(id kernel.RunID, input []byte) {
 	}
 	c.size -= len(rb.input)
 	rb.size -= len(rb.input)
-	rb.input = bytes.Clone(input)
+	rb.input = input
 	c.size += len(input)
 	rb.size += len(input)
 }
 
-// setState caches a copy of a step's committed state; an empty state
-// drops the entry (the row was replaced without one).
+// setState caches a step's committed state, retaining the slice; an
+// empty state drops the entry (the row was replaced without one).
 func (c *blobCache) setState(id kernel.RunID, step kernel.StepID, state []byte) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -85,7 +85,7 @@ func (c *blobCache) setState(id kernel.RunID, step kernel.StepID, state []byte) 
 	if rb.states == nil {
 		rb.states = make(map[kernel.StepID][]byte)
 	}
-	rb.states[step] = bytes.Clone(state)
+	rb.states[step] = state
 	c.size += len(state)
 	rb.size += len(state)
 }
@@ -115,7 +115,7 @@ func (c *blobCache) drop(id kernel.RunID) {
 	}
 }
 
-// input returns a copy of the run's cached input and whether the run is
+// input returns the run's cached input, shared, and whether the run is
 // cached at all.
 func (c *blobCache) input(id kernel.RunID) (input []byte, cached bool) {
 	c.mu.Lock()
@@ -128,10 +128,10 @@ func (c *blobCache) input(id kernel.RunID) (input []byte, cached bool) {
 	if !ok || in == nil {
 		return nil, ok
 	}
-	return bytes.Clone(in), true
+	return in, true
 }
 
-// state returns a copy of a step's cached state, nil when none.
+// state returns a step's cached state, shared; nil when none.
 func (c *blobCache) state(id kernel.RunID, step kernel.StepID) []byte {
 	c.mu.Lock()
 	var st []byte
@@ -139,15 +139,12 @@ func (c *blobCache) state(id kernel.RunID, step kernel.StepID) []byte {
 		st = rb.states[step]
 	}
 	c.mu.Unlock()
-	if st == nil {
-		return nil
-	}
-	return bytes.Clone(st)
+	return st
 }
 
-// fill caches a run read from the file on a cold miss: copies of the
-// blobs the read returned, when the run is not cached yet and the limit
-// allows.
+// fill caches a run read from the file on a cold miss — the slices the
+// read returned, which the read cloned out of the file's pages — when
+// the run is not cached yet and the limit allows.
 func (c *blobCache) fill(id kernel.RunID, rb *runBlobs) {
 	need := len(rb.input)
 	for _, st := range rb.states {
@@ -161,11 +158,11 @@ func (c *blobCache) fill(id kernel.RunID, rb *runBlobs) {
 	if _, ok := c.runs[id]; ok || c.size+need > c.limit {
 		return
 	}
-	entry := &runBlobs{input: bytes.Clone(rb.input), size: need}
+	entry := &runBlobs{input: rb.input, size: need}
 	if len(rb.states) > 0 {
 		entry.states = make(map[kernel.StepID][]byte, len(rb.states))
 		for step, st := range rb.states {
-			entry.states[step] = bytes.Clone(st)
+			entry.states[step] = st
 		}
 	}
 	c.runs[id] = entry

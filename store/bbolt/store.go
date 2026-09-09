@@ -480,13 +480,8 @@ func (s *Store) ReapTerminal(_ context.Context, before time.Time, limit int) (in
 			}
 		}
 		for _, id := range victims {
-			// The nonterminal stage is already gone for a run that
-			// committed through this driver; sweeping it anyway costs one
-			// cursor seek and keeps a database whose terminal runs predate
-			// the stage split from leaving orphans behind.
-			if err := deleteNonterminalStage(tx, kernel.RunID(id)); err != nil {
-				return err
-			}
+			// A terminal run is its terminal, failure, and cancel
+			// records; the nonterminal stage went at terminality.
 			for _, bucket := range [][]byte{failuresBucket, cancelBucket, terminalBucket} {
 				if err := tx.Bucket(bucket).Delete(id); err != nil {
 					return err
@@ -552,16 +547,14 @@ func (s *Store) ListNonterminal(_ context.Context) ([]*driver.RunRecord, error) 
 func (s *Store) ListRuns(_ context.Context, pipeline kernel.PipelineID, resource kernel.ResourceID) ([]*driver.RunRecord, error) {
 	var out []*driver.RunRecord
 	err := s.db.View(func(tx *bolt.Tx) error {
-		seen := map[string]bool{}
 		collect := func(k []byte, probe *driver.RunRecord) error {
-			if probe.PipelineID != pipeline || probe.ResourceID != resource || seen[string(k)] {
+			if probe.PipelineID != pipeline || probe.ResourceID != resource {
 				return nil
 			}
 			rec, err := getRun(tx, kernel.RunID(k))
 			if err != nil {
 				return err
 			}
-			seen[string(k)] = true
 			out = append(out, rec)
 			return nil
 		}

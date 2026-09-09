@@ -139,6 +139,7 @@ func BenchmarkAwaitFanIn(b *testing.B) {
 	}
 	b.StopTimer()
 	n := float64(children+1) * float64(b.N) // children + parent
+	drainStore(b, v.store)
 	b.ReportMetric(float64(v.store.Stats().TxPageAllocBytes)/n, "diskB/run")
 	b.ReportMetric(float64(v.writes.Load())/n, "transitions/run")
 	b.ReportMetric(float64(v.reads.Load())/(float64(children)*float64(b.N)), "reads/child")

@@ -64,6 +64,7 @@ func BenchmarkRetryStorm(b *testing.B) {
 	total := stormRuns + healthyRuns
 	// Per-attempt cost across the storm: the cursor-write efficiency gate.
 	attempts := float64(b.N) * float64(stormRuns*(numSteps+retriesPerRun)+healthyRuns*numSteps)
+	drainStore(b, store.env.store)
 	b.ReportMetric(float64(store.env.store.Stats().TxPageAllocBytes)/attempts, "diskB/attempt")
 	report(b, store.env, total, healthyLat, elapsed)
 	// report's p50/p99 above are healthy-run latencies: isolation.
@@ -155,6 +156,7 @@ func BenchmarkRecovery(b *testing.B) {
 		drain := time.Since(startBegin)
 
 		b.StopTimer()
+		drainStore(b, v.store)
 		stats := v.store.Stats()
 		b.ReportMetric(ms(startDur), "start-ms")
 		b.ReportMetric(float64(nonterminal)/drain.Seconds(), "runs/sec")

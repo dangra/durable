@@ -505,6 +505,9 @@ func TestOperationRowsAreWrittenOnce(t *testing.T) {
 
 	oc := durable.OutcomeFailure
 	apply(driver.Transition{Cursor: driver.Cursor{Phase: durable.PhaseDone}, Outcome: &oc})
+	if err := s.Drain(); err != nil {
+		t.Fatal(err)
+	}
 	s.db.View(func(tx *bolt.Tx) error {
 		if k, _ := tx.Bucket(activeBucket).Cursor().First(); k != nil {
 			t.Fatalf("active bucket still holds %q after terminality", k)
@@ -656,7 +659,22 @@ func TestTerminalityCompactsRun(t *testing.T) {
 		Outcome: &oc, Output: []byte{9},
 	})
 
-	// The nonterminal stage is gone from disk: a terminal run is one row.
+	// The stage lingers, queued, until the drain — and reads already
+	// come from the terminal row.
+	s.db.View(func(tx *bolt.Tx) error {
+		if len(activeRows(tx, "run-t")) == 0 {
+			t.Fatal("the stage must be queued, not deleted, by the terminality commit")
+		}
+		return nil
+	})
+	if got, err := s.GetRun(ctx, "run-t"); err != nil || got.Input != nil || len(got.Steps) != 1 {
+		t.Fatalf("GetRun before drain = %+v, %v; want the terminal record", got, err)
+	}
+	if err := s.Drain(); err != nil {
+		t.Fatal(err)
+	}
+
+	// After the drain a terminal run is one row.
 	s.db.View(func(tx *bolt.Tx) error {
 		if tx.Bucket(cursorBucket).Get([]byte("run-t")) != nil {
 			t.Error("cursor survived terminality")
@@ -719,4 +737,50 @@ func TestTerminalityCompactsRun(t *testing.T) {
 		}
 		return nil
 	})
+}
+
+// TestStageDrainSurvivesCrash pins the recovery of the deferred stage
+// deletion: a terminal run whose queued drain was lost with the process
+// is found at Open, by its lingering meta row, and drained then.
+func TestStageDrainSurvivesCrash(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "crash.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Unix(1_700_000_000, 0).UTC()
+	rec := &driver.RunRecord{RunID: "run-x", PipelineID: "p", ResourceID: "r", Phase: durable.PhaseForward,
+		Input: bytes.Repeat([]byte{1}, 8192), CreatedAt: now, UpdatedAt: now}
+	if _, created, err := s.CreateRun(ctx, rec, nil); err != nil || !created {
+		t.Fatalf("CreateRun = %v, %v", created, err)
+	}
+	oc := durable.OutcomeSuccess
+	if err := s.ApplyTransition(ctx, "run-x", driver.Transition{Cursor: driver.Cursor{Phase: durable.PhaseDone, UpdatedAt: now}, Outcome: &oc, Output: []byte{1}}); err != nil {
+		t.Fatal(err)
+	}
+	// Crash: stop the sweep and close the file without draining.
+	close(s.stop)
+	<-s.done
+	if err := s.db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	s2 := open(t, path)
+	s2.db.View(func(tx *bolt.Tx) error {
+		if rows := activeRows(tx, "run-x"); len(rows) != 0 {
+			t.Fatalf("%d stage rows survived reopen", len(rows))
+		}
+		if tx.Bucket(cursorBucket).Get([]byte("run-x")) != nil {
+			t.Fatal("cursor survived reopen")
+		}
+		return nil
+	})
+	got, err := s2.GetRun(ctx, "run-x")
+	if err != nil || got.Outcome == nil || got.Input != nil {
+		t.Fatalf("GetRun after reopen = %+v, %v", got, err)
+	}
+	if runs, err := s2.ListRuns(ctx, "p", "r"); err != nil || len(runs) != 1 {
+		t.Fatalf("ListRuns = %d, %v; want the one terminal run", len(runs), err)
+	}
 }

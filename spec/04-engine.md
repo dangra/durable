@@ -628,7 +628,10 @@ rows, the cursor, and its failure and cancel records. The terminality
 commit replaces all of them with one terminal record — identity,
 outcome, output, commit time, failure, cancel request, and the
 permanently failed unwind operations — in the same atomic step, so a
-terminal Run is one row. The Input and the committed Step States have
+terminal Run is one row. A store may physically free the released
+components shortly after the commit, in batches, as long as no read
+surfaces them: the terminal record is authoritative from the commit
+on. The Input and the committed Step States have
 been folded into the Output by then; nothing reachable through a terminal Run needs them, and
 releasing them at terminality rather than at retention keeps the
 retained history proportional to outputs. The failed unwind

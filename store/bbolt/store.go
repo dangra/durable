@@ -7,58 +7,64 @@
 // blocks (or times out) rather than executing concurrently.
 //
 // The storage representation is implementation-defined by the spec; this
-// implementation stores a run in four buckets, chosen by write cadence:
+// implementation stores a run in four buckets, chosen by write cadence.
+// With · for the NUL separator, which the Store contract keeps out of
+// every identifier, and R for a run id:
 //
-//	active    run id · tag [· ...]      -> facts                append-only
-//	cursor    run id                    -> Cursor               rewritten per attempt
-//	terminal  run id                    -> Terminal             written once
-//	slots     pipeline · resource       -> run id               index
+//	bucket: active                     append-only facts of nonterminal runs
+//	  R·M                              -> RunMeta          write-once, refused twice
+//	  R·c                              -> CancelRequest    write-once, first cancel wins
+//	  R·f                              -> FailureRecord    write-once, refused twice
+//	  R·i                              -> nested bucket { i -> input bytes }
+//	  R·o·<order:4 BE>·<step>·<phase>  -> OperationRecord  one row per step and phase
+//	                                      phase byte: f forward, u unwind
 //
-// (· is the NUL separator, which the Store contract keeps out of every
-// identifier.) A nonterminal run is its active rows and its cursor; the
-// terminality commit writes one terminal record — identity, outcome,
-// output, commit time, failure, cancel request, and the permanently
-// failed unwinds — and from then on the run reads from that row alone,
-// so the input and step states, folded into the output by then, are
-// released when the run ends rather than when retention reaps it. The
-// rows themselves are deleted shortly after, in batches (see Store),
+//	bucket: cursor                     the one mutable row
+//	  R                                -> Cursor           rewritten on every attempt
+//
+//	bucket: terminal                   the whole of a terminal run
+//	  R                                -> Terminal         identity, annotations, phase,
+//	                                                       outcome, output, committed_at,
+//	                                                       failure, cancel, failed_unwinds
+//
+//	bucket: slots                      admission index
+//	  <pipeline>·<resource>            -> R                held from CreateRun to terminality
+//
+// A run moves through it like this. CreateRun writes R·M, the input
+// bucket when there is one, the cursor row, and the slot, in one
+// transaction. Each attempt rewrites only the cursor. Each resolution
+// appends one R·o row; an unresolved operation displaced by a topology
+// change is flushed at order zero and moves to its real order when it
+// resolves, the one delete before terminality. Cancel and failure land
+// as R·c and R·f. The terminality commit writes the terminal row —
+// from then on the run reads from that row alone, so the input and
+// step states, folded into the output by then, are released when the
+// run ends rather than when retention reaps it — deletes the slot, and
+// queues R. The drain later deletes everything under R· in active, the
+// input bucket included, plus the cursor row, in batches (see Store),
 // because deleting adjacent runs together lets bbolt free whole leaves
-// instead of rewriting one per run. The terminal row is authoritative
-// wherever both exist.
+// instead of rewriting one per run. Reap deletes the terminal row. The
+// terminal row is authoritative wherever both stages exist, which is
+// what makes the deferred drain safe.
 //
-// The active bucket holds every write-once fact of a nonterminal run
-// under the run id, so one prefix walk assembles it and one prefix walk
-// deletes it. The tag byte after the run id says what a row is, and tags
-// sort in the order a reader wants them:
-//
-//	M   RunMeta (identity, annotations, created_at)
-//	c   CancelRequest
-//	f   the run's FailureRecord
-//	i   the input, as a nested bucket holding one value
-//	o   an operation row: o · order (4 bytes, big-endian) · step · phase
-//
-// Operation rows lead with their resolution order, so the walk returns a
-// run's operations in the order they resolved; an unresolved operation
-// flushed to its row (a topology change displaced it) carries order zero
-// and sorts ahead of the resolved history until it resolves, when its
-// row moves to its real order. Meta and failure rows are written once and
-// the store refuses a second write; operation rows are one per step and
-// phase, replaced only as the contract's upsert allows.
-//
-// Per-attempt write volume is the cursor's, independent of input and
-// state sizes, and so is the terminality commit's: bbolt rewrites a
-// whole leaf node on any write to it, so a large value must not share a
-// node with rows that change or with other large values that come and
-// go. Each input is therefore the sole value of a nested bucket under
-// its run's prefix; a bucket over a quarter page gets pages of its own,
-// so creating and deleting an input touches the run's own pages plus
-// one small entry in the active leaf, never a neighbour's input, and the
-// terminality commit touches no tree it would not touch anyway. An
-// active-slot index keyed by
-// (PipelineID, ResourceID) holds every nonterminal run: CreateRun admits
-// against it, GetActiveRunID reads it, and ListNonterminal walks it, so
-// recovery cost follows the runs in flight rather than the retained
-// history.
+// What each choice bought. Tags sort M, c, f, i, o, so one prefix walk
+// reads a run in the order a reader wants it, with operations in
+// resolution order and no sorting. The input is a nested bucket so its
+// bytes never share a leaf node with rows that change or with other
+// inputs: bbolt rewrites a whole leaf node on any write to it, and a
+// bucket over a quarter page gets pages of its own, so creating and
+// deleting an input touches the run's own pages plus one small entry in
+// the active leaf. Operation rows are plain rows because a nested bucket
+// costs a page per write for anything appended to (every write into a
+// child bucket rewrites the child's page and the parent's entry for it;
+// measured, and rejected, for a bucket per run and for a bucket per
+// run's operations). The cursor is its own bucket because it is the
+// only row rewritten, so per-attempt write volume is the cursor's,
+// independent of input and state sizes. Terminal is one row because
+// everything a caller can still reach lives in it. The slots index
+// holds every nonterminal run: CreateRun admits against it,
+// GetActiveRunID reads it, and ListNonterminal walks it, so recovery
+// cost follows the runs in flight rather than the retained history.
 package bbolt
 
 import (

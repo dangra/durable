@@ -7,18 +7,16 @@
 // blocks (or times out) rather than executing concurrently.
 //
 // The storage representation is implementation-defined by the spec; this
-// implementation stores a run in five buckets, chosen by write cadence
-// and value size:
+// implementation stores a run in four buckets, chosen by write cadence:
 //
-//	input     run id                    -> input bytes         written once
-//	active    run id · tag [· ...]      -> small facts          append-only
+//	active    run id · tag [· ...]      -> facts                append-only
 //	cursor    run id                    -> Cursor               rewritten per attempt
 //	terminal  run id                    -> Terminal             written once
 //	slots     pipeline · resource       -> run id               index
 //
 // (· is the NUL separator, which the Store contract keeps out of every
-// identifier.) A nonterminal run is its input, its active rows, and its
-// cursor; the terminality commit replaces all of them with one terminal
+// identifier.) A nonterminal run is its active rows and its cursor; the
+// terminality commit replaces both with one terminal
 // record — identity, outcome, output, commit time, failure, cancel
 // request, and the permanently failed unwinds — in the same transaction,
 // so the input and step states, folded into the output by then, are
@@ -34,6 +32,7 @@
 //	M   RunMeta (identity, annotations, created_at)
 //	c   CancelRequest
 //	f   the run's FailureRecord
+//	i   the input, as a nested bucket holding one value
 //	o   an operation row: o · order (4 bytes, big-endian) · step · phase
 //
 // Operation rows lead with their resolution order, so the walk returns a
@@ -45,9 +44,15 @@
 // phase, replaced only as the contract's upsert allows.
 //
 // Per-attempt write volume is the cursor's, independent of input and
-// state sizes: the input sits alone in its bucket because bbolt rewrites
-// a whole leaf node on any write to it, so a large value must not share
-// a node with rows that change. An active-slot index keyed by
+// state sizes, and so is the terminality commit's: bbolt rewrites a
+// whole leaf node on any write to it, so a large value must not share a
+// node with rows that change or with other large values that come and
+// go. Each input is therefore the sole value of a nested bucket under
+// its run's prefix; a bucket over a quarter page gets pages of its own,
+// so creating and deleting an input touches the run's own pages plus
+// one small entry in the active leaf, never a neighbour's input, and the
+// terminality commit touches no tree it would not touch anyway. An
+// active-slot index keyed by
 // (PipelineID, ResourceID) holds every nonterminal run: CreateRun admits
 // against it, GetActiveRunID reads it, and ListNonterminal walks it, so
 // recovery cost follows the runs in flight rather than the retained
@@ -58,12 +63,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"sort"
 	"sync/atomic"
 	"time"
 
 	bolt "go.etcd.io/bbolt"
+	berrors "go.etcd.io/bbolt/errors"
 
 	"github.com/dangra/durable/kernel"
 	"github.com/dangra/durable/store/driver"
@@ -71,7 +78,6 @@ import (
 )
 
 var (
-	inputBucket    = []byte("input")
 	activeBucket   = []byte("active")
 	cursorBucket   = []byte("cursor")
 	terminalBucket = []byte("terminal")
@@ -83,6 +89,7 @@ const (
 	tagMeta    byte = 'M'
 	tagCancel  byte = 'c'
 	tagFailure byte = 'f'
+	tagInput   byte = 'i'
 	tagOp      byte = 'o'
 )
 
@@ -111,7 +118,7 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("bbolt: opening %s: %w", path, err)
 	}
 	err = db.Update(func(tx *bolt.Tx) error {
-		for _, name := range [][]byte{inputBucket, activeBucket, cursorBucket, terminalBucket, slotsBucket} {
+		for _, name := range [][]byte{activeBucket, cursorBucket, terminalBucket, slotsBucket} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return err
 			}
@@ -168,14 +175,15 @@ func phaseByte(phase kernel.Phase) byte {
 	return 'f'
 }
 
-// splitActiveKey recovers the run id and tag of an active key, and the
-// bytes after the tag.
-func splitActiveKey(k []byte) (id kernel.RunID, tag byte, rest []byte, ok bool) {
+// splitActiveKey recovers the run id bytes and tag of an active key, and
+// the bytes after the tag. It allocates nothing; callers that need the
+// id as a string convert it.
+func splitActiveKey(k []byte) (id []byte, tag byte, rest []byte, ok bool) {
 	i := bytes.IndexByte(k, 0)
 	if i < 0 || i+1 >= len(k) {
-		return "", 0, nil, false
+		return nil, 0, nil, false
 	}
-	return kernel.RunID(k[:i]), k[i+1], k[i+2:], true
+	return k[:i], k[i+1], k[i+2:], true
 }
 
 // splitOpRest recovers order, step id, and phase from the bytes after an
@@ -272,7 +280,7 @@ func putRun(tx *bolt.Tx, rec *driver.RunRecord) error {
 		return err
 	}
 	if len(rec.Input) > 0 {
-		if err := tx.Bucket(inputBucket).Put([]byte(rec.RunID), rec.Input); err != nil {
+		if err := putInput(active, rec.RunID, rec.Input); err != nil {
 			return err
 		}
 	}
@@ -418,26 +426,50 @@ func deleteNonterminalStage(tx *bolt.Tx, id kernel.RunID) error {
 		keys = append(keys, bytes.Clone(k))
 	}
 	for _, k := range keys {
-		if err := active.Delete(k); err != nil {
+		var err error
+		if k[len(prefix)] == tagInput {
+			err = active.DeleteBucket(k)
+		} else {
+			err = active.Delete(k)
+		}
+		if err != nil {
 			return err
 		}
 	}
-	for _, bucket := range [][]byte{inputBucket, cursorBucket} {
-		if err := tx.Bucket(bucket).Delete([]byte(id)); err != nil {
-			return err
+	return tx.Bucket(cursorBucket).Delete([]byte(id))
+}
+
+// inputKey is the one key of a run's input bucket.
+var inputKey = []byte{'i'}
+
+// putInput stores the input as the sole value of a nested bucket under
+// the run's input tag. A bucket larger than a quarter page gets pages of
+// its own, so creating and deleting it writes the run's own pages plus
+// one small entry in the active leaf — never the neighbours' inputs,
+// which sharing a leaf node would rewrite on every insert and delete —
+// and, living under the run prefix, it costs the terminality commit no
+// extra tree.
+func putInput(active *bolt.Bucket, id kernel.RunID, input []byte) error {
+	ib, err := active.CreateBucket(activeKey(id, tagInput))
+	if err != nil {
+		if errors.Is(err, berrors.ErrBucketExists) {
+			return fmt.Errorf("bbolt: input of run %s already written", id)
 		}
+		return err
 	}
-	return nil
+	return ib.Put(inputKey, input)
 }
 
 // findOp locates the run's row for step and phase, whatever its order.
 // It returns nil when there is none.
 func findOp(active *bolt.Bucket, id kernel.RunID, step kernel.StepID, phase kernel.Phase) (key, value []byte) {
 	prefix := opPrefix(id)
+	// Everything after the order: · step · phase. Compared as bytes so
+	// the scan allocates nothing.
+	suffix := append(append([]byte{0}, step...), 0, phaseByte(phase))
 	c := active.Cursor()
 	for k, v := c.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, v = c.Next() {
-		_, st, ph, ok := splitOpRest(k[len(prefix)-1:])
-		if ok && st == step && ph == phase {
+		if len(k) == len(prefix)+4+len(suffix) && bytes.Equal(k[len(prefix)+4:], suffix) {
 			return k, v
 		}
 	}
@@ -495,12 +527,9 @@ func getNonterminal(tx *bolt.Tx, id kernel.RunID, metaBytes []byte) (*driver.Run
 	if err := storagepb.UnmarshalRunMetaInto(metaBytes, rec); err != nil {
 		return nil, err
 	}
-	if in := tx.Bucket(inputBucket).Get([]byte(id)); in != nil {
-		rec.Input = bytes.Clone(in)
-	}
-
 	prefix := runPrefix(id)
-	c := tx.Bucket(activeBucket).Cursor()
+	active := tx.Bucket(activeBucket)
+	c := active.Cursor()
 	for k, v := c.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, v = c.Next() {
 		_, tag, rest, ok := splitActiveKey(k)
 		if !ok {
@@ -508,6 +537,10 @@ func getNonterminal(tx *bolt.Tx, id kernel.RunID, metaBytes []byte) (*driver.Run
 		}
 		switch tag {
 		case tagMeta:
+		case tagInput:
+			if ib := active.Bucket(k); ib != nil {
+				rec.Input = bytes.Clone(ib.Get(inputKey))
+			}
 		case tagCancel:
 			cr, err := storagepb.UnmarshalCancel(v)
 			if err != nil {
@@ -676,7 +709,7 @@ func (s *Store) ListRuns(_ context.Context, pipeline kernel.PipelineID, resource
 			if err := storagepb.UnmarshalRunMetaInto(v, probe); err != nil {
 				return err
 			}
-			return collect(id, probe)
+			return collect(kernel.RunID(id), probe)
 		}); err != nil {
 			return err
 		}

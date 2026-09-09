@@ -321,10 +321,13 @@ func TestReapTerminal(t *testing.T) {
 	}
 	s.db.View(func(tx *bolt.Tx) error {
 		for _, id := range []string{"old-1", "old-2"} {
-			for _, bucket := range [][]byte{inputBucket, cursorBucket, terminalBucket} {
+			for _, bucket := range [][]byte{cursorBucket, terminalBucket} {
 				if tx.Bucket(bucket).Get([]byte(id)) != nil {
 					t.Errorf("bucket %s still holds %s", bucket, id)
 				}
+			}
+			if tx.Bucket(activeBucket).Bucket(activeKey(durable.RunID(id), tagInput)) != nil {
+				t.Errorf("input bucket still holds %s", id)
 			}
 			if n := len(activeRows(tx, durable.RunID(id))); n != 0 {
 				t.Errorf("active bucket still holds %d rows of %s", n, id)
@@ -631,6 +634,19 @@ func TestTerminalityCompactsRun(t *testing.T) {
 	}
 	uf := durable.Failure{StepID: "a/v1", Phase: durable.PhaseUnwind, Attempt: 2, Message: "stuck", At: now}
 	oc := durable.OutcomeFailure
+	// While nonterminal, the input sits in its own nested bucket and
+	// reads back whole.
+	s.db.View(func(tx *bolt.Tx) error {
+		ib := tx.Bucket(activeBucket).Bucket(activeKey("run-t", tagInput))
+		if ib == nil || !bytes.Equal(ib.Get(inputKey), input) {
+			t.Fatal("input must sit in its own nested bucket")
+		}
+		return nil
+	})
+	if got, err := s.GetRun(ctx, "run-t"); err != nil || !bytes.Equal(got.Input, input) {
+		t.Fatalf("GetRun input = %d bytes, %v", len(got.Input), err)
+	}
+
 	committed := now.Add(time.Minute)
 	// The last unwind resolution rides the terminality commit.
 	apply(driver.Transition{
@@ -642,10 +658,8 @@ func TestTerminalityCompactsRun(t *testing.T) {
 
 	// The nonterminal stage is gone from disk: a terminal run is one row.
 	s.db.View(func(tx *bolt.Tx) error {
-		for _, bucket := range [][]byte{inputBucket, cursorBucket} {
-			if tx.Bucket(bucket).Get([]byte("run-t")) != nil {
-				t.Errorf("bucket %s still holds the terminal run", bucket)
-			}
+		if tx.Bucket(cursorBucket).Get([]byte("run-t")) != nil {
+			t.Error("cursor survived terminality")
 		}
 		if rows := activeRows(tx, "run-t"); len(rows) != 0 {
 			t.Errorf("%d active rows survived terminality", len(rows))

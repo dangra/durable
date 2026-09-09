@@ -7,6 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/wrapperspb"
+
+	"github.com/dangra/durable"
 	"github.com/dangra/durable/engine"
 	"github.com/dangra/durable/pipelinedef"
 )
@@ -74,6 +78,49 @@ func BenchmarkFatOutput(b *testing.B) {
 		lat = append(lat, runPopulation(b, v.pipe, runs, fmt.Sprintf("fat-output-%d", i))...)
 	}
 	report(b, v, runs, lat, time.Since(start))
+}
+
+// BenchmarkShape is the store cost of a run by what it carries. Each of
+// the three values a run can carry — input, committed step state, and
+// output — is varied one at a time, at slim (a few fields) and fat (the
+// machine config's size), against a run that carries nothing, so each
+// sub-benchmark's diskB/run is the marginal cost of that one value at
+// that size, and "none" is the floor: the store's own bookkeeping for a
+// run of eight stateless steps. A store keeps a large value away from
+// rows that change and a small one cheap to write and read; this is
+// where either failing shows as a number with a name, instead of inside
+// the composite machine shape the other scenarios run.
+func BenchmarkShape(b *testing.B) {
+	runs := scale(b, 60)
+	slim := wrapperspb.Bytes(make([]byte, slimValueSize))
+	fat := wrapperspb.Bytes(make([]byte, fatValueSize))
+	for _, sh := range []struct {
+		name  string
+		shape pipelineShape
+		input proto.Message
+	}{
+		{"none", pipelineShape{}, nil},
+		{"input_slim", pipelineShape{input: true}, slim},
+		{"input_fat", pipelineShape{input: true}, fat},
+		{"state_slim", pipelineShape{stateBytes: slimValueSize}, nil},
+		{"state_fat", pipelineShape{stateBytes: fatValueSize}, nil},
+		{"output_slim", pipelineShape{outputBytes: slimValueSize}, nil},
+		{"output_fat", pipelineShape{outputBytes: fatValueSize}, nil},
+	} {
+		b.Run(sh.name, func(b *testing.B) {
+			def := shapedPipeline(durable.PipelineID("shape-"+sh.name), [numSteps]stepSpec{}, sh.shape)
+			v := newEnv(b, def)
+			v.start(b)
+
+			b.ResetTimer()
+			start := time.Now()
+			var lat []time.Duration
+			for i := 0; i < b.N; i++ {
+				lat = append(lat, runPopulationWith(b, v.pipe, runs, fmt.Sprintf("%s-%d", sh.name, i), sh.input)...)
+			}
+			report(b, v, runs, lat, time.Since(start))
+		})
+	}
 }
 
 // BenchmarkRetryStorm is the degraded-host case: a population of runs

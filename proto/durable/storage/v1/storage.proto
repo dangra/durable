@@ -63,11 +63,6 @@ message RunMeta {
   string run_id = 1;
   string pipeline_id = 2;
   string resource_id = 3;
-  // Field 4 held the persisted exclusion scope until exclusion became an
-  // admission-time rule over the engine's current definitions. Field 5
-  // held the input until it moved out of the meta row.
-  reserved 4, 5;
-  reserved "slot_group", "input";
   google.protobuf.Timestamp created_at = 6;
   // Caller-supplied propagation metadata, immutable after acceptance:
   // trace contexts, tenant tags. Never part of dedup identity.
@@ -110,9 +105,6 @@ message Cursor {
   string last_reason = 6;
   google.protobuf.Timestamp last_error_at = 7;
   google.protobuf.Timestamp updated_at = 8;
-  // Single-target park written by durable <= v0.3; read as an ALL park of
-  // one target when awaiting is absent, never written.
-  string awaiting_run_id = 9 [deprecated = true];
   Await awaiting = 10;
   Wake awaited = 11;
 }

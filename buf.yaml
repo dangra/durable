@@ -12,11 +12,13 @@ lint:
 breaking:
   use:
     - FILE
-    # Deleting a field is fine once its number and name are reserved: the
-    # storage schema is internal and the reservation keeps the wire safe.
-    - FIELD_NO_DELETE_UNLESS_NUMBER_RESERVED
   except:
+    # durable owes no wire compatibility to earlier releases (clean
+    # break): a field is deleted outright, its number and name are not
+    # reserved, and reservations already present are dropped. Review
+    # catches a number reused for a different meaning within a release.
     - FIELD_NO_DELETE
+    - RESERVED_MESSAGE_NO_DELETE
     # The storage schema is internal and durable owes no on-disk
     # compatibility: a message may be replaced outright when the row
     # shape changes (StepRecord and Failures became OperationRecord).

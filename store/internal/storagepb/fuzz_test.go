@@ -127,16 +127,27 @@ func FuzzRoundTrip(f *testing.F) {
 
 		// Terminal.
 		oc := kernel.Outcome(a%2 + 1)
-		tb, err := MarshalTerminal(oc, blob)
+		term := &driver.RunRecord{
+			RunID: kernel.RunID(s1), PipelineID: kernel.PipelineID(s2), ResourceID: kernel.ResourceID(s1),
+			Phase: kernel.Phase(a % 4), Outcome: &oc, Output: append([]byte(nil), blob...),
+			CreatedAt: when, UpdatedAt: when.Add(time.Second),
+		}
+		if a%2 == 0 {
+			term.Annotations = map[string]string{s1: s2}
+		}
+		tb, err := MarshalTerminal(term)
 		if err != nil {
 			t.Fatalf("MarshalTerminal: %v", err)
 		}
-		goc, gout, err := UnmarshalTerminal(tb)
-		if err != nil {
-			t.Fatalf("UnmarshalTerminal: %v", err)
+		gterm := &driver.RunRecord{}
+		if err := UnmarshalTerminalInto(tb, gterm); err != nil {
+			t.Fatalf("UnmarshalTerminalInto: %v", err)
 		}
-		if goc != oc || string(gout) != string(blob) {
-			t.Fatalf("terminal round trip: %v/%q != %v/%q", goc, gout, oc, blob)
+		if gterm.RunID != term.RunID || gterm.PipelineID != term.PipelineID || gterm.ResourceID != term.ResourceID ||
+			gterm.Outcome == nil || *gterm.Outcome != oc || string(gterm.Output) != string(blob) ||
+			gterm.Phase != term.Phase || !sameTime(gterm.CreatedAt, term.CreatedAt) || !sameTime(gterm.UpdatedAt, term.UpdatedAt) ||
+			len(gterm.Annotations) != len(term.Annotations) {
+			t.Fatalf("terminal round trip: %+v != %+v", gterm, term)
 		}
 
 		// Cancel.
@@ -156,7 +167,7 @@ func FuzzRoundTrip(f *testing.F) {
 		rec := &driver.RunRecord{
 			RunID: kernel.RunID(s1), PipelineID: kernel.PipelineID(s2),
 			ResourceID: kernel.ResourceID(s1),
-			Input:      append([]byte(nil), blob...), CreatedAt: when,
+			CreatedAt:  when,
 		}
 		if a%2 == 0 {
 			rec.Annotations = map[string]string{s1: s2}
@@ -171,7 +182,7 @@ func FuzzRoundTrip(f *testing.F) {
 		}
 		if grec.RunID != rec.RunID || grec.PipelineID != rec.PipelineID ||
 			grec.ResourceID != rec.ResourceID ||
-			string(grec.Input) != string(rec.Input) || !sameTime(grec.CreatedAt, rec.CreatedAt) ||
+			!sameTime(grec.CreatedAt, rec.CreatedAt) ||
 			len(grec.Annotations) != len(rec.Annotations) {
 			t.Fatalf("run meta round trip: %+v != %+v", grec, rec)
 		}
@@ -186,7 +197,7 @@ func FuzzRoundTrip(f *testing.F) {
 		_, _ = UnmarshalCursor(blob)
 		_, _ = UnmarshalOperationRecord(blob)
 		_, _ = UnmarshalFailureRecord(blob)
-		_, _, _ = UnmarshalTerminal(blob)
+		_ = UnmarshalTerminalInto(blob, &driver.RunRecord{})
 		_, _ = UnmarshalCancel(blob)
 		_ = UnmarshalRunMetaInto(blob, &driver.RunRecord{})
 	})

@@ -147,6 +147,7 @@ func BenchmarkSupersedeCycle(b *testing.B) {
 	}
 	elapsed := time.Since(start)
 	n := float64(cycles) * float64(b.N)
+	drainStore(b, v.store)
 	b.ReportMetric(float64(v.store.Stats().TxPageAllocBytes)/n, "diskB/cycle")
 	b.ReportMetric(float64(v.writes.Load())/n, "transitions/cycle")
 	b.ReportMetric(n/elapsed.Seconds(), "cycles/sec")
@@ -317,6 +318,7 @@ func BenchmarkAwaitFanout(b *testing.B) {
 		}
 	}
 	n := float64(pairs*2) * float64(b.N) // targets + waiters
+	drainStore(b, v.store)
 	b.ReportMetric(float64(v.store.Stats().TxPageAllocBytes)/n, "diskB/run")
 	b.ReportMetric(float64(v.writes.Load())/n, "transitions/run")
 	if len(wakeLat) > 0 {

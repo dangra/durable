@@ -5,10 +5,18 @@
 // the Go constants by an explicit conversion layer in internal/storagepb.
 //
 // A run is persisted as components with distinct write cadences: RunMeta
-// once at creation, StepRecord rows once per operation resolution,
-// Failures/Terminal/CancelRequest rarely — and Cursor, the only component
-// rewritten on every attempt, kept deliberately small so per-attempt write
-// volume is independent of input and state sizes.
+// and the raw input once at creation, OperationRecord rows once per
+// operation resolution, FailureRecord/CancelRequest rarely — and Cursor,
+// the only component rewritten on every attempt, kept deliberately small
+// so per-attempt write volume is independent of input and state sizes.
+//
+// The components split into two lifecycle stages. While a run is
+// nonterminal it is RunMeta, Cursor, its OperationRecord rows, and its
+// FailureRecord and CancelRequest rows. The terminality commit replaces
+// all of them with one Terminal record carrying the identity, failure,
+// and cancel request forward, so a terminal run is one row: the input
+// and the step states, already folded into the output by then, are
+// released the moment the run ends rather than at retention.
 syntax = "proto3";
 
 package durable.storage.v1;
@@ -46,16 +54,20 @@ enum FailureKind {
   FAILURE_KIND_CANCELED = 3;
 }
 
-// RunMeta holds the write-once identity of a run.
+// RunMeta holds the write-once identity of a nonterminal run. It is
+// deleted by the terminality commit, which carries the identity into the
+// Terminal record. The input is not part of it: it is the one large
+// value of the nonterminal stage and stores keep it on its own so the
+// small write-once facts never share a page with it.
 message RunMeta {
   string run_id = 1;
   string pipeline_id = 2;
   string resource_id = 3;
   // Field 4 held the persisted exclusion scope until exclusion became an
-  // admission-time rule over the engine's current definitions.
-  reserved 4;
-  reserved "slot_group";
-  bytes input = 5;
+  // admission-time rule over the engine's current definitions. Field 5
+  // held the input until it moved out of the meta row.
+  reserved 4, 5;
+  reserved "slot_group", "input";
   google.protobuf.Timestamp created_at = 6;
   // Caller-supplied propagation metadata, immutable after acceptance:
   // trace contexts, tenant tags. Never part of dedup identity.
@@ -131,10 +143,32 @@ message FailureRecord {
   string reason = 7;
 }
 
-// Terminal marks a run's committed terminal outcome and output.
+// Terminal is the whole of a terminal run: the identity carried over
+// from RunMeta, the outcome and output, when it committed, the run's
+// failure and cancel request, and the failed unwind operations. Input,
+// every other operation row, and the cursor's scheduling state do not
+// survive terminality.
 message Terminal {
   Outcome outcome = 1;
   bytes output = 2;
+  string run_id = 3;
+  string pipeline_id = 4;
+  string resource_id = 5;
+  google.protobuf.Timestamp created_at = 6;
+  map<string, string> annotations = 7;
+  // The phase the terminality commit's cursor carried.
+  Phase phase = 8;
+  // When terminality committed; the cursor's updated_at at that moment.
+  // Retention measures "terminal since" from it.
+  google.protobuf.Timestamp committed_at = 9;
+  // The unwind operations that failed permanently, by step id: the
+  // run's unwind failures, kept because they are the durable evidence
+  // that compensation did not happen. Bounded text, no state bytes.
+  map<string, OperationRecord> failed_unwinds = 10;
+  // The run's failure, when the forward phase ended in one.
+  FailureRecord failure = 11;
+  // The cancellation request, when one was recorded before terminality.
+  CancelRequest cancel = 12;
 }
 
 message CancelRequest {

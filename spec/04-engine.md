@@ -610,11 +610,34 @@ design rationale.
 The Store persists Runs as components with distinct write cadences:
 
 ```text
-meta (identity, input)        written once, at creation
+meta (identity)               written once, at creation
+input                         written once, at creation — the large one
 step fact rows                written once per operation resolution
-failures / terminal / cancel  written rarely
+failure / cancel              written rarely
 cursor                        rewritten on every attempt — small
+terminal                      written once, replacing everything above
 ```
+
+The input is its own component because it is the one large value of
+the nonterminal stage: a store that keeps it apart from the small
+write-once facts never rewrites it, or a page holding it, when a fact
+lands.
+
+A Run has two storage stages. Nonterminal, it is meta, its step fact
+rows, the cursor, and its failure and cancel records. The terminality
+commit replaces all of them with one terminal record — identity,
+outcome, output, commit time, failure, cancel request, and the
+permanently failed unwind operations — in the same atomic step, so a
+terminal Run is one row. A store may physically free the released
+components shortly after the commit, in batches, as long as no read
+surfaces them: the terminal record is authoritative from the commit
+on. The Input and the committed Step States have
+been folded into the Output by then; nothing reachable through a terminal Run needs them, and
+releasing them at terminality rather than at retention keeps the
+retained history proportional to outputs. The failed unwind
+operations stay because they are the durable evidence that
+compensation did not happen. `InputBytes` on a terminal Run returns
+`ErrRunTerminal`.
 
 The Cursor is the per-Run scheduling state: phase, retry/start
 eligibility, last-error fields, the **single in-flight operation**
@@ -680,16 +703,20 @@ engine.WithRetentionPolicy(engine.RetentionPolicy{
 The Engine sweeps on the jittered interval, starting immediately at
 Start, deleting terminal Runs in bounded batches through the Store's
 `ReapTerminal(before, limit)` primitive. Each Run's components are
-removed atomically; "terminal since" is the cursor timestamp stamped by
-the terminality commit.
+removed atomically; "terminal since" is the commit time the terminal
+record carries.
+
+Retention governs only the terminal stage (see Store contract): the
+Input, the Step States, and the cursor are released by the terminality
+commit itself, not by the sweep, so what a retention window keeps per
+Run is its identity, outcome, output, failures, and cancel request.
 
 Only terminal Runs are ever reaped. Nonterminal Runs — invalid ones
 included — are never touched regardless of age (force-releasing an
 unrecoverable Run is the separate abandonment problem, out of v1 scope).
 
 After reaping, lookups of the Run return `ErrRunNotFound`; a reaped Run
-is no longer enumerable. Keeping a compact post-retention summary is a
-possible future extension.
+is no longer enumerable.
 
 The Clock governs retention timing, so sweeps are deterministic under
 `WithClock`.

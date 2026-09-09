@@ -131,6 +131,18 @@ type Transition struct {
 
 // RunRecord is the durable representation of a Run: execution facts, not a
 // materialized topology. Stores persist it opaquely.
+//
+// A Run has two storage stages. Nonterminal, the record is complete.
+// Terminal, it is what CompactTerminal leaves: identity, Annotations,
+// Phase, Outcome, Output, Failure, Cancel, CreatedAt, UpdatedAt (the
+// terminality commit time), and the failed unwind operations — a
+// terminal Run is one row. The terminality commit releases Input, every
+// other operation record, and the cursor's scheduling fields, which
+// read back as zero from then on.
+// Input and Step State have been folded into the Output by the time a
+// Run ends, so nothing the engine or a caller can reach through a
+// terminal Run needs them, and releasing them at terminality rather than
+// at retention keeps the retained history proportional to outputs.
 type RunRecord struct {
 	RunID      kernel.RunID
 	PipelineID kernel.PipelineID
@@ -192,6 +204,33 @@ func (o OperationRecord) clone() OperationRecord {
 
 // Terminal reports whether the Run has a committed terminal outcome.
 func (r *RunRecord) Terminal() bool { return r.Outcome != nil }
+
+// CompactTerminal applies the terminal-stage retention rule to r in
+// place: Input, the cursor's scheduling fields (NextAttemptAt,
+// LastError, LastReason, LastErrorAt, Awaiting, Awaited), and every
+// operation record other than the permanently failed unwinds are
+// released. What remains of Steps is exactly the Run's unwind failures —
+// UnwindFailures still answers — each on its own entry with the forward
+// half zeroed. Stores apply it inside the terminality commit; it is
+// exported so every driver compacts by one rule, which the differential
+// fuzzer then pins.
+func (r *RunRecord) CompactTerminal() {
+	r.Input = nil
+	r.NextAttemptAt, r.LastErrorAt = time.Time{}, time.Time{}
+	r.LastError, r.LastReason = "", ""
+	r.Awaiting, r.Awaited = nil, nil
+	var kept map[kernel.StepID]*StepRecord
+	for id, sr := range r.Steps {
+		if sr.Unwind.Status != OpFailed {
+			continue
+		}
+		if kept == nil {
+			kept = make(map[kernel.StepID]*StepRecord)
+		}
+		kept[id] = &StepRecord{Unwind: sr.Unwind.clone()}
+	}
+	r.Steps = kept
+}
 
 // Step returns the StepRecord for id, creating it if absent.
 func (r *RunRecord) Step(id kernel.StepID) *StepRecord {
@@ -315,8 +354,13 @@ type Store interface {
 	// ApplyTransition atomically applies one durable state change to the
 	// Run: the Cursor is written, step facts are upserted, failures
 	// recorded, and a Transition carrying an Outcome commits terminality
-	// and releases the resource slot. A missing Run returns
-	// kernel.ErrRunNotFound.
+	// and releases the resource slot. The terminality commit also
+	// releases the nonterminal stage — Input, Steps, and the cursor's
+	// scheduling fields — in the same atomic step; the Transition's own
+	// Ops are dropped with it, and only the Cursor's Phase and UpdatedAt
+	// survive, as the terminal record's Phase and commit time. A missing
+	// Run returns kernel.ErrRunNotFound; a terminal Run accepts no
+	// further transitions and returns kernel.ErrRunTerminal.
 	ApplyTransition(ctx context.Context, id kernel.RunID, t Transition) error
 
 	// ReapTerminal deletes up to limit Runs whose terminal outcome was
@@ -333,12 +377,6 @@ type Store interface {
 
 	// ListNonterminal returns all Runs without a terminal outcome.
 	ListNonterminal(ctx context.Context) ([]*RunRecord, error)
-
-	// ListRuns returns all Runs (terminal and nonterminal) of a pipeline
-	// against a resource, oldest first. It is an enumeration of store
-	// contents — the differential fuzzer and tests rely on it — and may
-	// scan.
-	ListRuns(ctx context.Context, pipeline kernel.PipelineID, resource kernel.ResourceID) ([]*RunRecord, error)
 
 	// GetActiveRunID returns the RunID occupying the (pipeline, resource)
 	// slot — the pipeline's one nonterminal Run on the resource — or

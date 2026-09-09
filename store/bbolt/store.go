@@ -7,42 +7,109 @@
 // blocks (or times out) rather than executing concurrently.
 //
 // The storage representation is implementation-defined by the spec; this
-// implementation stores each run as components with distinct write
-// cadences (the internal durable.storage.v1 protobuf schema): write-once
-// meta (identity + input), one operation row per step phase written at
-// that operation's resolution and carrying its own failure, the run's
-// write-once run failure, terminal, and cancel records, and the small
-// cursor rewritten per attempt. Per-attempt write volume is therefore
-// independent of input and state sizes, an unwind never rewrites the
-// forward row's state, and no row is read back to be rewritten. An active-slot index keyed by (PipelineID,
-// ResourceID) holds every nonterminal run: CreateRun admits against it,
-// GetActiveRunID reads it, and ListNonterminal walks it, so recovery cost
-// follows the runs in flight rather than the retained history.
+// implementation stores a run in six buckets, chosen by write cadence.
+// With · for the NUL separator, which the Store contract keeps out of
+// every identifier, and R for a run id:
+//
+//	bucket: active                     append-only facts of nonterminal runs
+//	  R·M                              -> RunMeta          write-once, refused twice
+//	  R·c                              -> CancelRequest    write-once, first cancel wins
+//	  R·f                              -> FailureRecord    write-once, refused twice
+//	  R·i                              -> nested bucket { i -> input bytes }
+//	  R·o·<order:4 BE>·<step>·<phase>  -> OperationRecord  one row per step and phase
+//	                                      phase byte: f forward, u unwind
+//
+//	bucket: cursor                     the one mutable row
+//	  R                                -> Cursor           rewritten on every attempt
+//
+//	bucket: terminal                   the whole of a terminal run
+//	  R                                -> Terminal         identity, annotations, phase,
+//	                                                       outcome, output, committed_at,
+//	                                                       failure, cancel, failed_unwinds
+//
+//	bucket: expiry                     retention order of terminal runs
+//	  <committed_at:8 BE>·R            -> (empty)          written with the terminal row
+//
+//	bucket: staged                     terminal runs whose stage is still on disk
+//	  R                                -> (empty)          written with the terminal row,
+//	                                                       deleted with the stage
+//
+//	bucket: slots                      admission index
+//	  <pipeline>·<resource>            -> R                held from CreateRun to terminality
+//
+// A run moves through it like this. CreateRun writes R·M, the input
+// bucket when there is one, the cursor row, and the slot, in one
+// transaction. Each attempt rewrites only the cursor. Each resolution
+// appends one R·o row; an unresolved operation displaced by a topology
+// change is flushed at order zero and moves to its real order when it
+// resolves, the one delete before terminality. Cancel and failure land
+// as R·c and R·f. The terminality commit writes the terminal row —
+// from then on the run reads from that row alone, so the input and
+// step states, folded into the output by then, are released when the
+// run ends rather than when retention reaps it — deletes the slot, and
+// stages R. The drain later deletes everything under R· in active, the
+// input bucket included, plus the cursor row and the staged key, in
+// batches (see Store), because deleting adjacent runs together lets
+// bbolt free whole leaves instead of rewriting one per run. Reap walks the expiry index from its
+// oldest key and stops at the first run that has not expired, deleting
+// each victim's terminal row and index key: proportional to the victims,
+// decoding nothing. The terminal row is authoritative wherever both
+// stages exist, which is what makes the deferred drain safe.
+//
+// What each choice bought. Tags sort M, c, f, i, o, so one prefix walk
+// reads a run in the order a reader wants it, with operations in
+// resolution order and no sorting. The input is a nested bucket so its
+// bytes never share a leaf node with rows that change or with other
+// inputs: bbolt rewrites a whole leaf node on any write to it, and a
+// bucket over a quarter page gets pages of its own, so creating and
+// deleting an input touches the run's own pages plus one small entry in
+// the active leaf. Operation rows are plain rows because a nested bucket
+// costs a page per write for anything appended to (every write into a
+// child bucket rewrites the child's page and the parent's entry for it;
+// measured, and rejected, for a bucket per run and for a bucket per
+// run's operations). The cursor is its own bucket because it is the
+// only row rewritten, so per-attempt write volume is the cursor's,
+// independent of input and state sizes. Terminal is one row because
+// everything a caller can still reach lives in it. The slots index
+// holds every nonterminal run: CreateRun admits against it,
+// GetActiveRunID reads it, and ListNonterminal walks it, so recovery
+// cost follows the runs in flight rather than the retained history.
 package bbolt
 
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
+	"errors"
 	"fmt"
-	"github.com/dangra/durable/store/driver"
-	"sort"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	bolt "go.etcd.io/bbolt"
+	berrors "go.etcd.io/bbolt/errors"
 
 	"github.com/dangra/durable/kernel"
+	"github.com/dangra/durable/store/driver"
 	"github.com/dangra/durable/store/internal/storagepb"
 )
 
 var (
-	metaBucket     = []byte("meta")
+	activeBucket   = []byte("active")
 	cursorBucket   = []byte("cursor")
-	stepsBucket    = []byte("steps")
-	failuresBucket = []byte("failures")
 	terminalBucket = []byte("terminal")
-	cancelBucket   = []byte("cancel")
+	expiryBucket   = []byte("expiry")
+	stagedBucket   = []byte("staged")
 	slotsBucket    = []byte("slots")
+)
+
+// Row tags of the active bucket, in sort order.
+const (
+	tagMeta    byte = 'M'
+	tagCancel  byte = 'c'
+	tagFailure byte = 'f'
+	tagInput   byte = 'i'
+	tagOp      byte = 'o'
 )
 
 // Store is a driver.Store backed by a bbolt database file.
@@ -52,7 +119,38 @@ type Store struct {
 	// commit: a lone caller commits immediately, concurrent callers
 	// coalesce into shared transactions.
 	pending atomic.Int64
+
+	// staged counts the terminal runs whose nonterminal stage is still
+	// on disk — the size of the staged bucket, kept in memory as a hint
+	// for the write path. Deleting one run's rows per transaction costs
+	// a copied root-to-leaf path and a rewritten leaf each time; deleting
+	// a batch of adjacent runs empties whole leaves, which bbolt frees
+	// without writing. So terminality only stages, and the stage is
+	// deleted in batches: inside the next write transaction once a full
+	// batch is staged (see drainStaged), by the sweep goroutine on
+	// stageDrainInterval when writes are idle, at Close, and at Open,
+	// which drains whatever a crash left staged. The bucket is the
+	// truth; the counter only decides whether a write bothers to look.
+	staged atomic.Int64
+	stop   chan struct{}
+	done   chan struct{}
+	once   sync.Once
 }
+
+const (
+	// stageDrainInterval is how long a terminal run's stage may linger
+	// while the store is idle.
+	stageDrainInterval = time.Second
+	// stageDrainPerWrite is the batch a write transaction carries. A
+	// write only takes a batch once that many runs are queued: deleting
+	// a few runs per transaction would rewrite a leaf and a path each
+	// time, which is the per-run cost batching exists to avoid. Smaller
+	// backlogs wait for the sweep.
+	stageDrainPerWrite = 64
+	// stageDrainPerSweep bounds one sweep transaction so a large backlog
+	// does not hold the write lock for long.
+	stageDrainPerSweep = 256
+)
 
 // Open opens (creating if needed) the database at path. It fails if another
 // process holds the file lock, enforcing exclusive ownership.
@@ -65,12 +163,21 @@ func Open(path string) (*Store, error) {
 		// the remap lock. Reserves virtual address space only.
 		FreelistType:    bolt.FreelistMapType,
 		InitialMmapSize: 1 << 30,
+		// bbolt otherwise writes its freelist on every commit, and that
+		// page grows with the number of free pages, so a store that
+		// releases a run's input and states when the run ends would pay
+		// for every page it freed on every later write. With the sync
+		// off the freelist is rebuilt at Open by scanning the file — a
+		// cost proportional to the database, which the stage split keeps
+		// proportional to the runs in flight and the retained terminal
+		// rows.
+		NoFreelistSync: true,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("bbolt: opening %s: %w", path, err)
 	}
 	err = db.Update(func(tx *bolt.Tx) error {
-		for _, name := range [][]byte{metaBucket, cursorBucket, stepsBucket, failuresBucket, terminalBucket, cancelBucket, slotsBucket} {
+		for _, name := range [][]byte{activeBucket, cursorBucket, terminalBucket, expiryBucket, stagedBucket, slotsBucket} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return err
 			}
@@ -82,7 +189,92 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("bbolt: initializing buckets: %w", err)
 	}
 	db.MaxBatchDelay = 2 * time.Millisecond
-	return &Store{db: db}, nil
+	s := &Store{db: db, stop: make(chan struct{}), done: make(chan struct{})}
+	// Whatever the previous process left staged is drained now; the
+	// counter starts at zero and the sweep sees the bucket empty after.
+	if err := s.Drain(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("bbolt: draining staged runs: %w", err)
+	}
+	go s.sweep()
+	return s, nil
+}
+
+// drainStaged deletes the stages of up to n staged runs inside tx,
+// walking the staged bucket from its first key, and reports how many it
+// took. It reads the bucket afresh on every call, so a closure Batch
+// runs twice does no harm, and a run staged twice or reaped before its
+// drain costs a seek.
+func (s *Store) drainStaged(tx *bolt.Tx, n int) (int, error) {
+	staged := tx.Bucket(stagedBucket)
+	var ids [][]byte
+	c := staged.Cursor()
+	for k, _ := c.First(); k != nil && len(ids) < n; k, _ = c.Next() {
+		ids = append(ids, bytes.Clone(k))
+	}
+	for _, id := range ids {
+		if err := deleteNonterminalStage(tx, kernel.RunID(id)); err != nil {
+			return 0, err
+		}
+		if err := staged.Delete(id); err != nil {
+			return 0, err
+		}
+	}
+	return len(ids), nil
+}
+
+// writeDrain is the drain a caller's write transaction carries: a full
+// batch when at least that many runs are staged, nothing otherwise —
+// the idle path allocates nothing.
+func (s *Store) writeDrain(tx *bolt.Tx) error {
+	if s.staged.Load() < stageDrainPerWrite {
+		return nil
+	}
+	n, err := s.drainStaged(tx, stageDrainPerWrite)
+	if err == nil {
+		s.staged.Add(int64(-n))
+	}
+	return err
+}
+
+// Drain deletes the nonterminal stage of every staged terminal run now,
+// in bounded transactions. The store drains on its own — inside write
+// transactions, on a timer, at Open, and at Close — so callers need it
+// only to observe the on-disk state deterministically.
+func (s *Store) Drain() error {
+	for {
+		var n int
+		err := s.db.Update(func(tx *bolt.Tx) error {
+			var err error
+			n, err = s.drainStaged(tx, stageDrainPerSweep)
+			return err
+		})
+		if err != nil {
+			return err
+		}
+		s.staged.Add(int64(-n))
+		if n < stageDrainPerSweep {
+			return nil
+		}
+	}
+}
+
+// sweep drains the queue on a timer so an idle store does not hold a
+// terminal run's input and states for long.
+func (s *Store) sweep() {
+	defer close(s.done)
+	t := time.NewTicker(stageDrainInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-s.stop:
+			return
+		case <-t.C:
+			if s.staged.Load() > 0 {
+				_ = s.Drain() // a failed sweep leaves the bucket; the next tick retries
+			}
+		}
+	}
 }
 
 // slotKey joins the slot pair with NUL, which the Store contract
@@ -96,14 +288,29 @@ func slotKeyFor(pipeline kernel.PipelineID, resource kernel.ResourceID) []byte {
 	return []byte(string(pipeline) + "\x00" + string(resource))
 }
 
-// opKey addresses one operation row: run id, step id, and a phase byte,
-// NUL-separated. runPrefix(id) covers every operation of a run; the
-// forward row sorts before the unwind row of the same step.
-func opKey(id kernel.RunID, step kernel.StepID, phase kernel.Phase) []byte {
-	return []byte(string(id) + "\x00" + string(step) + "\x00" + string(phaseByte(phase)))
+// runPrefix covers every active row of a run.
+func runPrefix(id kernel.RunID) []byte { return []byte(string(id) + "\x00") }
+
+// activeKey addresses a run's single-row fact: meta, cancel, or failure.
+func activeKey(id kernel.RunID, tag byte) []byte {
+	return append(runPrefix(id), tag)
 }
 
-func runPrefix(id kernel.RunID) []byte { return []byte(string(id) + "\x00") }
+// opPrefix covers every operation row of a run.
+func opPrefix(id kernel.RunID) []byte {
+	return append(activeKey(id, tagOp), 0)
+}
+
+// opKey addresses one operation row: run id, the op tag, the resolution
+// order big-endian so rows sort by it, the step id, and a phase byte.
+func opKey(id kernel.RunID, order uint32, step kernel.StepID, phase kernel.Phase) []byte {
+	k := opPrefix(id)
+	k = binary.BigEndian.AppendUint32(k, order)
+	k = append(k, 0)
+	k = append(k, step...)
+	k = append(k, 0, phaseByte(phase))
+	return k
+}
 
 func phaseByte(phase kernel.Phase) byte {
 	if phase == kernel.PhaseUnwind {
@@ -112,17 +319,31 @@ func phaseByte(phase kernel.Phase) byte {
 	return 'f'
 }
 
-// splitOpKey recovers the step id and phase from a key under runPrefix.
-func splitOpKey(id kernel.RunID, k []byte) (kernel.StepID, kernel.Phase, bool) {
-	rest := k[len(id)+1:]
-	if len(rest) < 2 || rest[len(rest)-2] != 0 {
-		return "", 0, false
+// splitActiveKey recovers the run id bytes and tag of an active key, and
+// the bytes after the tag. It allocates nothing; callers that need the
+// id as a string convert it.
+func splitActiveKey(k []byte) (id []byte, tag byte, rest []byte, ok bool) {
+	i := bytes.IndexByte(k, 0)
+	if i < 0 || i+1 >= len(k) {
+		return nil, 0, nil, false
 	}
-	phase := kernel.PhaseForward
-	if rest[len(rest)-1] == 'u' {
+	return k[:i], k[i+1], k[i+2:], true
+}
+
+// splitOpRest recovers order, step id, and phase from the bytes after an
+// operation row's tag.
+func splitOpRest(rest []byte) (order uint32, step kernel.StepID, phase kernel.Phase, ok bool) {
+	// · order(4) · step · phase
+	if len(rest) < 1+4+1+2 || rest[0] != 0 || rest[5] != 0 || rest[len(rest)-2] != 0 {
+		return 0, "", 0, false
+	}
+	order = binary.BigEndian.Uint32(rest[1:5])
+	tail := rest[6:]
+	phase = kernel.PhaseForward
+	if tail[len(tail)-1] == 'u' {
 		phase = kernel.PhaseUnwind
 	}
-	return kernel.StepID(rest[:len(rest)-2]), phase, true
+	return order, kernel.StepID(tail[:len(tail)-2]), phase, true
 }
 
 // groupCommit picks the adaptive commit strategy for one write call: a
@@ -144,6 +365,9 @@ func (s *Store) CreateRun(_ context.Context, rec *driver.RunRecord, excluding []
 	commit, done := s.groupCommit()
 	defer done()
 	err := commit(func(tx *bolt.Tx) error {
+		if err := s.writeDrain(tx); err != nil {
+			return err
+		}
 		slots := tx.Bucket(slotsBucket)
 		// rec's own slot first, then every group member's: the first
 		// occupant found is the blocker reported to the caller.
@@ -177,15 +401,35 @@ func (s *Store) CreateRun(_ context.Context, rec *driver.RunRecord, excluding []
 	return existing, created, nil
 }
 
+// putOnce writes a write-once row, refusing to overwrite one.
+func putOnce(b *bolt.Bucket, what string, id kernel.RunID, k, v []byte) error {
+	if b.Get(k) != nil {
+		return fmt.Errorf("bbolt: %s of run %s already written", what, id)
+	}
+	return b.Put(k, v)
+}
+
 // putRun persists every present component of rec; used at creation (and
-// for seeded records carrying pre-existing facts).
+// for seeded records carrying pre-existing facts). A record seeded
+// terminal is written in its terminal stage.
 func putRun(tx *bolt.Tx, rec *driver.RunRecord) error {
+	if rec.Outcome != nil {
+		c := rec.Clone()
+		c.CompactTerminal()
+		return putTerminal(tx, c)
+	}
+	active := tx.Bucket(activeBucket)
 	meta, err := storagepb.MarshalRunMeta(rec)
 	if err != nil {
 		return err
 	}
-	if err := tx.Bucket(metaBucket).Put([]byte(rec.RunID), meta); err != nil {
+	if err := putOnce(active, "meta", rec.RunID, activeKey(rec.RunID, tagMeta), meta); err != nil {
 		return err
+	}
+	if len(rec.Input) > 0 {
+		if err := putInput(active, rec.RunID, rec.Input); err != nil {
+			return err
+		}
 	}
 	cursor, err := storagepb.MarshalCursor(driver.Cursor{
 		Phase:         rec.Phase,
@@ -217,12 +461,12 @@ func putRun(tx *bolt.Tx, rec *driver.RunRecord) error {
 			return err
 		}
 	}
-	if rec.Outcome != nil {
-		b, err := storagepb.MarshalTerminal(*rec.Outcome, rec.Output)
+	if rec.Cancel != nil {
+		b, err := storagepb.MarshalCancel(rec.Cancel)
 		if err != nil {
 			return err
 		}
-		if err := tx.Bucket(terminalBucket).Put([]byte(rec.RunID), b); err != nil {
+		if err := putOnce(active, "cancel request", rec.RunID, activeKey(rec.RunID, tagCancel), b); err != nil {
 			return err
 		}
 	}
@@ -232,10 +476,68 @@ func putRun(tx *bolt.Tx, rec *driver.RunRecord) error {
 func (s *Store) ApplyTransition(_ context.Context, id kernel.RunID, t driver.Transition) error {
 	commit, done := s.groupCommit()
 	defer done()
-	return commit(func(tx *bolt.Tx) error {
-		metaBytes := tx.Bucket(metaBucket).Get([]byte(id))
-		if metaBytes == nil {
+	err := commit(func(tx *bolt.Tx) error {
+		if err := s.writeDrain(tx); err != nil {
+			return err
+		}
+		// A terminal run accepts no further transitions, and the engine
+		// never sends one. Its meta may linger until the stage drains,
+		// so the terminal row is checked first.
+		if tx.Bucket(terminalBucket).Get([]byte(id)) != nil {
+			return kernel.ErrRunTerminal
+		}
+		if tx.Bucket(activeBucket).Get(activeKey(id, tagMeta)) == nil {
 			return kernel.ErrRunNotFound
+		}
+		if t.Outcome != nil {
+			// The terminality commit: one terminal record is written, the
+			// run is staged, and the slot is released; the nonterminal
+			// stage — active rows, cursor — is deleted later in a batch. The record is assembled the way the reference
+			// store's would be after this transition (rows, then the
+			// transition's ops, then its cursor's in-flight overlay) and
+			// compacted by the shared rule, so the failed unwinds it
+			// keeps are the same ones the model keeps.
+			rec, err := getNonterminal(tx, id)
+			if err != nil {
+				return err
+			}
+			if t.Failure != nil {
+				f := *t.Failure
+				rec.Failure = &f
+			}
+			for _, ow := range t.Ops {
+				*rec.Step(ow.StepID).Op(ow.Phase) = ow.Record
+			}
+			if t.Cursor.StepID != "" {
+				sr := rec.Step(t.Cursor.StepID)
+				if t.Cursor.Phase == kernel.PhaseUnwind && sr.Forward.Status == driver.OpSucceeded {
+					sr.Unwind.Status = driver.OpUnresolved
+				} else {
+					sr.Forward.Status = driver.OpUnresolved
+				}
+			}
+			rec.Phase = t.Cursor.Phase
+			rec.UpdatedAt = t.Cursor.UpdatedAt
+			oc := *t.Outcome
+			rec.Outcome = &oc
+			rec.Output = t.Output
+			rec.CompactTerminal()
+			if err := putTerminal(tx, rec); err != nil {
+				return err
+			}
+			if err := tx.Bucket(stagedBucket).Put([]byte(id), []byte{}); err != nil {
+				return err
+			}
+			key := slotKey(rec)
+			if active := tx.Bucket(slotsBucket).Get(key); active != nil && string(active) == string(id) {
+				return tx.Bucket(slotsBucket).Delete(key)
+			}
+			return nil
+		}
+		if t.Failure != nil {
+			if err := putRootFailure(tx, id, t.Failure); err != nil {
+				return err
+			}
 		}
 		cursor, err := storagepb.MarshalCursor(t.Cursor)
 		if err != nil {
@@ -250,39 +552,122 @@ func (s *Store) ApplyTransition(_ context.Context, id kernel.RunID, t driver.Tra
 				return err
 			}
 		}
-		if t.Failure != nil {
-			if err := putRootFailure(tx, id, t.Failure); err != nil {
-				return err
-			}
-		}
-		if t.Outcome != nil {
-			b, err := storagepb.MarshalTerminal(*t.Outcome, t.Output)
-			if err != nil {
-				return err
-			}
-			if err := tx.Bucket(terminalBucket).Put([]byte(id), b); err != nil {
-				return err
-			}
-			// Terminality releases the resource slot.
-			rec := &driver.RunRecord{}
-			if err := storagepb.UnmarshalRunMetaInto(metaBytes, rec); err != nil {
-				return err
-			}
-			key := slotKey(rec)
-			if active := tx.Bucket(slotsBucket).Get(key); active != nil && string(active) == string(id) {
-				return tx.Bucket(slotsBucket).Delete(key)
-			}
-		}
 		return nil
 	})
+	if err == nil && t.Outcome != nil {
+		s.staged.Add(1)
+	}
+	return err
 }
 
+// putTerminal writes the terminal row and its expiry index key, which
+// orders terminal runs by commit time for reap.
+func putTerminal(tx *bolt.Tx, rec *driver.RunRecord) error {
+	b, err := storagepb.MarshalTerminal(rec)
+	if err != nil {
+		return err
+	}
+	if err := tx.Bucket(terminalBucket).Put([]byte(rec.RunID), b); err != nil {
+		return err
+	}
+	return tx.Bucket(expiryBucket).Put(expiryKey(rec.UpdatedAt, rec.RunID), []byte{})
+}
+
+// expiryPrefix encodes a commit time as 8 big-endian bytes so keys sort
+// by it; the zero time encodes as zero and sorts first.
+func expiryPrefix(t time.Time) []byte {
+	var n uint64
+	if !t.IsZero() {
+		n = uint64(t.UnixNano())
+	}
+	return binary.BigEndian.AppendUint64(nil, n)
+}
+
+func expiryKey(t time.Time, id kernel.RunID) []byte {
+	return append(expiryPrefix(t), id...)
+}
+
+// deleteNonterminalStage removes a run's active rows (the input's nested
+// bucket among them) and cursor. Active rows hang off the run id; they
+// are collected before deletion since bbolt forbids mutating a bucket
+// while iterating it. Deleting nothing is fine: a run may be reaped
+// before its drain.
+func deleteNonterminalStage(tx *bolt.Tx, id kernel.RunID) error {
+	active := tx.Bucket(activeBucket)
+	prefix := runPrefix(id)
+	c := active.Cursor()
+	var keys [][]byte
+	for k, _ := c.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, _ = c.Next() {
+		keys = append(keys, bytes.Clone(k))
+	}
+	for _, k := range keys {
+		var err error
+		if k[len(prefix)] == tagInput {
+			err = active.DeleteBucket(k)
+		} else {
+			err = active.Delete(k)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return tx.Bucket(cursorBucket).Delete([]byte(id))
+}
+
+// inputKey is the one key of a run's input bucket.
+var inputKey = []byte{'i'}
+
+// putInput stores the input as the sole value of a nested bucket under
+// the run's input tag. A bucket larger than a quarter page gets pages of
+// its own, so creating and deleting it writes the run's own pages plus
+// one small entry in the active leaf — never the neighbours' inputs,
+// which sharing a leaf node would rewrite on every insert and delete —
+// and, living under the run prefix, it costs the terminality commit no
+// extra tree.
+func putInput(active *bolt.Bucket, id kernel.RunID, input []byte) error {
+	ib, err := active.CreateBucket(activeKey(id, tagInput))
+	if err != nil {
+		if errors.Is(err, berrors.ErrBucketExists) {
+			return fmt.Errorf("bbolt: input of run %s already written", id)
+		}
+		return err
+	}
+	return ib.Put(inputKey, input)
+}
+
+// findOp locates the run's row for step and phase, whatever its order.
+// It returns nil when there is none.
+func findOp(active *bolt.Bucket, id kernel.RunID, step kernel.StepID, phase kernel.Phase) (key, value []byte) {
+	prefix := opPrefix(id)
+	// Everything after the order: · step · phase. Compared as bytes so
+	// the scan allocates nothing.
+	suffix := append(append([]byte{0}, step...), 0, phaseByte(phase))
+	c := active.Cursor()
+	for k, v := c.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, v = c.Next() {
+		if len(k) == len(prefix)+4+len(suffix) && bytes.Equal(k[len(prefix)+4:], suffix) {
+			return k, v
+		}
+	}
+	return nil, nil
+}
+
+// putOp writes the run's one row for the operation. A row already there
+// under another order — an unresolved flush resolving to its real order,
+// or the contract's upsert — is removed so the step and phase keep one
+// row.
 func putOp(tx *bolt.Tx, id kernel.RunID, step kernel.StepID, phase kernel.Phase, op *driver.OperationRecord) error {
 	b, err := storagepb.MarshalOperationRecord(op)
 	if err != nil {
 		return err
 	}
-	return tx.Bucket(stepsBucket).Put(opKey(id, step, phase), b)
+	active := tx.Bucket(activeBucket)
+	key := opKey(id, op.Order, step, phase)
+	if old, _ := findOp(active, id, step, phase); old != nil && !bytes.Equal(old, key) {
+		if err := active.Delete(bytes.Clone(old)); err != nil {
+			return err
+		}
+	}
+	return active.Put(key, b)
 }
 
 func putRootFailure(tx *bolt.Tx, id kernel.RunID, rf *kernel.Failure) error {
@@ -290,46 +675,77 @@ func putRootFailure(tx *bolt.Tx, id kernel.RunID, rf *kernel.Failure) error {
 	if err != nil {
 		return err
 	}
-	return tx.Bucket(failuresBucket).Put([]byte(id), b)
+	return putOnce(tx.Bucket(activeBucket), "failure", id, activeKey(id, tagFailure), b)
 }
 
-func readRootFailure(tx *bolt.Tx, id kernel.RunID) (*kernel.Failure, error) {
-	b := tx.Bucket(failuresBucket).Get([]byte(id))
-	if b == nil {
-		return nil, nil
-	}
-	f, err := storagepb.UnmarshalFailureRecord(b)
-	if err != nil {
-		return nil, err
-	}
-	return &f, nil
-}
-
-// getRun assembles the read model from the run's components: meta, step
-// rows, failures, terminal — with the cursor's in-flight operation
-// overlaid as an unresolved step entry.
+// getRun assembles the read model from the run's components, dispatching
+// on its stage. Terminal: the terminal record alone. Nonterminal: a
+// prefix walk of the active rows (the input's bucket among them) and the
+// cursor with its in-flight operation overlaid as an unresolved step
+// entry.
 func getRun(tx *bolt.Tx, id kernel.RunID) (*driver.RunRecord, error) {
-	metaBytes := tx.Bucket(metaBucket).Get([]byte(id))
-	if metaBytes == nil {
-		return nil, kernel.ErrRunNotFound
-	}
-	rec := &driver.RunRecord{}
-	if err := storagepb.UnmarshalRunMetaInto(metaBytes, rec); err != nil {
-		return nil, err
-	}
-
-	prefix := runPrefix(id)
-	c := tx.Bucket(stepsBucket).Cursor()
-	for k, v := c.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, v = c.Next() {
-		step, phase, ok := splitOpKey(id, k)
-		if !ok {
-			return nil, fmt.Errorf("bbolt: malformed operation key %q", k)
-		}
-		op, err := storagepb.UnmarshalOperationRecord(v)
-		if err != nil {
+	// The terminal row is authoritative: the stage may linger until it
+	// drains.
+	if tb := tx.Bucket(terminalBucket).Get([]byte(id)); tb != nil {
+		rec := &driver.RunRecord{}
+		if err := storagepb.UnmarshalTerminalInto(tb, rec); err != nil {
 			return nil, err
 		}
-		*rec.Step(step).Op(phase) = op
+		return rec, nil
+	}
+	return getNonterminal(tx, id)
+}
+
+// getNonterminal reads a nonterminal run from one prefix walk of its
+// active rows — the meta row sorts first, so its absence is
+// ErrRunNotFound — and its cursor.
+func getNonterminal(tx *bolt.Tx, id kernel.RunID) (*driver.RunRecord, error) {
+	rec := &driver.RunRecord{}
+	prefix := runPrefix(id)
+	active := tx.Bucket(activeBucket)
+	c := active.Cursor()
+	k, v := c.Seek(prefix)
+	if k == nil || !bytes.HasPrefix(k, prefix) || k[len(prefix)] != tagMeta {
+		return nil, kernel.ErrRunNotFound
+	}
+	if err := storagepb.UnmarshalRunMetaInto(v, rec); err != nil {
+		return nil, err
+	}
+	for k, v = c.Next(); k != nil && bytes.HasPrefix(k, prefix); k, v = c.Next() {
+		_, tag, rest, ok := splitActiveKey(k)
+		if !ok {
+			return nil, fmt.Errorf("bbolt: malformed active key %q", k)
+		}
+		switch tag {
+		case tagInput:
+			if ib := active.Bucket(k); ib != nil {
+				rec.Input = bytes.Clone(ib.Get(inputKey))
+			}
+		case tagCancel:
+			cr, err := storagepb.UnmarshalCancel(v)
+			if err != nil {
+				return nil, err
+			}
+			rec.Cancel = cr
+		case tagFailure:
+			f, err := storagepb.UnmarshalFailureRecord(v)
+			if err != nil {
+				return nil, err
+			}
+			rec.Failure = &f
+		case tagOp:
+			_, step, phase, ok := splitOpRest(rest)
+			if !ok {
+				return nil, fmt.Errorf("bbolt: malformed operation key %q", k)
+			}
+			op, err := storagepb.UnmarshalOperationRecord(v)
+			if err != nil {
+				return nil, err
+			}
+			*rec.Step(step).Op(phase) = op
+		default:
+			return nil, fmt.Errorf("bbolt: unknown active row tag %q in key %q", tag, k)
+		}
 	}
 
 	cb := tx.Bucket(cursorBucket).Get([]byte(id))
@@ -356,28 +772,6 @@ func getRun(tx *bolt.Tx, id kernel.RunID) (*driver.RunRecord, error) {
 			sr.Forward.Attempts = cur.Attempts
 		}
 	}
-
-	root, err := readRootFailure(tx, id)
-	if err != nil {
-		return nil, err
-	}
-	rec.Failure = root
-
-	if tb := tx.Bucket(terminalBucket).Get([]byte(id)); tb != nil {
-		oc, out, err := storagepb.UnmarshalTerminal(tb)
-		if err != nil {
-			return nil, err
-		}
-		rec.Outcome = &oc
-		rec.Output = out
-	}
-	if xb := tx.Bucket(cancelBucket).Get([]byte(id)); xb != nil {
-		cr, err := storagepb.UnmarshalCancel(xb)
-		if err != nil {
-			return nil, err
-		}
-		rec.Cancel = cr
-	}
 	return rec, nil
 }
 
@@ -394,42 +788,32 @@ func (s *Store) GetRun(_ context.Context, id kernel.RunID) (*driver.RunRecord, e
 func (s *Store) ReapTerminal(_ context.Context, before time.Time, limit int) (int, error) {
 	deleted := 0
 	err := s.db.Update(func(tx *bolt.Tx) error {
-		// The terminal bucket's keys are exactly the terminal run ids;
-		// terminality time is the cursor's UpdatedAt, stamped by the
-		// terminal transition.
+		// The expiry index orders terminal runs by commit time: the walk
+		// starts at the oldest and stops at the first run that has not
+		// expired, so reap costs its victims and decodes nothing.
+		cutoff := expiryPrefix(before)
+		expiry := tx.Bucket(expiryBucket)
 		var victims [][]byte
-		c := tx.Bucket(terminalBucket).Cursor()
-		for k, _ := c.First(); k != nil && len(victims) < limit; k, _ = c.Next() {
-			cb := tx.Bucket(cursorBucket).Get(k)
-			if cb == nil {
-				continue
-			}
-			cur, err := storagepb.UnmarshalCursor(cb)
-			if err != nil {
+		c := expiry.Cursor()
+		for k, _ := c.First(); k != nil && len(victims) < limit && bytes.Compare(k[:8], cutoff) < 0; k, _ = c.Next() {
+			victims = append(victims, bytes.Clone(k))
+		}
+		for _, k := range victims {
+			id := k[8:]
+			// A terminal run is one row, but a retention window shorter
+			// than the stage drain could reap a run whose stage is still
+			// queued; deleting an absent stage costs one seek.
+			if err := deleteNonterminalStage(tx, kernel.RunID(id)); err != nil {
 				return err
 			}
-			if cur.UpdatedAt.Before(before) {
-				victims = append(victims, bytes.Clone(k))
+			if err := tx.Bucket(terminalBucket).Delete(id); err != nil {
+				return err
 			}
-		}
-		for _, id := range victims {
-			// Operation rows hang off the run id; collect before deleting,
-			// since bbolt forbids mutating a bucket while iterating it.
-			prefix := runPrefix(kernel.RunID(id))
-			sc := tx.Bucket(stepsBucket).Cursor()
-			var opKeys [][]byte
-			for k, _ := sc.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, _ = sc.Next() {
-				opKeys = append(opKeys, bytes.Clone(k))
+			if err := expiry.Delete(k); err != nil {
+				return err
 			}
-			for _, k := range opKeys {
-				if err := tx.Bucket(stepsBucket).Delete(k); err != nil {
-					return err
-				}
-			}
-			for _, bucket := range [][]byte{failuresBucket, cancelBucket, cursorBucket, terminalBucket, metaBucket} {
-				if err := tx.Bucket(bucket).Delete(id); err != nil {
-					return err
-				}
+			if err := tx.Bucket(stagedBucket).Delete(id); err != nil {
+				return err
 			}
 			deleted++
 		}
@@ -444,19 +828,21 @@ func (s *Store) ReapTerminal(_ context.Context, before time.Time, limit int) (in
 func (s *Store) RequestCancel(_ context.Context, id kernel.RunID, req driver.CancelRequest) (bool, error) {
 	accepted := false
 	err := s.db.Update(func(tx *bolt.Tx) error {
+		active := tx.Bucket(activeBucket)
+		key := activeKey(id, tagCancel)
 		switch {
-		case tx.Bucket(metaBucket).Get([]byte(id)) == nil:
-			return kernel.ErrRunNotFound
 		case tx.Bucket(terminalBucket).Get([]byte(id)) != nil:
 			return kernel.ErrRunTerminal
-		case tx.Bucket(cancelBucket).Get([]byte(id)) != nil:
+		case active.Get(activeKey(id, tagMeta)) == nil:
+			return kernel.ErrRunNotFound
+		case active.Get(key) != nil:
 			return nil // first cancel wins
 		}
 		b, err := storagepb.MarshalCancel(&req)
 		if err != nil {
 			return err
 		}
-		if err := tx.Bucket(cancelBucket).Put([]byte(id), b); err != nil {
+		if err := active.Put(key, b); err != nil {
 			return err
 		}
 		accepted = true
@@ -486,32 +872,6 @@ func (s *Store) ListNonterminal(_ context.Context) ([]*driver.RunRecord, error) 
 	return out, err
 }
 
-func (s *Store) ListRuns(_ context.Context, pipeline kernel.PipelineID, resource kernel.ResourceID) ([]*driver.RunRecord, error) {
-	var out []*driver.RunRecord
-	err := s.db.View(func(tx *bolt.Tx) error {
-		return tx.Bucket(metaBucket).ForEach(func(k, v []byte) error {
-			probe := &driver.RunRecord{}
-			if err := storagepb.UnmarshalRunMetaInto(v, probe); err != nil {
-				return err
-			}
-			if probe.PipelineID != pipeline || probe.ResourceID != resource {
-				return nil
-			}
-			rec, err := getRun(tx, kernel.RunID(k))
-			if err != nil {
-				return err
-			}
-			out = append(out, rec)
-			return nil
-		})
-	})
-	if err != nil {
-		return nil, err
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
-	return out, nil
-}
-
 // GetActiveRunID answers from the slots bucket: one point read, the same
 // index CreateRun enforces the slot with.
 func (s *Store) GetActiveRunID(_ context.Context, pipeline kernel.PipelineID, resource kernel.ResourceID) (kernel.RunID, bool, error) {
@@ -526,7 +886,20 @@ func (s *Store) GetActiveRunID(_ context.Context, pipeline kernel.PipelineID, re
 	return id, ok, err
 }
 
-func (s *Store) Close() error { return s.db.Close() }
+// Close stops the sweep, drains the queued stages, and closes the
+// database.
+func (s *Store) Close() error {
+	var err error
+	s.once.Do(func() {
+		close(s.stop)
+		<-s.done
+		err = s.Drain()
+		if cerr := s.db.Close(); err == nil {
+			err = cerr
+		}
+	})
+	return err
+}
 
 // StoreStats are cumulative write-side counters for performance
 // measurement, expressed without exposing the underlying bbolt types.

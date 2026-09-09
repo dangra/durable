@@ -96,6 +96,17 @@ func countingObserver(writes, reads *atomic.Int64) observe.Observer {
 	}
 }
 
+// drainStore deletes the stages of every terminal run the store still
+// has queued, so the byte counters read next cover the whole cost of
+// ending a run rather than leaving the batched deletes to a sweep the
+// benchmark never waits for.
+func drainStore(b *testing.B, s *bbolt.Store) {
+	b.Helper()
+	if err := s.Drain(); err != nil {
+		b.Fatal(err)
+	}
+}
+
 // newEnv builds a store and engine with the given definition bound, not
 // yet started.
 func newEnv(b *testing.B, def *pipelinedef.Definition, opts ...engine.Option) *env {
@@ -218,6 +229,7 @@ func runPopulation(b *testing.B, pipe *engine.Pipeline, n int, prefix string) []
 func report(b *testing.B, v *env, runs int, lat []time.Duration, elapsed time.Duration) {
 	b.Helper()
 	n := float64(runs) * float64(b.N)
+	drainStore(b, v.store)
 	b.ReportMetric(float64(v.store.Stats().TxPageAllocBytes)/n, "diskB/run")
 	b.ReportMetric(float64(v.writes.Load())/n, "transitions/run")
 	if len(lat) > 0 {

@@ -47,7 +47,12 @@ func (s *Store) CreateRun(_ context.Context, rec *driver.RunRecord, excluding []
 			return s.runs[active].Clone(), false, nil
 		}
 	}
-	s.runs[rec.RunID] = rec.Clone()
+	c := rec.Clone()
+	if c.Terminal() {
+		// A record seeded terminal is stored in its terminal stage.
+		c.CompactTerminal()
+	}
+	s.runs[rec.RunID] = c
 	s.slots[slotKey(rec.PipelineID, rec.ResourceID)] = rec.RunID
 	return nil, true, nil
 }
@@ -73,8 +78,11 @@ func (s *Store) ApplyTransition(_ context.Context, id kernel.RunID, t driver.Tra
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	rec, ok := s.runs[id]
-	if !ok {
+	switch {
+	case !ok:
 		return kernel.ErrRunNotFound
+	case rec.Terminal():
+		return kernel.ErrRunTerminal
 	}
 
 	// Operation rows: each write replaces one half of a step's record.
@@ -118,10 +126,12 @@ func (s *Store) ApplyTransition(_ context.Context, id kernel.RunID, t driver.Tra
 		oc := *t.Outcome
 		rec.Outcome = &oc
 		rec.Output = append([]byte(nil), t.Output...)
-		// Terminality releases the resource slot.
+		// Terminality releases the resource slot and the nonterminal
+		// stage.
 		if key := slotKey(rec.PipelineID, rec.ResourceID); s.slots[key] == id {
 			delete(s.slots, key)
 		}
+		rec.CompactTerminal()
 	}
 	return nil
 }
@@ -170,17 +180,19 @@ func (s *Store) ListNonterminal(_ context.Context) ([]*driver.RunRecord, error) 
 	return out, nil
 }
 
-func (s *Store) ListRuns(_ context.Context, pipeline kernel.PipelineID, resource kernel.ResourceID) ([]*driver.RunRecord, error) {
+// Runs returns a copy of every record, terminal and nonterminal, in
+// CreatedAt order. It is an enumeration for tests and tools — the store
+// contract has no listing, since a persistent store could only answer
+// one by scanning — and this store, holding a map, answers it cheaply.
+func (s *Store) Runs() []*driver.RunRecord {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	var out []*driver.RunRecord
+	out := make([]*driver.RunRecord, 0, len(s.runs))
 	for _, r := range s.runs {
-		if r.PipelineID == pipeline && r.ResourceID == resource {
-			out = append(out, r.Clone())
-		}
+		out = append(out, r.Clone())
 	}
 	sortRecords(out)
-	return out, nil
+	return out
 }
 
 func (s *Store) Close() error { return nil }

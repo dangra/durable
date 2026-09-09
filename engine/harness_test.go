@@ -15,6 +15,7 @@ import (
 	"github.com/dangra/durable/engine"
 	"github.com/dangra/durable/pipelinedef"
 	"github.com/dangra/durable/store/driver"
+	"github.com/dangra/durable/store/mem"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
@@ -194,11 +195,17 @@ func waitForAwaiting(t *testing.T, run engine.Run, want []durable.RunID) engine.
 // store rather than a user-facing listing.
 func runsFor(t *testing.T, st driver.Store, pipe *engine.Pipeline, resource durable.ResourceID) []*driver.RunRecord {
 	t.Helper()
-	recs, err := st.ListRuns(context.Background(), pipe.ID(), resource)
-	if err != nil {
-		t.Fatalf("ListRuns: %v", err)
+	ms, ok := st.(*mem.Store)
+	if !ok {
+		t.Fatalf("runsFor needs the mem store's enumeration; got %T", st)
 	}
-	return recs
+	var out []*driver.RunRecord
+	for _, r := range ms.Runs() {
+		if r.PipelineID == pipe.ID() && r.ResourceID == resource {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // activeRunsFor is runsFor restricted to nonterminal runs of pipe, over

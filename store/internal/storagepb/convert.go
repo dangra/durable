@@ -3,10 +3,12 @@
 // layer between them and the public Go structs. The wire format is private
 // to this module's store implementations.
 //
-// A run is stored as components with distinct write cadences: RunMeta
-// (once), one OperationRecord row per step operation (once, at its
-// resolution, carrying its own failure), the root Failure, Terminal,
-// and CancelRequest (once each), and the small Cursor (every attempt).
+// A run is stored as components with distinct write cadences: RunMeta and
+// the raw input (once), one OperationRecord row per step operation (once,
+// at its resolution, carrying its own failure), the root Failure and
+// CancelRequest (once each), and the small Cursor (every attempt). The
+// terminality commit replaces all of them with one Terminal record that
+// carries the identity, failure, and cancel request forward.
 package storagepb
 
 import (
@@ -34,19 +36,20 @@ func unmarshal(what string, b []byte, m proto.Message) error {
 	return nil
 }
 
-// MarshalRunMeta encodes the write-once identity fields of rec.
+// MarshalRunMeta encodes the write-once identity fields of rec. The input
+// is not among them; stores keep it as a raw value of its own.
 func MarshalRunMeta(rec *driver.RunRecord) ([]byte, error) {
 	return marshal("run meta", &RunMeta{
 		RunId:       string(rec.RunID),
 		PipelineId:  string(rec.PipelineID),
 		ResourceId:  string(rec.ResourceID),
-		Input:       rec.Input,
 		CreatedAt:   ts(rec.CreatedAt),
 		Annotations: rec.Annotations,
 	})
 }
 
-// UnmarshalRunMetaInto decodes identity fields into rec.
+// UnmarshalRunMetaInto decodes identity fields into rec, leaving Input
+// untouched.
 func UnmarshalRunMetaInto(b []byte, rec *driver.RunRecord) error {
 	pb := &RunMeta{}
 	if err := unmarshal("run meta", b, pb); err != nil {
@@ -55,7 +58,6 @@ func UnmarshalRunMetaInto(b []byte, rec *driver.RunRecord) error {
 	rec.RunID = kernel.RunID(pb.GetRunId())
 	rec.PipelineID = kernel.PipelineID(pb.GetPipelineId())
 	rec.ResourceID = kernel.ResourceID(pb.GetResourceId())
-	rec.Input = pb.GetInput()
 	rec.CreatedAt = fromTS(pb.GetCreatedAt())
 	if len(pb.GetAnnotations()) > 0 {
 		rec.Annotations = pb.GetAnnotations()
@@ -192,6 +194,18 @@ func awaitModeFromProto(m AwaitMode) kernel.AwaitMode {
 // MarshalOperationRecord encodes one operation's facts; the row key names
 // the step and phase.
 func MarshalOperationRecord(op *driver.OperationRecord) ([]byte, error) {
+	return marshal("operation record", operationRecordToProto(op))
+}
+
+func UnmarshalOperationRecord(b []byte) (driver.OperationRecord, error) {
+	pb := &OperationRecord{}
+	if err := unmarshal("operation record", b, pb); err != nil {
+		return driver.OperationRecord{}, err
+	}
+	return operationRecordFromProto(pb), nil
+}
+
+func operationRecordToProto(op *driver.OperationRecord) *OperationRecord {
 	pb := &OperationRecord{
 		Status:   opStatusToProto(op.Status),
 		Attempts: op.Attempts,
@@ -201,14 +215,10 @@ func MarshalOperationRecord(op *driver.OperationRecord) ([]byte, error) {
 	if op.Failure != nil {
 		pb.Failure = failureRecordToProto(op.Failure)
 	}
-	return marshal("operation record", pb)
+	return pb
 }
 
-func UnmarshalOperationRecord(b []byte) (driver.OperationRecord, error) {
-	pb := &OperationRecord{}
-	if err := unmarshal("operation record", b, pb); err != nil {
-		return driver.OperationRecord{}, err
-	}
+func operationRecordFromProto(pb *OperationRecord) driver.OperationRecord {
 	op := driver.OperationRecord{
 		Status:   opStatusFromProto(pb.GetStatus()),
 		Attempts: pb.GetAttempts(),
@@ -219,7 +229,7 @@ func UnmarshalOperationRecord(b []byte) (driver.OperationRecord, error) {
 		f := failureRecordFromProto(pb.GetFailure())
 		op.Failure = &f
 	}
-	return op, nil
+	return op
 }
 
 // MarshalFailureRecord encodes one failure record on its own: the run's
@@ -236,16 +246,77 @@ func UnmarshalFailureRecord(b []byte) (kernel.Failure, error) {
 	return failureRecordFromProto(pb), nil
 }
 
-func MarshalTerminal(outcome kernel.Outcome, output []byte) ([]byte, error) {
-	return marshal("terminal", &Terminal{Outcome: outcomeToProto(outcome), Output: output})
+// MarshalTerminal encodes the terminal stage of rec: identity, outcome,
+// output, phase, the commit time taken from rec.UpdatedAt, and the
+// failed unwind operations found in rec.Steps. rec must carry an
+// Outcome; the caller compacts it (driver.RunRecord.CompactTerminal)
+// first, so that what is encoded is what a read returns.
+func MarshalTerminal(rec *driver.RunRecord) ([]byte, error) {
+	if rec.Outcome == nil {
+		return nil, fmt.Errorf("storagepb: encoding terminal: record has no outcome")
+	}
+	pb := &Terminal{
+		Outcome:     outcomeToProto(*rec.Outcome),
+		Output:      rec.Output,
+		RunId:       string(rec.RunID),
+		PipelineId:  string(rec.PipelineID),
+		ResourceId:  string(rec.ResourceID),
+		CreatedAt:   ts(rec.CreatedAt),
+		Annotations: rec.Annotations,
+		Phase:       phaseToProto(rec.Phase),
+		CommittedAt: ts(rec.UpdatedAt),
+	}
+	for id, sr := range rec.Steps {
+		if sr.Unwind.Status != driver.OpFailed {
+			continue
+		}
+		if pb.FailedUnwinds == nil {
+			pb.FailedUnwinds = make(map[string]*OperationRecord)
+		}
+		pb.FailedUnwinds[string(id)] = operationRecordToProto(&sr.Unwind)
+	}
+	if rec.Failure != nil {
+		pb.Failure = failureRecordToProto(rec.Failure)
+	}
+	if rec.Cancel != nil {
+		pb.Cancel = &CancelRequest{Cause: rec.Cancel.Cause, At: ts(rec.Cancel.At)}
+	}
+	return marshal("terminal", pb)
 }
 
-func UnmarshalTerminal(b []byte) (kernel.Outcome, []byte, error) {
+// UnmarshalTerminalInto decodes a terminal record into rec: identity,
+// outcome, output, phase, the commit time as UpdatedAt, Failure, Cancel,
+// and the failed unwind operations as Steps entries. It leaves the
+// fields the terminal stage does not carry — Input, the cursor's
+// scheduling state — untouched.
+func UnmarshalTerminalInto(b []byte, rec *driver.RunRecord) error {
 	pb := &Terminal{}
 	if err := unmarshal("terminal", b, pb); err != nil {
-		return 0, nil, err
+		return err
 	}
-	return outcomeFromProto(pb.GetOutcome()), pb.GetOutput(), nil
+	rec.RunID = kernel.RunID(pb.GetRunId())
+	rec.PipelineID = kernel.PipelineID(pb.GetPipelineId())
+	rec.ResourceID = kernel.ResourceID(pb.GetResourceId())
+	rec.CreatedAt = fromTS(pb.GetCreatedAt())
+	if len(pb.GetAnnotations()) > 0 {
+		rec.Annotations = pb.GetAnnotations()
+	}
+	rec.Phase = phaseFromProto(pb.GetPhase())
+	rec.UpdatedAt = fromTS(pb.GetCommittedAt())
+	oc := outcomeFromProto(pb.GetOutcome())
+	rec.Outcome = &oc
+	rec.Output = pb.GetOutput()
+	for id, op := range pb.GetFailedUnwinds() {
+		rec.Step(kernel.StepID(id)).Unwind = operationRecordFromProto(op)
+	}
+	if pb.GetFailure() != nil {
+		f := failureRecordFromProto(pb.GetFailure())
+		rec.Failure = &f
+	}
+	if c := pb.GetCancel(); c != nil {
+		rec.Cancel = &driver.CancelRequest{Cause: c.GetCause(), At: fromTS(c.GetAt())}
+	}
+	return nil
 }
 
 func MarshalCancel(c *driver.CancelRequest) ([]byte, error) {

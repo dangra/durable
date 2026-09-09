@@ -521,8 +521,11 @@ run, _, err := deploy.Schedule(ctx, "service-web", input,
 ```
 
 The delay is durable — it survives restarts, like retry backoffs do.
-Terminal runs accumulate by default (they are the audit trail); opt
-into reaping with a policy:
+Terminal runs accumulate by default (they are the audit trail), but a
+terminal run is small: the moment a run ends, the store releases its
+input and step states, which the reducer has already folded into the
+output, and keeps identity, outcome, output, and failures. Opt into
+reaping the rest with a policy:
 
 ```go
 eng := engine.New(store,

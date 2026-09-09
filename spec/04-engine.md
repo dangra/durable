@@ -415,11 +415,12 @@ A dispatched Run is read in full once, at dispatch. The worker that
 reconciles it is the only writer of its cursor, operations, failure, and
 outcome, and persists exactly the record it holds, so after a successful
 transition the record in memory is the store's and the loop carries it
-across iterations; after the dispatch's read a pass reads nothing. The
-one row another goroutine writes is the cancel request, and every cancel
-reaches the store through the engine, which marks the Run once the store
-accepts it; an iteration takes the mark onto the carried record. A
-failed transition ends the pass, and the next dispatch reads fresh. The
+across iterations; after the dispatch's read a pass reads nothing. A
+write to the record by anyone else — today only a cancel request, which
+reaches the store through the engine — marks the Run dirty; an iteration
+that finds the mark clears it and re-reads the record, and the mark is
+taken before a read so a write after it is seen by the next iteration.
+A failed transition ends the pass, and the next dispatch reads fresh. The
 discipline is checked, not assumed: every transition advances the
 record's commit time, even under a clock that does not, and an
 iteration that continued without one is a logged fault that re-reads in

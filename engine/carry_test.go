@@ -53,9 +53,9 @@ func TestReconcileReadsTheFullRecordOncePerDispatch(t *testing.T) {
 	}
 }
 
-// A cancel request reaches the worker through the engine's mark, so a
-// pass reads nothing after its dispatch: the doomed operation's
-// resolution, the cancel transition, every unwind.
+// A cancel marks the Run dirty; the doomed operation's retry ends the
+// pass, and the redispatch reads the record fresh. Nothing in between
+// reads a head.
 func TestCanceledPassReadsNothing(t *testing.T) {
 	log := &eventLog{}
 	blocked := make(chan struct{})
@@ -111,10 +111,10 @@ func TestCanceledPassReadsNothing(t *testing.T) {
 	}
 }
 
-// A cancel that lands between two resolutions of one pass is seen by the
-// next iteration through the engine's mark, with no re-read: the pass
-// that started forward ends canceled and unwound on its one dispatch.
-func TestCancelMidPassIsTakenFromTheMark(t *testing.T) {
+// A cancel that lands between two resolutions of one pass marks the Run
+// dirty; the next iteration re-reads the record and sees it, on that one
+// dispatch: the pass that started forward ends canceled and unwound.
+func TestCancelMidPassRereadsTheRecord(t *testing.T) {
 	log := &eventLog{}
 	blocked, release := make(chan struct{}), make(chan struct{})
 	noUnwind := func(ctx context.Context, inv durable.Invocation) error { return nil }
@@ -158,9 +158,9 @@ func TestCancelMidPassIsTakenFromTheMark(t *testing.T) {
 	if cRan {
 		t.Fatal("step c ran: the mid-pass cancel was not seen on the carried record")
 	}
-	// One full read for the pass, at most one more for the cancel's
-	// re-poke after the worker exited.
-	if counts := countOps(log); counts["GetRun"] > 2 {
-		t.Fatalf("GetRun ops = %d; want the dispatch and at most the re-poke (%v)", counts["GetRun"], counts)
+	// The dispatch's read, the dirty re-read, and at most one more for
+	// the cancel's re-poke after the worker exited.
+	if counts := countOps(log); counts["GetRun"] < 2 || counts["GetRun"] > 3 {
+		t.Fatalf("GetRun ops = %d; want the dispatch, the dirty re-read, and at most the re-poke (%v)", counts["GetRun"], counts)
 	}
 }

@@ -520,13 +520,8 @@ type Cursor struct {
 	LastReason    string                 `protobuf:"bytes,6,opt,name=last_reason,json=lastReason,proto3" json:"last_reason,omitempty"`
 	LastErrorAt   *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=last_error_at,json=lastErrorAt,proto3" json:"last_error_at,omitempty"`
 	UpdatedAt     *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
-	// Single-target park written by durable <= v0.3; read as an ALL park of
-	// one target when awaiting is absent, never written.
-	//
-	// Deprecated: Marked as deprecated in durable/storage/v1/storage.proto.
-	AwaitingRunId string `protobuf:"bytes,9,opt,name=awaiting_run_id,json=awaitingRunId,proto3" json:"awaiting_run_id,omitempty"`
-	Awaiting      *Await `protobuf:"bytes,10,opt,name=awaiting,proto3" json:"awaiting,omitempty"`
-	Awaited       *Wake  `protobuf:"bytes,11,opt,name=awaited,proto3" json:"awaited,omitempty"`
+	Awaiting      *Await                 `protobuf:"bytes,10,opt,name=awaiting,proto3" json:"awaiting,omitempty"`
+	Awaited       *Wake                  `protobuf:"bytes,11,opt,name=awaited,proto3" json:"awaited,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -615,14 +610,6 @@ func (x *Cursor) GetUpdatedAt() *timestamppb.Timestamp {
 		return x.UpdatedAt
 	}
 	return nil
-}
-
-// Deprecated: Marked as deprecated in durable/storage/v1/storage.proto.
-func (x *Cursor) GetAwaitingRunId() string {
-	if x != nil {
-		return x.AwaitingRunId
-	}
-	return ""
 }
 
 func (x *Cursor) GetAwaiting() *Await {
@@ -1036,7 +1023,7 @@ const file_durable_storage_v1_storage_proto_rawDesc = "" +
 	"\x04Wake\x12\x18\n" +
 	"\atargets\x18\x01 \x03(\tR\atargets\x12\x12\n" +
 	"\x04done\x18\x02 \x03(\tR\x04done\x12\x18\n" +
-	"\aexpired\x18\x03 \x01(\bR\aexpired\"\x84\x04\n" +
+	"\aexpired\x18\x03 \x01(\bR\aexpired\"\xd8\x03\n" +
 	"\x06Cursor\x12/\n" +
 	"\x05phase\x18\x01 \x01(\x0e2\x19.durable.storage.v1.PhaseR\x05phase\x12\x17\n" +
 	"\astep_id\x18\x02 \x01(\tR\x06stepId\x12\x1a\n" +
@@ -1048,8 +1035,7 @@ const file_durable_storage_v1_storage_proto_rawDesc = "" +
 	"lastReason\x12>\n" +
 	"\rlast_error_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\vlastErrorAt\x129\n" +
 	"\n" +
-	"updated_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12*\n" +
-	"\x0fawaiting_run_id\x18\t \x01(\tB\x02\x18\x01R\rawaitingRunId\x125\n" +
+	"updated_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x125\n" +
 	"\bawaiting\x18\n" +
 	" \x01(\v2\x19.durable.storage.v1.AwaitR\bawaiting\x122\n" +
 	"\aawaited\x18\v \x01(\v2\x18.durable.storage.v1.WakeR\aawaited\"\xcc\x01\n" +

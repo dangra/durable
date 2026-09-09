@@ -94,7 +94,7 @@ func UnmarshalCursor(b []byte) (driver.Cursor, error) {
 		LastReason:    pb.GetLastReason(),
 		LastErrorAt:   fromTS(pb.GetLastErrorAt()),
 		UpdatedAt:     fromTS(pb.GetUpdatedAt()),
-		Awaiting:      awaitFromProto(pb),
+		Awaiting:      awaitFromProto(pb.GetAwaiting()),
 		Awaited:       wakeFromProto(pb.GetAwaited()),
 	}, nil
 }
@@ -110,21 +110,15 @@ func awaitToProto(a *kernel.Await) *Await {
 	}
 }
 
-// awaitFromProto decodes the cursor's park, reading the pre-v0.4
-// single-target field as an ALL park of one target when the message is
-// absent.
-func awaitFromProto(pb *Cursor) *kernel.Await {
-	if a := pb.GetAwaiting(); a != nil {
-		return &kernel.Await{
-			Mode:     awaitModeFromProto(a.GetMode()),
-			Targets:  runIDsFromProto(a.GetRunIds()),
-			Deadline: fromTS(a.GetDeadline()),
-		}
+func awaitFromProto(pb *Await) *kernel.Await {
+	if pb == nil {
+		return nil
 	}
-	if legacy := pb.GetAwaitingRunId(); legacy != "" {
-		return &kernel.Await{Mode: kernel.AwaitModeAll, Targets: []kernel.RunID{kernel.RunID(legacy)}}
+	return &kernel.Await{
+		Mode:     awaitModeFromProto(pb.GetMode()),
+		Targets:  runIDsFromProto(pb.GetRunIds()),
+		Deadline: fromTS(pb.GetDeadline()),
 	}
-	return nil
 }
 
 func wakeToProto(w *kernel.Wake) *Wake {

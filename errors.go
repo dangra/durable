@@ -1,6 +1,7 @@
 package durable
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
@@ -31,6 +32,21 @@ func (e *PreemptedError) Error() string {
 		return "durable: attempt preempted by cancellation"
 	}
 	return "durable: attempt preempted by cancellation: " + e.Cause
+}
+
+// Preempted reports whether an attempt context died because a
+// cancellation request preempted the attempt: its context.Cause is a
+// *PreemptedError. It is false for a live context and for one killed by
+// engine shutdown (ErrEngineStopping), so a handler that wants to
+// yield only to cancellation writes:
+//
+//	if durable.Preempted(ctx) {
+//		return nil, durable.Yield()
+//	}
+//	return nil, ctx.Err()
+func Preempted(ctx context.Context) bool {
+	_, ok := errors.AsType[*PreemptedError](context.Cause(ctx))
+	return ok
 }
 
 // ErrRunNotFound is returned when no Run exists for a RunID — by a

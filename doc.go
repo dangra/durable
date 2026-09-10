@@ -47,7 +47,7 @@
 // engine.WithMiddleware). AwaitRequest, AwaitTimeout, FailureInfo,
 // FailureCause, FailureReason, and IsYield classify a handler's return the way
 // the engine will; PreemptedError and ErrEngineStopping name why an
-// attempt ctx died; FailFastOnCancel with FailFastExcept opts
+// attempt ctx died, and Preempted asks the ctx which; FailFastOnCancel with FailFastExcept opts
 // preemption-safe pipelines out of cooperative cancellation.
 //
 // Vocabulary. StepRef and StateStepRef are the step references generated

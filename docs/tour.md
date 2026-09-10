@@ -255,10 +255,20 @@ func (h *shiftTraffic) Run(ctx context.Context, inv deploypb.ShiftTrafficInvocat
 ```
 
 The attempt the cancel preempted mid-flight may yield the same way
-instead of returning `ctx.Err()`, when its `context.Cause` is the
-`*durable.PreemptedError`. `Yield` with no cancellation pending is a
-permanent system failure, not a cancellation: the engine attributes on
-its own evidence, never on the returned value.
+instead of returning `ctx.Err()`; `durable.Preempted(ctx)` tells that
+death apart from a shutdown:
+
+```go
+case <-ctx.Done():
+    if durable.Preempted(ctx) {
+        return nil, durable.Yield()
+    }
+    return nil, ctx.Err() // shutdown: the next engine resumes the run
+```
+
+`Yield` with no cancellation pending is a permanent system failure, not
+a cancellation: the engine attributes on its own evidence, never on the
+returned value.
 
 Runnable: [`ExampleRun_Cancel`](https://pkg.go.dev/github.com/dangra/durable/engine#example-Run_Cancel).
 

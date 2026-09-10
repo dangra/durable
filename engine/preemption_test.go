@@ -636,7 +636,7 @@ func TestYieldOnPreemptedAttempt(t *testing.T) {
 		Steps: []pipelinedef.Step{stateless("work/v1", func(ctx context.Context, inv durable.Invocation) error {
 			once.Do(func() { close(running) })
 			<-ctx.Done()
-			if _, ok := errors.AsType[*durable.PreemptedError](context.Cause(ctx)); ok {
+			if durable.Preempted(ctx) {
 				return durable.Yield()
 			}
 			return ctx.Err()

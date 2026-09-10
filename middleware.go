@@ -97,10 +97,8 @@ func FailFastOnCancel(opts ...FailFastOption) Middleware {
 			// ctx death into a yield, but only when the cause proves a
 			// cancellation — shutdown (ErrEngineStopping) or unrelated
 			// errors pass through untouched.
-			if err != nil && errors.Is(err, context.Canceled) {
-				if _, ok := errors.AsType[*PreemptedError](context.Cause(ctx)); ok {
-					return nil, Yield()
-				}
+			if err != nil && errors.Is(err, context.Canceled) && Preempted(ctx) {
+				return nil, Yield()
 			}
 			return out, err
 		}

@@ -20,6 +20,9 @@ const (
 	// RunStateThrottled means the Run's next operation is parked waiting
 	// for capacity in its concurrency class.
 	RunStateThrottled
+	// RunStateQueued means the Run has not started and is in line for a
+	// token of its pipeline's run class.
+	RunStateQueued
 	// RunStateInvalid means the current application deployment cannot
 	// safely continue the nonterminal Run. It is an operational runtime
 	// condition, not a terminal business outcome; a corrected deployment
@@ -42,6 +45,8 @@ func (s RunState) String() string {
 		return "awaiting"
 	case RunStateThrottled:
 		return "throttled"
+	case RunStateQueued:
+		return "queued"
 	case RunStateInvalid:
 		return "invalid"
 	case RunStateDone:
@@ -125,4 +130,13 @@ type Status struct {
 	// ThrottledClass is set when State is RunStateThrottled: the
 	// concurrency class the Run is waiting for capacity in.
 	ThrottledClass string
+
+	// QueuedClass is set when State is RunStateQueued: the run class the
+	// Run is in line for.
+	QueuedClass string
+
+	// StartedAt is when the Run's first attempt was reserved; zero until
+	// then. StartedAt minus the creation or delayed start time is how
+	// long the Run waited to start, in a run class line or not.
+	StartedAt time.Time
 }

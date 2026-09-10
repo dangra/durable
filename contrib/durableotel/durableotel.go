@@ -60,6 +60,7 @@ const (
 	AttrRunFailureKind   attribute.Key = "durable.run_failure.kind"
 	AttrRunFailureReason attribute.Key = "durable.run_failure.reason"
 	AttrClass            attribute.Key = "durable.class"
+	AttrClassScope       attribute.Key = "durable.class.scope"
 	AttrAwaitTargets     attribute.Key = "durable.await_targets"
 	AttrAwaitMode        attribute.Key = "durable.await_mode"
 	AttrPanicked         attribute.Key = "durable.panicked"

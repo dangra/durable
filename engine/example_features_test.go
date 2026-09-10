@@ -314,6 +314,74 @@ func ExampleWithConcurrencyClass() {
 	// done  service-api
 }
 
+// ExampleWithRunClass bounds runs in flight rather than operations: at
+// most one volume migration on this host at a time, the next one in
+// line until the first ends, whatever it is doing meanwhile.
+func ExampleWithRunClass() {
+	firstRunning, finishFirst := make(chan struct{}), make(chan struct{})
+	def := pipelinedef.New(pipelinedef.Config{
+		ID:       "migrate-volume",
+		RunClass: "migrations",
+		Steps: []pipelinedef.Step{{
+			ID: "hydrate/v1",
+			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
+				fmt.Println("start", inv.ResourceID())
+				if inv.ResourceID() == "vol-1" {
+					close(firstRunning)
+					<-finishFirst
+				}
+				fmt.Println("done ", inv.ResourceID())
+				return nil, nil
+			},
+		}},
+	})
+
+	eng := engine.New(mem.New(),
+		engine.WithRunClass("migrations", engine.RunClass{Capacity: 1, MaxQueued: 8}))
+	pipeline, err := eng.Bind(def)
+	if err != nil {
+		panic(err)
+	}
+	ctx := context.Background()
+	if err := eng.Start(ctx); err != nil {
+		panic(err)
+	}
+	defer eng.Stop(ctx)
+
+	first, _, err := pipeline.Schedule(ctx, "vol-1", nil)
+	if err != nil {
+		panic(err)
+	}
+	<-firstRunning // vol-1 holds the only migration token
+	second, _, err := pipeline.Schedule(ctx, "vol-2", nil)
+	if err != nil {
+		panic(err)
+	}
+	for {
+		st, err := second.Status(ctx)
+		if err != nil {
+			panic(err)
+		}
+		if st.State == engine.RunStateQueued {
+			fmt.Println("vol-2 queued on", st.QueuedClass)
+			break
+		}
+	}
+	close(finishFirst)
+	if _, err := first.Wait(ctx); err != nil {
+		panic(err)
+	}
+	if _, err := second.Wait(ctx); err != nil {
+		panic(err)
+	}
+	// Output:
+	// start vol-1
+	// vol-2 queued on migrations
+	// done  vol-1
+	// start vol-2
+	// done  vol-2
+}
+
 // ExampleStartAfter delays a Run's first attempt — a certificate
 // renewal scheduled ahead of expiry. The Run occupies its resource slot
 // immediately and the delay survives restarts.

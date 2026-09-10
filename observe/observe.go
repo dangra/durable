@@ -161,13 +161,33 @@ type WakeEvent struct {
 	Duration   time.Duration
 }
 
-// ClassWaitEvent reports a Run proceeding after being throttled on a
-// concurrency class for Duration.
+// ClassScope tells the two kinds of class apart in a ClassWaitEvent.
+type ClassScope uint8
+
+const (
+	// ClassScopeOperation is a concurrency class: one handler execution.
+	ClassScopeOperation ClassScope = iota
+	// ClassScopeRun is a run class: a Run from its first attempt to
+	// terminality.
+	ClassScopeRun
+)
+
+func (s ClassScope) String() string {
+	if s == ClassScopeRun {
+		return "run"
+	}
+	return "operation"
+}
+
+// ClassWaitEvent reports a Run proceeding after waiting for a token of a
+// class for Duration: throttled on a concurrency class, or queued on a
+// run class, as Scope says.
 type ClassWaitEvent struct {
 	PipelineID kernel.PipelineID
 	ResourceID kernel.ResourceID
 	RunID      kernel.RunID
 	Class      string
+	Scope      ClassScope
 	Duration   time.Duration
 }
 
@@ -210,4 +230,22 @@ type EngineStats struct {
 	// Classes holds per-class token occupancy for classes that have
 	// been used since Start.
 	Classes map[string]ClassStats
+
+	// QueuedRuns is the number of Runs in line for a run class token.
+	QueuedRuns int
+	// RunClasses holds per-run-class occupancy for classes used since
+	// Start.
+	RunClasses map[string]RunClassStats
+}
+
+// RunClassStats is the point-in-time state of one configured run class.
+type RunClassStats struct {
+	Capacity int
+	// InUse counts the Runs holding a token: started, nonterminal.
+	InUse int
+	// Waiting counts the Runs in line for a token.
+	Waiting int
+	// Queued counts the Runs accepted and not started, the waiting ones
+	// included; it is what RunClass.MaxQueued bounds.
+	Queued int
 }

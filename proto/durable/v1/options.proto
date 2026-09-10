@@ -55,6 +55,14 @@ message PipelineOptions {
   // without mutexes.
   repeated string mutexes = 7;
 
+  // Optional run class: a named bound on this pipeline's started,
+  // nonterminal Runs. A Run takes the class token when its first attempt
+  // is reserved and holds it to terminality; a full class queues the Run
+  // in eligibility order. The engine configures the capacity
+  // (WithRunClass); a declared class without configured capacity is
+  // unlimited. Pipelines naming the same class share its capacity.
+  string run_class = 9;
+
   // Fully-qualified failure Output message type, optional. When set, a
   // failure reducer folds the immutable Input, the committed Step States,
   // the Run's Failure, and the permanent unwind failures into it when the

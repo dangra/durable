@@ -223,5 +223,12 @@ func (e *Engine) Stats() observe.EngineStats {
 			st.ThrottledRuns += u.Waiting
 		}
 	}
+	if usage := e.runs.Snapshot(); len(usage) > 0 {
+		st.RunClasses = make(map[string]observe.RunClassStats, len(usage))
+		for name, u := range usage {
+			st.RunClasses[name] = observe.RunClassStats{Capacity: u.Capacity, InUse: u.InUse, Waiting: u.Waiting, Queued: u.Pending}
+			st.QueuedRuns += u.Waiting
+		}
+	}
 	return st
 }

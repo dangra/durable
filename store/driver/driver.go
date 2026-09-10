@@ -97,6 +97,11 @@ type Cursor struct {
 	LastReason    string
 	LastErrorAt   time.Time
 	UpdatedAt     time.Time
+
+	// StartedAt is when the Run's first attempt was reserved: set by
+	// that reservation's cursor and carried unchanged by every later
+	// one; zero until then.
+	StartedAt time.Time
 }
 
 // OpWrite upserts the durable facts of one operation of one Step.
@@ -196,6 +201,10 @@ type RunRecord struct {
 
 	CreatedAt time.Time
 	UpdatedAt time.Time
+	// StartedAt mirrors Cursor.StartedAt: when the first attempt was
+	// reserved, zero until then. It survives terminality, so a terminal
+	// Run still tells how long it waited to start.
+	StartedAt time.Time
 }
 
 // clone copies the record; State is immutable and shared (see Store).

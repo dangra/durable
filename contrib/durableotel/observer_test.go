@@ -139,7 +139,7 @@ func TestNewObserverSyntheticEvents(t *testing.T) {
 		t.Errorf("await.duration count = %d, want 1", c)
 	}
 	if c := histogramCount(t, got["durable.class.wait.duration"],
-		durableotel.AttrClass.String("db")); c != 1 {
+		durableotel.AttrClass.String("db"), durableotel.AttrClassScope.String("operation")); c != 1 {
 		t.Errorf("class.wait.duration count = %d, want 1", c)
 	}
 	if v := counterValue(t, got["durable.runs.reaped"]); v != 7 {

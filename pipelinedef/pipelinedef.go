@@ -56,6 +56,13 @@ type Config struct {
 	// all of this pipeline's steps; a step's own class overrides it.
 	ConcurrencyClass string
 
+	// RunClass optionally names the run class bounding this pipeline's
+	// started, nonterminal Runs: a Run holds the class token from its
+	// first attempt reservation to terminality, and a full class queues
+	// new Runs in eligibility order. Pipelines naming the same class
+	// share its capacity.
+	RunClass string
+
 	// NewInput constructs an empty Input message; nil for an Input-less
 	// pipeline.
 	NewInput func() proto.Message

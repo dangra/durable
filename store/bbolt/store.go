@@ -522,6 +522,7 @@ func (s *Store) putRun(tx *bolt.Tx, rec *driver.RunRecord) error {
 		UpdatedAt:     rec.UpdatedAt,
 		Awaiting:      rec.Awaiting,
 		Awaited:       rec.Awaited,
+		StartedAt:     rec.StartedAt,
 	})
 	if err != nil {
 		return err
@@ -600,6 +601,7 @@ func (s *Store) ApplyTransition(_ context.Context, id kernel.RunID, t driver.Tra
 			}
 			rec.Phase = t.Cursor.Phase
 			rec.UpdatedAt = t.Cursor.UpdatedAt
+			rec.StartedAt = t.Cursor.StartedAt
 			oc := *t.Outcome
 			rec.Outcome = &oc
 			rec.Output = t.Output
@@ -1011,6 +1013,7 @@ func overlayCursor(tx *bolt.Tx, rec *driver.RunRecord) error {
 	rec.Awaiting = cur.Awaiting
 	rec.Awaited = cur.Awaited
 	rec.UpdatedAt = cur.UpdatedAt
+	rec.StartedAt = cur.StartedAt
 	if cur.StepID != "" {
 		op := rec.Step(cur.StepID).Op(cur.Phase)
 		op.Status = driver.OpUnresolved

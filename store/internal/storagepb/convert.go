@@ -77,6 +77,7 @@ func MarshalCursor(c driver.Cursor) ([]byte, error) {
 		UpdatedAt:     ts(c.UpdatedAt),
 		Awaiting:      awaitToProto(c.Awaiting),
 		Awaited:       wakeToProto(c.Awaited),
+		StartedAt:     ts(c.StartedAt),
 	})
 }
 
@@ -96,6 +97,7 @@ func UnmarshalCursor(b []byte) (driver.Cursor, error) {
 		UpdatedAt:     fromTS(pb.GetUpdatedAt()),
 		Awaiting:      awaitFromProto(pb.GetAwaiting()),
 		Awaited:       wakeFromProto(pb.GetAwaited()),
+		StartedAt:     fromTS(pb.GetStartedAt()),
 	}, nil
 }
 
@@ -261,6 +263,7 @@ func MarshalTerminal(rec *driver.RunRecord, outputBeside bool) ([]byte, error) {
 		Annotations:  rec.Annotations,
 		Phase:        phaseToProto(rec.Phase),
 		CommittedAt:  ts(rec.UpdatedAt),
+		StartedAt:    ts(rec.StartedAt),
 	}
 	if !outputBeside {
 		pb.Output = rec.Output
@@ -302,6 +305,7 @@ func UnmarshalTerminalInto(b []byte, rec *driver.RunRecord) (outputBeside bool, 
 	}
 	rec.Phase = phaseFromProto(pb.GetPhase())
 	rec.UpdatedAt = fromTS(pb.GetCommittedAt())
+	rec.StartedAt = fromTS(pb.GetStartedAt())
 	oc := outcomeFromProto(pb.GetOutcome())
 	rec.Outcome = &oc
 	rec.Output = pb.GetOutput()

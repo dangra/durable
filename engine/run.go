@@ -108,6 +108,7 @@ func (r Run) Status(ctx context.Context) (Status, error) {
 		LastError:   rec.LastError,
 		LastReason:  rec.LastReason,
 		LastErrorAt: rec.LastErrorAt,
+		StartedAt:   rec.StartedAt,
 	}
 	if rec.Cancel != nil {
 		st.CancelRequested = true
@@ -133,6 +134,9 @@ func (r Run) Status(ctx context.Context) (Status, error) {
 		if ie := e.invalidFor(r.id); ie != nil {
 			st.State = RunStateInvalid
 			st.InvalidReason = ie.Reason
+		} else if class, ok := e.runs.ParkedOn(r.id); ok {
+			st.State = RunStateQueued
+			st.QueuedClass = class
 		} else if rec.Awaiting != nil && rec.Cancel == nil {
 			st.State = RunStateAwaiting
 			st.AwaitingRunIDs = append([]durable.RunID(nil), rec.Awaiting.Targets...)
@@ -142,7 +146,7 @@ func (r Run) Status(ctx context.Context) (Status, error) {
 			st.State = RunStateThrottled
 			st.ThrottledClass = class
 		} else if !rec.NextAttemptAt.IsZero() && e.clock.Now().Before(rec.NextAttemptAt) {
-			if started(rec) {
+			if !rec.StartedAt.IsZero() {
 				st.State = RunStateWaitingRetry
 			} else {
 				st.State = RunStateScheduled
@@ -206,17 +210,6 @@ func (r Run) OutputBytes(ctx context.Context) ([]byte, error) {
 		return nil, err
 	}
 	return rec.Output, nil
-}
-
-// started reports whether any operation attempt was ever reserved for the
-// Run, distinguishing a delayed start from a retry wait.
-func started(rec *driver.RunRecord) bool {
-	for _, sr := range rec.Steps {
-		if sr.Forward.Attempts > 0 || sr.Unwind.Attempts > 0 {
-			return true
-		}
-	}
-	return false
 }
 
 func resultOf(rec *driver.RunRecord) Result {

@@ -544,6 +544,9 @@ func emitDefinition(g *protogen.GeneratedFile, pl *pipelineDecl) {
 	if cc := pl.opts.GetConcurrencyClass(); cc != "" {
 		g.P("ConcurrencyClass: ", strconv(cc), ",")
 	}
+	if rc := pl.opts.GetRunClass(); rc != "" {
+		g.P("RunClass: ", strconv(rc), ",")
+	}
 	if pl.input != nil {
 		g.P("NewInput: func() ", protoMsg, " { return &", g.QualifiedGoIdent(pl.input.GoIdent), "{} },")
 	}

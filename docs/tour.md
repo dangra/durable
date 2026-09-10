@@ -510,6 +510,26 @@ across retry waits, parks, or restarts — a parked release train
 consumes nothing. Runnable:
 [`ExampleWithConcurrencyClass`](https://pkg.go.dev/github.com/dangra/durable/engine#example-WithConcurrencyClass).
 
+**Run classes: bounded runs in flight.** At most four migrations on
+this host at once, the rest in line in the order they were accepted,
+and no more than thirty-two waiting:
+
+```proto
+option (durable.v1.pipeline) = { id: "migrate-volume" run_class: "migrations" ... };
+```
+
+```go
+eng := engine.New(store, engine.WithRunClass("migrations", engine.RunClass{Capacity: 4, MaxQueued: 32}))
+```
+
+A run holds its token from its first attempt to its terminal outcome,
+through every retry, park, and unwind; a queued run reports
+`RunStateQueued`, and `Schedule` past the cap returns
+`*engine.RunClassFullError` without creating anything. The line is
+derived from the runs themselves, so a restart keeps its order and
+re-holds every run that had started. Runnable:
+[`ExampleWithRunClass`](https://pkg.go.dev/github.com/dangra/durable/engine#example-WithRunClass).
+
 ## Time: delayed starts and retention
 
 A deploy scheduled into a release window occupies its resource slot

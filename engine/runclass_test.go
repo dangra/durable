@@ -153,6 +153,10 @@ func TestRunClassStartsInCreationOrder(t *testing.T) {
 	if st.QueuedClass != "m" || !st.StartedAt.IsZero() {
 		t.Fatalf("queued status = %+v", st)
 	}
+	// QueuedRuns counts Runs that asked for a token and were refused;
+	// r4 and r5 are in line from admission but ask only when dispatched.
+	waitForState(t, runs["r4"], engine.RunStateQueued)
+	waitForState(t, runs["r5"], engine.RunStateQueued)
 	if got := e.Stats(); got.QueuedRuns != 3 || got.RunClasses["m"].InUse != 2 || got.RunClasses["m"].Queued != 3 {
 		t.Fatalf("Stats = %+v", got.RunClasses["m"])
 	}

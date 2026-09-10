@@ -57,7 +57,7 @@ func BenchmarkColdWorkingSet(b *testing.B) {
 				b.Fatal(err)
 			}
 			// Every run holds a worker for the whole benchmark.
-			e := engine.New(store, engine.WithConcurrency(runs+16), engine.WithLogger(discardLogger()), engine.WithRecoveryBackoff(0))
+			e := engine.New(store, engine.WithLogger(discardLogger()), engine.WithRecoveryBackoff(0))
 			pipe, err := e.Bind(def)
 			if err != nil {
 				b.Fatal(err)

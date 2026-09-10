@@ -1,6 +1,7 @@
 // Package dispatcher provides a keyed single-flight worker scheduler
 // with re-poke — the mechanism behind the engine's run dispatching. At
-// most one worker exists per key, global concurrency is bounded, a
+// most one worker exists per key, global concurrency is unbounded
+// unless configured, a
 // worker may start after a delay that a Wake can cut short, and a
 // dispatch suppressed by the one-worker guard is recorded as a re-poke
 // and honored when the current worker exits — so a wake arriving in the
@@ -28,7 +29,8 @@ type Config[K comparable] struct {
 	// Ctx bounds every worker: a done context stops new work and lets
 	// waiting workers exit.
 	Ctx context.Context
-	// Concurrency bounds globally concurrent Run invocations.
+	// Concurrency bounds globally concurrent Run invocations; zero is
+	// unbounded: one worker per key with a Run in progress.
 	Concurrency int
 	// Clock times dispatch delays.
 	Clock Clock
@@ -52,23 +54,26 @@ type Dispatcher[K comparable] struct {
 	repoke map[K]struct{}
 }
 
-// New builds a Dispatcher from cfg. An unusable configuration — no
-// concurrency budget, or a nil Ctx, Clock, Spawn, or Run — is a caller
-// bug and panics here, where the mistake is, rather than deadlocking or
-// crashing on some later Dispatch.
+// New builds a Dispatcher from cfg. An unusable configuration — a
+// negative concurrency budget, or a nil Ctx, Clock, Spawn, or Run — is
+// a caller bug and panics here, where the mistake is, rather than
+// deadlocking or crashing on some later Dispatch.
 func New[K comparable](cfg Config[K]) *Dispatcher[K] {
 	switch {
-	case cfg.Concurrency <= 0:
-		panic("dispatcher: Concurrency must be positive")
+	case cfg.Concurrency < 0:
+		panic("dispatcher: Concurrency must not be negative")
 	case cfg.Ctx == nil, cfg.Clock == nil, cfg.Spawn == nil, cfg.Run == nil:
 		panic("dispatcher: Ctx, Clock, Spawn, and Run are all required")
 	}
-	return &Dispatcher[K]{
+	d := &Dispatcher[K]{
 		cfg:    cfg,
-		sem:    make(chan struct{}, cfg.Concurrency),
 		active: make(map[K]struct{}),
 		repoke: make(map[K]struct{}),
 	}
+	if cfg.Concurrency > 0 {
+		d.sem = make(chan struct{}, cfg.Concurrency)
+	}
+	return d
 }
 
 // Dispatch schedules a worker for k after delay. If k already has a
@@ -107,14 +112,18 @@ func (d *Dispatcher[K]) Dispatch(k K, delay time.Duration) {
 			}
 			d.wakes.Disarm(k)
 		}
-		select {
-		case d.sem <- struct{}{}:
-		case <-d.cfg.Ctx.Done():
-			d.clearActive(k)
-			return
+		if d.sem != nil {
+			select {
+			case d.sem <- struct{}{}:
+			case <-d.cfg.Ctx.Done():
+				d.clearActive(k)
+				return
+			}
 		}
 		redispatchIn, again := d.cfg.Run(k)
-		<-d.sem
+		if d.sem != nil {
+			<-d.sem
+		}
 		// A suppressed dispatch is urgent: redispatch immediately even
 		// over a requested delay — the next Run re-derives any
 		// remaining wait.

@@ -457,11 +457,19 @@ Exactly one logical operation belonging to a Run may execute at a time.
 
 Different Runs MAY execute concurrently.
 
-Global concurrency:
+Global concurrency is unbounded by default: every Run with an operation
+in progress has a worker of its own, and a Run that is parked, delayed,
+throttled, or queued holds none, so the worker count is the number of
+Runs executing. Real resources are bounded where they are shared, by
+concurrency classes and run classes, not by a global budget. A
+deployment MAY bound the workers anyway:
 
 ```go
 engine.WithConcurrency(32)
 ```
+
+With a bound, the rules below about not sleeping while holding
+scheduler capacity are what keep it from starving.
 
 ## Concurrency classes
 

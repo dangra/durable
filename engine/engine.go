@@ -48,7 +48,12 @@ var defaultRetryPolicy = RetryPolicy{
 type Option func(*Engine)
 
 // WithConcurrency bounds the number of concurrently executing operations
-// across all Runs. The default is 16.
+// across all Runs. The default is unbounded: every Run with an operation
+// in progress has a worker of its own, and a parked, delayed, throttled,
+// or queued Run has none, so the goroutine count is the number of Runs
+// executing. Bound it when handlers must share a resource nothing else
+// bounds; a concurrency class or a run class is usually the better
+// instrument.
 func WithConcurrency(n int) Option {
 	return func(e *Engine) {
 		if n > 0 {
@@ -324,7 +329,6 @@ func New(store driver.Store, opts ...Option) *Engine {
 		clock:         wallClock{},
 		logger:        slog.Default(),
 		retry:         defaultRetryPolicy,
-		concurrency:   16,
 		textLimit:     DefaultTextLimit,
 		invalid:       make(map[durable.RunID]*InvalidRunError),
 		attemptCancel: make(map[durable.RunID]context.CancelCauseFunc),

@@ -255,11 +255,11 @@ func TestNewValidatesConfig(t *testing.T) {
 	}
 	New(valid) // must not panic
 	for name, mutate := range map[string]func(*Config[string]){
-		"zero concurrency": func(c *Config[string]) { c.Concurrency = 0 },
-		"nil ctx":          func(c *Config[string]) { c.Ctx = nil },
-		"nil clock":        func(c *Config[string]) { c.Clock = nil },
-		"nil spawn":        func(c *Config[string]) { c.Spawn = nil },
-		"nil run":          func(c *Config[string]) { c.Run = nil },
+		"negative concurrency": func(c *Config[string]) { c.Concurrency = -1 },
+		"nil ctx":              func(c *Config[string]) { c.Ctx = nil },
+		"nil clock":            func(c *Config[string]) { c.Clock = nil },
+		"nil spawn":            func(c *Config[string]) { c.Spawn = nil },
+		"nil run":              func(c *Config[string]) { c.Run = nil },
 	} {
 		cfg := valid
 		mutate(&cfg)
@@ -370,5 +370,47 @@ func TestStressRandomChurn(t *testing.T) {
 	}
 	if runs.Load() == 0 {
 		t.Fatal("no work happened")
+	}
+}
+
+// TestUnboundedConcurrency: with no budget, every key runs at once.
+func TestUnboundedConcurrency(t *testing.T) {
+	const keys = 24
+	var (
+		concurrent atomic.Int32
+		maxSeen    atomic.Int32
+		release    = make(chan struct{})
+	)
+	h := newHarness(t, 0, func(string) (time.Duration, bool) {
+		c := concurrent.Add(1)
+		for {
+			m := maxSeen.Load()
+			if c <= m || maxSeen.CompareAndSwap(m, c) {
+				break
+			}
+		}
+		<-release
+		concurrent.Add(-1)
+		return 0, false
+	})
+	for i := 0; i < keys; i++ {
+		h.d.Dispatch(string(rune('a'+i)), 0)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for concurrent.Load() != keys {
+		if time.Now().After(deadline) {
+			t.Fatalf("concurrent = %d, want all %d keys running at once", concurrent.Load(), keys)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	close(release)
+	for h.d.Active() != 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("workers never drained: %d active", h.d.Active())
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if m := maxSeen.Load(); m != keys {
+		t.Fatalf("max concurrency = %d, want %d", m, keys)
 	}
 }

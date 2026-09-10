@@ -76,7 +76,7 @@ func BenchmarkAwaitFanIn(b *testing.B) {
 	})
 	// Every child holds a worker slot while blocked; size the pool for
 	// the whole population plus the parent and its wakes.
-	v := newEnv(b, parent, engine.WithConcurrency(children+16))
+	v := newEnv(b, parent)
 	parentPipe := v.pipe
 	cp, err := v.eng.Bind(child)
 	if err != nil {

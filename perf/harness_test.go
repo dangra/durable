@@ -122,7 +122,6 @@ func newEnv(b *testing.B, def *pipelinedef.Definition, opts ...engine.Option) *e
 	}
 	writes, reads := new(atomic.Int64), new(atomic.Int64)
 	opts = append([]engine.Option{
-		engine.WithConcurrency(32),
 		engine.WithRetryPolicy(engine.RetryPolicy{
 			Initial: 500 * time.Microsecond, Max: 2 * time.Millisecond, Multiplier: 2,
 		}),

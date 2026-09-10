@@ -41,7 +41,7 @@ func (s *enteredSignal) signal() { s.once.Do(func() { close(s.ch) }) }
 //
 // The population is sized so the store's trees are past a single leaf
 // page for every layout before most cycles run (see BenchmarkRecovery);
-// the engine's concurrency, not the cycle count, bounds how many stale
+// the run population, not the cycle count, bounds how many stale
 // runs hold a slot at once.
 func BenchmarkSupersedeCycle(b *testing.B) {
 	cycles := scale(b, 300)
@@ -199,7 +199,7 @@ func BenchmarkAwaitFanout(b *testing.B) {
 	})
 	// Every target holds a worker slot while blocked, and waiter attempts
 	// need workers besides — size the pool for the whole population.
-	v := newEnv(b, target, engine.WithConcurrency(pairs*2+16))
+	v := newEnv(b, target)
 	targetPipe := v.pipe
 	waiterPipe, err := v.eng.Bind(waiter)
 	if err != nil {

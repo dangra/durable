@@ -2,7 +2,6 @@ package durable
 
 import (
 	"context"
-	"errors"
 
 	"google.golang.org/protobuf/proto"
 )
@@ -93,14 +92,25 @@ func FailFastOnCancel(opts ...FailFastOption) Middleware {
 				return nil, Yield()
 			}
 			out, err := next(ctx, inv)
-			// The attempt the cancel preempted mid-flight: convert its
-			// ctx death into a yield, but only when the cause proves a
-			// cancellation — shutdown (ErrEngineStopping) or unrelated
-			// errors pass through untouched.
-			if err != nil && errors.Is(err, context.Canceled) && Preempted(ctx) {
+			// The attempt the cancel preempted mid-flight: an ordinary
+			// error from it is the ctx death, or something the death
+			// caused, and yields. The handler's decisions pass through:
+			// success, Fail, and a park resolve as they say. So does
+			// every error under a ctx shutdown killed (ErrEngineStopping).
+			if err != nil && Preempted(ctx) && !decided(err) {
 				return nil, Yield()
 			}
 			return out, err
 		}
 	}
+}
+
+// decided reports whether err is a handler decision rather than an
+// ordinary error: a permanent failure or a park.
+func decided(err error) bool {
+	if _, ok := FailureCause(err); ok {
+		return true
+	}
+	_, ok := AwaitRequest(err)
+	return ok
 }

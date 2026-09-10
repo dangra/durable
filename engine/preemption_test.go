@@ -698,3 +698,85 @@ func TestYieldWithoutCancelIsFailure(t *testing.T) {
 		t.Fatalf("result = %+v, want a system failure saying no cancellation was pending", res.Failure)
 	}
 }
+
+// TestFailFastYieldsAnyOrdinaryError pins that the middleware converts
+// an ordinary error from the preempted attempt even when it does not
+// wrap context.Canceled: the run ends Canceled on attempt 1.
+func TestFailFastYieldsAnyOrdinaryError(t *testing.T) {
+	running := make(chan struct{})
+	var once sync.Once
+	def := pipelinedef.New(pipelinedef.Config{
+		ID: "client-error",
+		Steps: []pipelinedef.Step{stateless("work/v1", func(ctx context.Context, inv durable.Invocation) error {
+			once.Do(func() { close(running) })
+			<-ctx.Done()
+			return errors.New("client: request aborted")
+		})},
+	})
+	e := engine.New(mem.New(), fastRetry, engine.WithLogger(discardTestLogger()),
+		engine.WithMiddleware(durable.FailFastOnCancel()))
+	pipe, err := e.Bind(def)
+	if err != nil {
+		t.Fatalf("Bind: %v", err)
+	}
+	if err := e.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer e.Stop(context.Background())
+	run, _, err := pipe.Schedule(context.Background(), "res-1", nil)
+	if err != nil {
+		t.Fatalf("Schedule: %v", err)
+	}
+	<-running
+	if err := run.Cancel(context.Background(), "operator"); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	res, err := run.Wait(context.Background())
+	if err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	if !res.Canceled() || res.Failure.Attempt != 1 {
+		t.Fatalf("result = %+v, want canceled on attempt 1", res.Failure)
+	}
+}
+
+// TestFailFastKeepsDecisions pins that the middleware never overrides a
+// preempted handler's own Fail, even one wrapping ctx.Err(): the
+// organic failure becomes the Failure (invariant 83).
+func TestFailFastKeepsDecisions(t *testing.T) {
+	running := make(chan struct{})
+	var once sync.Once
+	def := pipelinedef.New(pipelinedef.Config{
+		ID: "decided",
+		Steps: []pipelinedef.Step{stateless("work/v1", func(ctx context.Context, inv durable.Invocation) error {
+			once.Do(func() { close(running) })
+			<-ctx.Done()
+			return durable.Fail(fmt.Errorf("gave up: %w", ctx.Err()), durable.WithReason("gave-up"))
+		})},
+	})
+	e := engine.New(mem.New(), fastRetry, engine.WithLogger(discardTestLogger()),
+		engine.WithMiddleware(durable.FailFastOnCancel()))
+	pipe, err := e.Bind(def)
+	if err != nil {
+		t.Fatalf("Bind: %v", err)
+	}
+	if err := e.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer e.Stop(context.Background())
+	run, _, err := pipe.Schedule(context.Background(), "res-1", nil)
+	if err != nil {
+		t.Fatalf("Schedule: %v", err)
+	}
+	<-running
+	if err := run.Cancel(context.Background(), "operator"); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	res, err := run.Wait(context.Background())
+	if err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	if res.Canceled() || res.Failure.Reason != "gave-up" {
+		t.Fatalf("result = %+v, want the handler's own failure, not a cancellation", res.Failure)
+	}
+}

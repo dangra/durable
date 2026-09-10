@@ -229,3 +229,5 @@ Part of the [`durable` specification](README.md). This list is append-only; inva
 113. A cancel request on a queued Run resolves it without a token. Recovery re-holds every started Run of a class regardless of capacity; a capacity change never invalidates, aborts, or requeues a Run in flight.
 
 114. `RunClass.MaxQueued` bounds a class's accepted-but-unstarted Runs; the check and the count are one step at `Schedule`, so the cap is exact under one Engine, and a refused `Schedule` creates nothing.
+
+115. An attempt whose context shutdown killed and that returns an ordinary error is interrupted, not failed: no last error and no retry backoff are recorded, and the next Engine re-executes the operation subject only to recovery backoff.

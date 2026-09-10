@@ -18,11 +18,10 @@ var ErrEngineStopping = errors.New("durable: engine stopping")
 // cancellation request; Cause is the cancellation request's cause.
 // Returning ctx.Err() remains the cooperative default (the re-executed
 // attempt observes Invocation.CancelRequested). A handler or middleware
-// that instead yields immediately returns a Fail wrapping this error;
-// when engine-side evidence confirms the preemption (or the cancel
-// request is already visible), the resulting Failure is attributed
-// FailureKindCanceled with the cancellation's cause — see
-// FailFastOnCancel.
+// with nothing to reconcile instead returns Yield; when engine-side
+// evidence confirms the preemption (or the cancel request is already
+// visible), the resulting Failure is attributed FailureKindCanceled
+// with the cancellation's cause — see FailFastOnCancel.
 type PreemptedError struct {
 	Cause string
 }

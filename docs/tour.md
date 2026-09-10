@@ -245,12 +245,20 @@ soon as the operation resolves:
 ```go
 func (h *shiftTraffic) Run(ctx context.Context, inv deploypb.ShiftTrafficInvocation) (*deploypb.ShiftTraffic, error) {
     if inv.CancelRequested() {
-        return nil, durable.Fail(errors.New("deploy canceled"))
-        // or resolve successfully; either way, the engine unwinds next
+        return nil, durable.Yield()
+        // nothing to reconcile: the run ends Canceled() with the cancel's
+        // cause. A handler with partial effects finishes or cleans up
+        // first, then succeeds or Fails; either way the engine unwinds next.
     }
     // ...
 }
 ```
+
+The attempt the cancel preempted mid-flight may yield the same way
+instead of returning `ctx.Err()`, when its `context.Cause` is the
+`*durable.PreemptedError`. `Yield` with no cancellation pending is a
+permanent system failure, not a cancellation: the engine attributes on
+its own evidence, never on the returned value.
 
 Runnable: [`ExampleRun_Cancel`](https://pkg.go.dev/github.com/dangra/durable/engine#example-Run_Cancel).
 

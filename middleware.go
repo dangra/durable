@@ -60,11 +60,11 @@ func FailFastExcept(steps ...StepIdentifier) FailFastOption {
 // FailFastOnCancel returns a Middleware that opts forward handlers out
 // of cooperative cancellation: instead of each handler observing
 // Invocation.CancelRequested and resolving, a canceled Run's forward
-// operations are resolved by the middleware — as a Fail wrapping
-// *PreemptedError, which the engine attributes as FailureKindCanceled
-// (Result.Canceled() reports true) once its own evidence confirms the
-// cancellation. Unwind operations are never touched: during a
-// cancellation the unwind is the work.
+// operations are resolved by the middleware — as a Yield, which the
+// engine attributes as FailureKindCanceled (Result.Canceled() reports
+// true) once its own evidence confirms the cancellation. Unwind
+// operations are never touched: during a cancellation the unwind is the
+// work.
 //
 // Install it only when every forward handler is preemption-safe:
 // abandoning an attempt mid-flight forfeits the step's completion, and
@@ -90,7 +90,7 @@ func FailFastOnCancel(opts ...FailFastOption) Middleware {
 			// without invoking the handler. The engine fills the cause
 			// from the durable cancel request.
 			if inv.CancelRequested() {
-				return nil, Fail(&PreemptedError{})
+				return nil, Yield()
 			}
 			out, err := next(ctx, inv)
 			// The attempt the cancel preempted mid-flight: convert its
@@ -98,8 +98,8 @@ func FailFastOnCancel(opts ...FailFastOption) Middleware {
 			// cancellation — shutdown (ErrEngineStopping) or unrelated
 			// errors pass through untouched.
 			if err != nil && errors.Is(err, context.Canceled) {
-				if pe, ok := errors.AsType[*PreemptedError](context.Cause(ctx)); ok {
-					return nil, Fail(pe)
+				if _, ok := errors.AsType[*PreemptedError](context.Cause(ctx)); ok {
+					return nil, Yield()
 				}
 			}
 			return out, err

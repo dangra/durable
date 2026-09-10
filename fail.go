@@ -67,6 +67,44 @@ func Fail(err error, opts ...FailOption) error {
 	return pe
 }
 
+// Yield yields the operation to a pending cancellation. Returned from a
+// forward handler whose attempt was preempted (context.Cause is a
+// *PreemptedError), or from a re-executed attempt that finds
+// Invocation.CancelRequested, it resolves the operation as permanently
+// failed and the Engine attributes the Run's Failure FailureKindCanceled
+// with the cancellation's cause, so Result.Canceled reports true. The
+// attribution rests on the Engine's own evidence — it preempted this
+// attempt, or the request is already durable — never on the returned
+// value alone: a Yield with no cancellation pending is a permanent
+// system failure that says so.
+//
+// Yield is for a handler with nothing to reconcile. Partial effects take
+// the cooperative path — finish or clean up, then succeed or Fail — so
+// unwind sees a committed Step. FailFastOnCancel is the middleware form
+// for pipelines whose forward handlers are all preemption-safe. Unwind
+// handlers never yield: during a cancellation the unwind is the work.
+func Yield() error { return Fail(yieldError{}) }
+
+type yieldError struct{}
+
+func (yieldError) Error() string { return "yielded with no cancellation pending" }
+
+// IsYield reports whether a handler's returned error yields to
+// cancellation: a Yield, or a Fail wrapping the *PreemptedError the
+// attempt context carried, which declares the same thing by hand.
+// Middleware uses it to label a yield the way the engine will.
+func IsYield(err error) bool {
+	cause, ok := FailureCause(err)
+	if !ok {
+		return false
+	}
+	if _, ok := errors.AsType[*PreemptedError](cause); ok {
+		return true
+	}
+	_, ok = errors.AsType[yieldError](cause)
+	return ok
+}
+
 type permanentError struct {
 	err     error
 	kind    FailureKind

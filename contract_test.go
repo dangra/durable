@@ -98,3 +98,22 @@ func TestScheduleOptions(t *testing.T) {
 		t.Fatalf("annotations must be copied and merged with later keys winning: %v", so.Annotations)
 	}
 }
+
+func TestIsYield(t *testing.T) {
+	cases := map[string]struct {
+		err  error
+		want bool
+	}{
+		"yield":               {durable.Yield(), true},
+		"fail wrapping cause": {durable.Fail(fmt.Errorf("stop: %w", &durable.PreemptedError{Cause: "x"})), true},
+		"plain fail":          {durable.Fail(errors.New("boom")), false},
+		"ordinary error":      {errors.New("boom"), false},
+		"bare preempted":      {&durable.PreemptedError{}, false},
+		"nil":                 {nil, false},
+	}
+	for name, tc := range cases {
+		if got := durable.IsYield(tc.err); got != tc.want {
+			t.Errorf("%s: IsYield = %v, want %v", name, got, tc.want)
+		}
+	}
+}

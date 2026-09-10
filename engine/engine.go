@@ -1399,24 +1399,24 @@ func (e *Engine) runForward(rec *driver.RunRecord, def *boundDef, stepID durable
 			At:      now,
 			Kind:    kind,
 			Reason:  e.boundText(reason)}
-		// A Fail that wraps *PreemptedError declares a preemption-yield.
-		// Attribute it as cancellation only on engine-side evidence — the
-		// engine preempted this attempt, or the cancel request is already
-		// visible — never on the error value alone, which a handler could
-		// fabricate without any cancel pending.
-		if yielded, ok := errors.AsType[*durable.PreemptedError](cause); ok && (wasPreempted || rec.Cancel != nil) {
-			cause := preemptCause
-			if cause == "" {
-				cause = yielded.Cause
+		// A Yield declares that the handler gave the operation up to a
+		// cancellation. Attribute it as one only on engine-side evidence
+		// — the engine preempted this attempt, or the cancel request is
+		// already visible — never on the error value alone, which a
+		// handler could fabricate without any cancel pending.
+		if durable.IsYield(err) && (wasPreempted || rec.Cancel != nil) {
+			why := preemptCause
+			if pe, ok := errors.AsType[*durable.PreemptedError](cause); ok && why == "" {
+				why = pe.Cause
 			}
-			if cause == "" && rec.Cancel != nil {
-				cause = rec.Cancel.Cause
+			if why == "" && rec.Cancel != nil {
+				why = rec.Cancel.Cause
 			}
-			if cause == "" {
-				cause = "canceled"
+			if why == "" {
+				why = "canceled"
 			}
 			rec.Failure.Kind = durable.FailureKindCanceled
-			rec.Failure.Message = e.boundText(cause)
+			rec.Failure.Message = e.boundText(why)
 		}
 		rec.Phase = durable.PhaseUnwind
 		rec.Awaited = nil

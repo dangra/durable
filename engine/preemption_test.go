@@ -577,3 +577,124 @@ func TestStopInterruptedFailStillFails(t *testing.T) {
 		t.Fatalf("failure = %+v, want the handler's permanent failure", head.Failure)
 	}
 }
+
+// TestYieldOnCancelRequested pins the cooperative yield: the preempted
+// attempt returns ctx.Err(), the re-executed one finds the request and
+// yields, and the Run ends Canceled with the request's cause.
+func TestYieldOnCancelRequested(t *testing.T) {
+	running := make(chan struct{})
+	var once sync.Once
+	var attempts atomic.Int32
+	def := pipelinedef.New(pipelinedef.Config{
+		ID: "yielder",
+		Steps: []pipelinedef.Step{stateless("work/v1", func(ctx context.Context, inv durable.Invocation) error {
+			attempts.Add(1)
+			if inv.CancelRequested() {
+				return durable.Yield()
+			}
+			once.Do(func() { close(running) })
+			<-ctx.Done()
+			return ctx.Err()
+		})},
+	})
+	e := engine.New(mem.New(), fastRetry, engine.WithLogger(discardTestLogger()))
+	pipe, err := e.Bind(def)
+	if err != nil {
+		t.Fatalf("Bind: %v", err)
+	}
+	if err := e.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer e.Stop(context.Background())
+	run, _, err := pipe.Schedule(context.Background(), "res-1", nil)
+	if err != nil {
+		t.Fatalf("Schedule: %v", err)
+	}
+	<-running
+	if err := run.Cancel(context.Background(), "operator"); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	res, err := run.Wait(context.Background())
+	if err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	if !res.Canceled() || res.Failure.Message != "operator" {
+		t.Fatalf("result = %+v, want canceled with cause \"operator\"", res.Failure)
+	}
+	if n := attempts.Load(); n != 2 {
+		t.Errorf("attempts = %d, want 2 (preempted, then yielded)", n)
+	}
+}
+
+// TestYieldOnPreemptedAttempt pins the immediate yield: the preempted
+// attempt itself yields and the Run ends Canceled on attempt 1.
+func TestYieldOnPreemptedAttempt(t *testing.T) {
+	running := make(chan struct{})
+	var once sync.Once
+	def := pipelinedef.New(pipelinedef.Config{
+		ID: "yielder",
+		Steps: []pipelinedef.Step{stateless("work/v1", func(ctx context.Context, inv durable.Invocation) error {
+			once.Do(func() { close(running) })
+			<-ctx.Done()
+			if _, ok := errors.AsType[*durable.PreemptedError](context.Cause(ctx)); ok {
+				return durable.Yield()
+			}
+			return ctx.Err()
+		})},
+	})
+	e := engine.New(mem.New(), fastRetry, engine.WithLogger(discardTestLogger()))
+	pipe, err := e.Bind(def)
+	if err != nil {
+		t.Fatalf("Bind: %v", err)
+	}
+	if err := e.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer e.Stop(context.Background())
+	run, _, err := pipe.Schedule(context.Background(), "res-1", nil)
+	if err != nil {
+		t.Fatalf("Schedule: %v", err)
+	}
+	<-running
+	if err := run.Cancel(context.Background(), "operator"); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	res, err := run.Wait(context.Background())
+	if err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	if !res.Canceled() || res.Failure.Message != "operator" || res.Failure.Attempt != 1 {
+		t.Fatalf("result = %+v, want canceled with cause \"operator\" on attempt 1", res.Failure)
+	}
+}
+
+// TestYieldWithoutCancelIsFailure pins that a Yield with nothing to
+// yield to is a permanent system failure, never a cancellation.
+func TestYieldWithoutCancelIsFailure(t *testing.T) {
+	def := pipelinedef.New(pipelinedef.Config{
+		ID: "eager",
+		Steps: []pipelinedef.Step{stateless("work/v1", func(ctx context.Context, inv durable.Invocation) error {
+			return durable.Yield()
+		})},
+	})
+	e := engine.New(mem.New(), fastRetry, engine.WithLogger(discardTestLogger()))
+	pipe, err := e.Bind(def)
+	if err != nil {
+		t.Fatalf("Bind: %v", err)
+	}
+	if err := e.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer e.Stop(context.Background())
+	run, _, err := pipe.Schedule(context.Background(), "res-1", nil)
+	if err != nil {
+		t.Fatalf("Schedule: %v", err)
+	}
+	res, err := run.Wait(context.Background())
+	if err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	if res.Canceled() || res.Failure.Kind != durable.FailureKindSystem || res.Failure.Message != "yielded with no cancellation pending" {
+		t.Fatalf("result = %+v, want a system failure saying no cancellation was pending", res.Failure)
+	}
+}

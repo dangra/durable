@@ -565,9 +565,15 @@ Shutdown:
 - leaves unresolved Runs nonterminal,
 - does not create Failure.
 
-A future Engine resumes them. A handler that only returns on
-`ctx.Done()` drains at the deadline, so the drain timeout is kept
-modest.
+A killed attempt that returns an ordinary error is **interrupted**, not
+failed: the Engine records neither a last error nor a retry backoff for
+it — the attempt's reservation on the cursor is its whole record — and
+reports it as `AttemptInterrupted`. A killed attempt that returns
+success, `Fail`, or a park resolves as such: the handler decided. A
+future Engine resumes unresolved Runs, re-executing an interrupted
+operation after its recovery backoff and nothing else. A handler that
+only returns on `ctx.Done()` drains at the deadline, so the drain timeout
+is kept modest.
 
 Shutdown is operational; Run cancellation (see 01-model) is semantic and
 terminal. They are unrelated mechanisms.

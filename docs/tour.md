@@ -282,7 +282,10 @@ contexts are in play, deliberately unrelated:
 Engine **shutdown is not cancellation**: `Stop` kills every in-flight
 attempt ctx but leaves unresolved Runs nonterminal, with no failure
 recorded — the next `Start` resumes them (that is the
-[durability chapter](#durability-crash-restart-continue)). Shutdown is
+[durability chapter](#durability-crash-restart-continue)). A killed
+attempt that returns `ctx.Err()` is *interrupted*, not failed: no last
+error, no retry backoff, just the reservation the next engine
+re-executes. Shutdown is
 ephemeral and process-scoped; `Cancel` is durable intent that survives
 restart and drives the Run to a terminal `Canceled()` outcome via
 unwind. By default `Stop` preempts in-flight attempts immediately;

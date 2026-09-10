@@ -1006,6 +1006,13 @@ func (e *Engine) attemptResolved(rec *driver.RunRecord, stepID durable.StepID, p
 				"run", string(rec.RunID), "step", string(stepID), "phase", phase.String(),
 				"attempt", attempt, "error", err, "next_attempt_at", rec.NextAttemptAt)
 		}
+	case observe.AttemptInterrupted:
+		if e.debugLog() {
+			e.logger.Debug("durable: operation interrupted by shutdown; the next engine re-executes it",
+				"pipeline", string(rec.PipelineID), "resource", string(rec.ResourceID),
+				"run", string(rec.RunID), "step", string(stepID), "phase", phase.String(),
+				"attempt", attempt, "error", err)
+		}
 	case observe.AttemptFailed:
 		if phase == durable.PhaseForward {
 			e.logger.Info("durable: run failed; unwinding",
@@ -1340,7 +1347,7 @@ func (e *Engine) runForward(rec *driver.RunRecord, def *boundDef, stepID durable
 	inv := e.invocation(rec, def, stepID, sr.Forward.Attempts, durable.PhaseForward)
 	inv.awaited = rec.Awaited.Clone()
 	opStart := e.clock.Now()
-	state, panicked, err := e.invokeForward(sc, inv)
+	state, panicked, interrupted, err := e.invokeForward(sc, inv)
 	preemptCause, wasPreempted := e.takePreempted(rec.RunID)
 
 	if v := inv.takeViolation(); v != nil {
@@ -1429,6 +1436,14 @@ func (e *Engine) runForward(rec *driver.RunRecord, def *boundDef, stepID durable
 			Message: rec.Failure.Message})
 		return true, 0, false
 
+	case interrupted && !panicked:
+		// Shutdown cut the attempt short. The reservation already on the
+		// cursor is the whole record of it: no error, no backoff. The
+		// next Engine re-executes the operation after its recovery
+		// backoff, and this one dispatches nothing more.
+		e.attemptResolved(rec, stepID, durable.PhaseForward, sr.Forward.Attempts, now.Sub(opStart), observe.AttemptInterrupted, err, 0, false)
+		return false, 0, false
+
 	default:
 		d := e.backoff(sr.Forward.Attempts)
 		rec.NextAttemptAt = now.Add(d)
@@ -1462,7 +1477,7 @@ func (e *Engine) runUnwind(rec *driver.RunRecord, def *boundDef, stepID durable.
 		inv.failure = &f
 	}
 	opStart := e.clock.Now()
-	panicked, err := e.invokeUnwind(sc, inv)
+	panicked, interrupted, err := e.invokeUnwind(sc, inv)
 	e.takePreempted(rec.RunID) // clear evidence; yields attribute only forward
 
 	if v := inv.takeViolation(); v != nil {
@@ -1507,6 +1522,10 @@ func (e *Engine) runUnwind(rec *driver.RunRecord, def *boundDef, stepID durable.
 		}
 		e.attemptResolved(rec, stepID, durable.PhaseUnwind, sr.Unwind.Attempts, now.Sub(opStart), observe.AttemptFailed, cause, 0, false)
 		return true, 0, false
+
+	case interrupted && !panicked:
+		e.attemptResolved(rec, stepID, durable.PhaseUnwind, sr.Unwind.Attempts, now.Sub(opStart), observe.AttemptInterrupted, err, 0, false)
+		return false, 0, false
 
 	default:
 		d := e.backoff(sr.Unwind.Attempts)
@@ -1640,7 +1659,11 @@ func committedStates(rec *driver.RunRecord) map[durable.StepID][]byte {
 	return states
 }
 
-func (e *Engine) invokeForward(sc *pipelinedef.Step, inv *attemptInvocation) (state proto.Message, panicked bool, err error) {
+// invokeForward runs the forward handler under a fresh attempt context.
+// interrupted reports that shutdown killed that context before the
+// handler returned; the resolution treats an ordinary error from such an
+// attempt as an interruption, not a failure.
+func (e *Engine) invokeForward(sc *pipelinedef.Step, inv *attemptInvocation) (state proto.Message, panicked, interrupted bool, err error) {
 	defer func() {
 		if p := recover(); p != nil {
 			panicked = true
@@ -1653,10 +1676,10 @@ func (e *Engine) invokeForward(sc *pipelinedef.Step, inv *attemptInvocation) (st
 	ctx, done := e.attemptContext(inv.runID)
 	defer done()
 	state, err = e.wrap(durable.Handler(sc.Run))(ctx, inv)
-	return state, false, err
+	return state, false, stoppedBy(ctx), err
 }
 
-func (e *Engine) invokeUnwind(sc *pipelinedef.Step, inv *attemptInvocation) (panicked bool, err error) {
+func (e *Engine) invokeUnwind(sc *pipelinedef.Step, inv *attemptInvocation) (panicked, interrupted bool, err error) {
 	defer func() {
 		if p := recover(); p != nil {
 			panicked = true
@@ -1672,7 +1695,14 @@ func (e *Engine) invokeUnwind(sc *pipelinedef.Step, inv *attemptInvocation) (pan
 	ctx, done := e.attemptContext(inv.runID)
 	defer done()
 	_, err = h(ctx, inv)
-	return false, err
+	return false, stoppedBy(ctx), err
+}
+
+// stoppedBy reports whether an attempt context died of Engine shutdown.
+// A preemption cancels the attempt context itself, so its cause wins
+// over the base context's even when both have fired.
+func stoppedBy(ctx context.Context) bool {
+	return errors.Is(context.Cause(ctx), durable.ErrEngineStopping)
 }
 
 func (e *Engine) invokeReduce(def *boundDef, what string, reduce func(durable.ReduceView) proto.Message, view *reduceView) (out proto.Message, err error) {

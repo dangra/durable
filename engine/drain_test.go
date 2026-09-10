@@ -118,7 +118,8 @@ func TestDrainDeadlinePreempts(t *testing.T) {
 			return ctx.Err()
 		})},
 	})
-	e := engine.New(mem.New(), fastRetry,
+	store := mem.New()
+	e := engine.New(store, fastRetry,
 		engine.WithLogger(discardTestLogger()),
 		engine.WithDrainTimeout(50*time.Millisecond))
 	pipe, err := e.Bind(def)
@@ -132,7 +133,6 @@ func TestDrainDeadlinePreempts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Schedule: %v", err)
 	}
-	_ = run
 	<-running
 	if err := e.Stop(context.Background()); err != nil {
 		t.Fatalf("Stop: %v", err)
@@ -141,6 +141,14 @@ func TestDrainDeadlinePreempts(t *testing.T) {
 	defer mu.Unlock()
 	if !errors.Is(cause, durable.ErrEngineStopping) {
 		t.Fatalf("context.Cause = %v, want ErrEngineStopping at the drain deadline", cause)
+	}
+	// The straggler was interrupted, not failed.
+	head, err := store.GetRunHead(context.Background(), run.ID())
+	if err != nil {
+		t.Fatalf("GetRunHead: %v", err)
+	}
+	if head.LastError != "" || !head.NextAttemptAt.IsZero() {
+		t.Fatalf("head after drain deadline: last error %q, next attempt %v; want neither", head.LastError, head.NextAttemptAt)
 	}
 }
 

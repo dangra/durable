@@ -31,7 +31,8 @@ type Observer struct {
 	// RunScheduled fires when Schedule accepts a new Run (created=true).
 	RunScheduled func(RunEvent)
 	// AttemptDone fires when one operation attempt resolves (success or
-	// permanent failure), schedules a retry, or parks via AwaitRun.
+	// permanent failure), schedules a retry, parks via AwaitRun, or is
+	// interrupted by shutdown.
 	AttemptDone func(AttemptEvent)
 	// RunUnwinding fires when a Failure is established — permanent
 	// forward failure or an accepted cancellation — and unwind begins.
@@ -80,6 +81,10 @@ const (
 	AttemptFailed
 	// AttemptAwaiting parked the operation via AwaitRun.
 	AttemptAwaiting
+	// AttemptInterrupted was cut short by Engine shutdown and returned an
+	// ordinary error: the operation stays unresolved with no error
+	// recorded and no backoff; the next Engine re-executes it.
+	AttemptInterrupted
 )
 
 func (r AttemptResult) String() string {
@@ -92,6 +97,8 @@ func (r AttemptResult) String() string {
 		return "failed"
 	case AttemptAwaiting:
 		return "awaiting"
+	case AttemptInterrupted:
+		return "interrupted"
 	default:
 		return "unknown"
 	}
@@ -108,7 +115,8 @@ type AttemptEvent struct {
 	// Duration is the handler execution time of this attempt.
 	Duration time.Duration
 	Result   AttemptResult
-	// Err is the handler error for AttemptRetrying and AttemptFailed.
+	// Err is the handler error for AttemptRetrying, AttemptFailed, and
+	// AttemptInterrupted.
 	Err error
 	// RetryIn is the scheduled backoff delay for AttemptRetrying.
 	RetryIn time.Duration

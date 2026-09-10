@@ -1,6 +1,7 @@
 package durable
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
@@ -18,11 +19,10 @@ var ErrEngineStopping = errors.New("durable: engine stopping")
 // cancellation request; Cause is the cancellation request's cause.
 // Returning ctx.Err() remains the cooperative default (the re-executed
 // attempt observes Invocation.CancelRequested). A handler or middleware
-// that instead yields immediately returns a Fail wrapping this error;
-// when engine-side evidence confirms the preemption (or the cancel
-// request is already visible), the resulting Failure is attributed
-// FailureKindCanceled with the cancellation's cause — see
-// FailFastOnCancel.
+// with nothing to reconcile instead returns Yield; when engine-side
+// evidence confirms the preemption (or the cancel request is already
+// visible), the resulting Failure is attributed FailureKindCanceled
+// with the cancellation's cause — see FailFastOnCancel.
 type PreemptedError struct {
 	Cause string
 }
@@ -32,6 +32,21 @@ func (e *PreemptedError) Error() string {
 		return "durable: attempt preempted by cancellation"
 	}
 	return "durable: attempt preempted by cancellation: " + e.Cause
+}
+
+// Preempted reports whether an attempt context died because a
+// cancellation request preempted the attempt: its context.Cause is a
+// *PreemptedError. It is false for a live context and for one killed by
+// engine shutdown (ErrEngineStopping), so a handler that wants to
+// yield only to cancellation writes:
+//
+//	if durable.Preempted(ctx) {
+//		return nil, durable.Yield()
+//	}
+//	return nil, ctx.Err()
+func Preempted(ctx context.Context) bool {
+	_, ok := errors.AsType[*PreemptedError](context.Cause(ctx))
+	return ok
 }
 
 // ErrRunNotFound is returned when no Run exists for a RunID — by a

@@ -1,6 +1,7 @@
 package durable_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"testing"
@@ -96,5 +97,52 @@ func TestScheduleOptions(t *testing.T) {
 	src["a"] = "mutated"
 	if so.Annotations["a"] != "1" || so.Annotations["b"] != "3" {
 		t.Fatalf("annotations must be copied and merged with later keys winning: %v", so.Annotations)
+	}
+}
+
+func TestIsYield(t *testing.T) {
+	cases := map[string]struct {
+		err  error
+		want bool
+	}{
+		"yield":               {durable.Yield(), true},
+		"fail wrapping cause": {durable.Fail(fmt.Errorf("stop: %w", &durable.PreemptedError{Cause: "x"})), true},
+		"plain fail":          {durable.Fail(errors.New("boom")), false},
+		"ordinary error":      {errors.New("boom"), false},
+		"bare preempted":      {&durable.PreemptedError{}, false},
+		"nil":                 {nil, false},
+	}
+	for name, tc := range cases {
+		if got := durable.IsYield(tc.err); got != tc.want {
+			t.Errorf("%s: IsYield = %v, want %v", name, got, tc.want)
+		}
+	}
+}
+
+func TestPreempted(t *testing.T) {
+	live := context.Background()
+	preempted, cancelPreempted := context.WithCancelCause(context.Background())
+	cancelPreempted(&durable.PreemptedError{Cause: "operator"})
+	stopping, cancelStopping := context.WithCancelCause(context.Background())
+	cancelStopping(durable.ErrEngineStopping)
+	plain, cancelPlain := context.WithCancel(context.Background())
+	cancelPlain()
+	child, cancelChild := context.WithCancel(preempted)
+	defer cancelChild()
+
+	cases := map[string]struct {
+		ctx  context.Context
+		want bool
+	}{
+		"live":               {live, false},
+		"preempted":          {preempted, true},
+		"derived from it":    {child, true},
+		"engine stopping":    {stopping, false},
+		"plain cancellation": {plain, false},
+	}
+	for name, tc := range cases {
+		if got := durable.Preempted(tc.ctx); got != tc.want {
+			t.Errorf("%s: Preempted = %v, want %v", name, got, tc.want)
+		}
 	}
 }

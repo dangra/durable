@@ -418,16 +418,19 @@ The preemption arrives as the attempt context's cancellation cause:
 (An Engine shutdown kills the context with `ErrEngineStopping` instead —
 operational, never semantic.) Returning `ctx.Err()` keeps the cooperative
 default: the attempt is retried and the next one observes
-`CancelRequested`. A handler or middleware may instead **yield**: return
-`Fail` wrapping the `*PreemptedError`. The Engine attributes the resulting
-Failure `FailureKindCanceled` with the cancellation's cause only when
-its own evidence confirms the preemption — it preempted this attempt, or
-the request is already durable — never on the error value alone, which a
-handler could fabricate with no cancel pending. `FailFastOnCancel` is the
-middleware form of that yield, for pipelines whose forward handlers are
-preemption-safe; `FailFastExcept` keeps named Steps cooperative. Unwind
-operations are never yielded: during a cancellation the unwind is the
-work.
+`CancelRequested`. A handler with nothing to reconcile — the preempted
+attempt, or the re-executed one that finds `CancelRequested` — may
+instead **yield**: return `Yield()` (a `Fail` wrapping the
+`*PreemptedError` declares the same by hand). The Engine attributes the
+resulting Failure `FailureKindCanceled` with the cancellation's cause
+only when its own evidence confirms the cancellation — it preempted this
+attempt, or the request is already durable — never on the error value
+alone, which a handler could fabricate with no cancel pending; a yield
+without one is a permanent system failure that says so.
+`FailFastOnCancel` is the middleware form of that yield, for pipelines
+whose forward handlers are preemption-safe; `FailFastExcept` keeps named
+Steps cooperative. Unwind operations are never yielded: during a
+cancellation the unwind is the work.
 
 If the pinned operation succeeds, the Step is recorded and participates in
 unwind like any other. If it permanently fails on its own, that organic

@@ -2,7 +2,6 @@ package durable
 
 import (
 	"context"
-	"errors"
 
 	"google.golang.org/protobuf/proto"
 )
@@ -60,11 +59,11 @@ func FailFastExcept(steps ...StepIdentifier) FailFastOption {
 // FailFastOnCancel returns a Middleware that opts forward handlers out
 // of cooperative cancellation: instead of each handler observing
 // Invocation.CancelRequested and resolving, a canceled Run's forward
-// operations are resolved by the middleware — as a Fail wrapping
-// *PreemptedError, which the engine attributes as FailureKindCanceled
-// (Result.Canceled() reports true) once its own evidence confirms the
-// cancellation. Unwind operations are never touched: during a
-// cancellation the unwind is the work.
+// operations are resolved by the middleware — as a Yield, which the
+// engine attributes as FailureKindCanceled (Result.Canceled() reports
+// true) once its own evidence confirms the cancellation. Unwind
+// operations are never touched: during a cancellation the unwind is the
+// work.
 //
 // Install it only when every forward handler is preemption-safe:
 // abandoning an attempt mid-flight forfeits the step's completion, and
@@ -90,19 +89,28 @@ func FailFastOnCancel(opts ...FailFastOption) Middleware {
 			// without invoking the handler. The engine fills the cause
 			// from the durable cancel request.
 			if inv.CancelRequested() {
-				return nil, Fail(&PreemptedError{})
+				return nil, Yield()
 			}
 			out, err := next(ctx, inv)
-			// The attempt the cancel preempted mid-flight: convert its
-			// ctx death into a yield, but only when the cause proves a
-			// cancellation — shutdown (ErrEngineStopping) or unrelated
-			// errors pass through untouched.
-			if err != nil && errors.Is(err, context.Canceled) {
-				if pe, ok := errors.AsType[*PreemptedError](context.Cause(ctx)); ok {
-					return nil, Fail(pe)
-				}
+			// The attempt the cancel preempted mid-flight: an ordinary
+			// error from it is the ctx death, or something the death
+			// caused, and yields. The handler's decisions pass through:
+			// success, Fail, and a park resolve as they say. So does
+			// every error under a ctx shutdown killed (ErrEngineStopping).
+			if err != nil && Preempted(ctx) && !decided(err) {
+				return nil, Yield()
 			}
 			return out, err
 		}
 	}
+}
+
+// decided reports whether err is a handler decision rather than an
+// ordinary error: a permanent failure or a park.
+func decided(err error) bool {
+	if _, ok := FailureCause(err); ok {
+		return true
+	}
+	_, ok := AwaitRequest(err)
+	return ok
 }

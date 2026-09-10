@@ -28,7 +28,8 @@
 // durabletest.NewInvocation fakes it so handlers are unit-testable
 // without an engine. The ways out: success, an ordinary error (retried — a
 // returned ctx.Err() included), Fail with FailOptions and
-// kind/reason attribution, or AwaitRun, AwaitAll, and AwaitAny to park on
+// kind/reason attribution, Yield to a pending cancellation, or AwaitRun,
+// AwaitAll, and AwaitAny to park on
 // other Runs, bounded by WithAwaitTimeout (the woken attempt reads the
 // park back through Awaited). An unwind handler is the same shape and
 // reads the Failure it is unwinding through Invocation.Failure, non-nil
@@ -44,9 +45,9 @@
 // Middleware. Handler and Middleware are the net/http-shaped operation
 // layer every attempt passes through (installed with
 // engine.WithMiddleware). AwaitRequest, AwaitTimeout, FailureInfo,
-// FailureCause, and FailureReason classify a handler's return the way
+// FailureCause, FailureReason, and IsYield classify a handler's return the way
 // the engine will; PreemptedError and ErrEngineStopping name why an
-// attempt ctx died; FailFastOnCancel with FailFastExcept opts
+// attempt ctx died, and Preempted asks the ctx which; FailFastOnCancel with FailFastExcept opts
 // preemption-safe pipelines out of cooperative cancellation.
 //
 // Vocabulary. StepRef and StateStepRef are the step references generated

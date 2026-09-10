@@ -200,7 +200,7 @@ Part of the [`durable` specification](README.md). This list is append-only; inva
 
 99. A cancellation bypassing a park still yields the park's memory to the attempt that resolves it.
 
-100. A `Fail` wrapping a `*PreemptedError` is attributed as cancellation only on Engine-side evidence of the preemption.
+100. A `Yield` (or a `Fail` wrapping a `*PreemptedError`) is attributed as cancellation only on Engine-side evidence — the preemption, or the durable request; without it, it is a permanent system failure.
 
 101. Shutdown starts no new attempt; in-flight attempts drain for the configured timeout and are preempted only at its deadline.
 

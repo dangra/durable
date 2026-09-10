@@ -221,3 +221,11 @@ Part of the [`durable` specification](README.md). This list is append-only; inva
 109. A Pipeline's failure Reducer, when declared, runs once in the transition that commits a failed Outcome, over the Input, committed States, the Run's `Failure`, and the per-step unwind failures; its Output is the failed Run's terminal output. It is pure, and a fault in it invalidates the Run exactly as a fault in the Reducer does.
 
 110. The terminality commit replaces a Run's nonterminal stage — meta, operation records, cursor, failure, cancel — with one terminal record in the same atomic step. A terminal Run carries its identity, annotations, phase, outcome, output, commit time, `Failure`, cancel request, and permanently failed unwind operations, and nothing else: the Input, every other operation record, and the cursor's scheduling fields are released at terminality, not at retention (a store may free them physically shortly after, in batches, but no read surfaces them once the terminal record exists). `InputBytes` on a terminal Run returns `ErrRunTerminal`; a terminal Run accepts no further transitions.
+
+111. A run class bounds started, nonterminal Runs across every resource: a Run takes its class token when its first attempt is reserved and holds it to terminality, through retries, awaits, throttles, parks, and unwind. Tokens are in-memory; the Run's start (`StartedAt`, set by that reservation's cursor and carried by every later one) is the durable fact a restart re-holds from.
+
+112. A full run class queues a Run in eligibility order — creation or delayed start time, then `RunID` — derived from the Run's head, so the line has the same order after a restart with no position stored. Grants are strict: a Run starts only when every Run ahead of it fits. Queuing never blocks a worker.
+
+113. A cancel request on a queued Run resolves it without a token. Recovery re-holds every started Run of a class regardless of capacity; a capacity change never invalidates, aborts, or requeues a Run in flight.
+
+114. `RunClass.MaxQueued` bounds a class's accepted-but-unstarted Runs; the check and the count are one step at `Schedule`, so the cap is exact under one Engine, and a refused `Schedule` creates nothing.

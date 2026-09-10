@@ -111,6 +111,71 @@ Two consequences worth knowing when composing pipelines:
 
 ---
 
+## Run classes
+
+Mutexes are exclusive and never reach across resources. A **run
+class** is the counting bound: a named cap on the started, nonterminal
+Runs of the Pipelines declaring it, across every resource.
+
+```proto
+option (durable.v1.pipeline) = {
+  id: "migrate-volume"
+  run_class: "migrations"
+  ...
+};
+```
+
+```go
+engine.WithRunClass("migrations", engine.RunClass{Capacity: 4, MaxQueued: 32})
+```
+
+A Pipeline declares at most one run class; Pipelines naming the same
+class share its capacity. Declaration is schema-side, capacity is
+deployment-side: a declared class without configured capacity is
+unlimited, and the Engine warns at Start. A name is either a run class
+or a concurrency class, never both.
+
+A Run takes its class token when its first attempt is reserved and
+holds it until terminality: through retries, awaits, throttles, parks,
+and unwind. Nothing releases it early. The token is in-memory; what
+persists is the Run's start (`Status.StartedAt`, set by the
+reservation that took the token), which is how a restart re-holds it.
+
+While the class is full, Runs wait in a line ordered by when they
+became eligible — creation, or the delayed start time — then by
+`RunID`. Both are durable facts of the Run, so the line has the same
+order before and after a restart with no position stored. A delayed
+Run joins at its start time, behind everything eligible before it; a
+Run whose start time has not arrived is not in line but counts as
+queued. A queued Run reports `RunStateQueued` with the class, holds no
+worker, and starts when a token frees in line order. Order is strict:
+a Run is started only when every Run ahead of it fits too.
+
+A cancel request on a queued Run resolves it without a token: nothing
+started, so nothing unwinds, and it leaves the line.
+
+`MaxQueued` bounds the class's accepted-but-unstarted Runs — queued,
+delayed, or not yet dispatched. `Schedule` refuses the next one with
+`*engine.RunClassFullError`, creating nothing; a duplicate-scheduling
+hit returns the existing Run and does not count. One Engine owns the
+store, so the count is exact.
+
+Recovery at `Start` re-holds every started nonterminal Run of a class
+unconditionally: a lowered capacity is exceeded until holders finish,
+and no new Run starts until use falls below it. No Run is ever
+invalidated, aborted, or requeued by a capacity change.
+
+Two consequences worth knowing when composing pipelines:
+
+- A parent holding a token that awaits a child of the same class, with
+  the class full of such parents, waits forever. Children use a
+  different class or none.
+- A Run in a class whose first Step has a concurrency class can wait
+  twice before its first attempt, once per class; each wait is its own
+  state and its own event.
+
+---
+
 ## Cross-pipeline conflicts
 
 Duplicate-scheduling equivalence (see Duplicate scheduling) applies only

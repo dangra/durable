@@ -90,7 +90,33 @@ func (p *Pipeline) Schedule(ctx context.Context, resource durable.ResourceID, in
 	case so.StartAfter > 0:
 		rec.NextAttemptAt = now.Add(so.StartAfter)
 	}
+	// The run class counts the Run as queued from admission, so the
+	// MaxQueued check and the count are one step and concurrent
+	// Schedules cannot overshoot; an admission that creates nothing is
+	// taken back. A refusal with the slot occupied is not a new Run
+	// either way — a duplicate hit or a conflict — so it goes to the
+	// store uncounted, and is counted after the fact in the one case
+	// the slot freed in between.
+	rc := p.def.cfg.RunClass
+	admitted := false
+	if rc != "" {
+		max := e.runClassQueue[rc]
+		admitted = e.runs.Admit(rc, rec.RunID, eligibilityKey(rec), max)
+		if !admitted {
+			if _, occupied, err := e.store.GetActiveRunID(ctx, p.def.ID(), resource); err != nil {
+				return Run{}, false, err
+			} else if !occupied {
+				return Run{}, false, &RunClassFullError{Class: rc, MaxQueued: max}
+			}
+		}
+	}
 	existing, created, err := e.store.CreateRun(ctx, rec, p.def.excludes)
+	switch {
+	case admitted && (err != nil || !created):
+		e.runs.Release(rec.RunID)
+	case rc != "" && !admitted && created:
+		e.runs.Admit(rc, rec.RunID, eligibilityKey(rec), 0)
+	}
 	if err != nil {
 		return Run{}, false, err
 	}

@@ -79,7 +79,7 @@ func NewObserver(opts ...Option) (observe.Observer, error) {
 		runDuration     = histogram("durable.run.duration", "Run duration, acceptance to terminal.", runBoundaries)
 		invalidated     = counter("durable.runs.invalidated", "Runs marked invalid for the current deployment.", "{run}")
 		awaitDuration   = histogram("durable.await.duration", "Time parked on AwaitRun, first park to resolution.", runBoundaries)
-		classWait       = histogram("durable.class.wait.duration", "Time throttled on a concurrency class before a token.", attemptBoundaries)
+		classWait       = histogram("durable.class.wait.duration", "Time waited for a class token: throttled on a concurrency class, or queued on a run class (durable.class.scope).", attemptBoundaries)
 		reaped          = counter("durable.runs.reaped", "Terminal Runs deleted by retention sweeps.", "{run}")
 		storeOpDuration = histogram("durable.store.op.duration", "Store call latency.", storeBoundaries)
 	)
@@ -141,7 +141,7 @@ func NewObserver(opts ...Option) (observe.Observer, error) {
 		},
 		ClassWait: func(ev observe.ClassWaitEvent) {
 			classWait.Record(ctx, ev.Duration.Seconds(), metric.WithAttributeSet(attribute.NewSet(
-				AttrClass.String(ev.Class))))
+				AttrClass.String(ev.Class), AttrClassScope.String(ev.Scope.String()))))
 		},
 		RunsReaped: func(count int) {
 			reaped.Add(ctx, int64(count))
@@ -161,10 +161,14 @@ func NewObserver(opts ...Option) (observe.Observer, error) {
 //
 //   - durable.engine.runs.active     durable.engine.runs.awaiting
 //   - durable.engine.runs.throttled  durable.engine.runs.delayed
-//   - durable.engine.runs.invalid
+//   - durable.engine.runs.invalid    durable.engine.runs.queued
 //   - durable.engine.class.capacity  {class}
 //   - durable.engine.class.in_use    {class}
 //   - durable.engine.class.waiting   {class}
+//   - durable.engine.run_class.capacity  {class}
+//   - durable.engine.run_class.in_use    {class}
+//   - durable.engine.run_class.waiting   {class}
+//   - durable.engine.run_class.queued    {class}
 //
 // The returned Registration unregisters the callback; unregister before
 // discarding the engine.
@@ -187,6 +191,11 @@ func RegisterStats(eng *engine.Engine, opts ...Option) (metric.Registration, err
 		capacity  = gauge("durable.engine.class.capacity", "Configured token capacity of the concurrency class.", "{token}")
 		inUse     = gauge("durable.engine.class.in_use", "Concurrency class tokens currently held.", "{token}")
 		waiting   = gauge("durable.engine.class.waiting", "Runs waiting for a token of the concurrency class.", "{run}")
+		queued    = gauge("durable.engine.runs.queued", "Runs in line for a run class token.", "{run}")
+		rcCap     = gauge("durable.engine.run_class.capacity", "Configured token capacity of the run class.", "{token}")
+		rcInUse   = gauge("durable.engine.run_class.in_use", "Run class tokens currently held: started, nonterminal Runs.", "{token}")
+		rcWaiting = gauge("durable.engine.run_class.waiting", "Runs in line for a token of the run class.", "{run}")
+		rcQueued  = gauge("durable.engine.run_class.queued", "Runs of the run class accepted and not started, in line or not.", "{run}")
 	)
 	if err := errors.Join(errs...); err != nil {
 		return nil, err
@@ -199,12 +208,20 @@ func RegisterStats(eng *engine.Engine, opts ...Option) (metric.Registration, err
 		o.ObserveInt64(throttled, int64(st.ThrottledRuns))
 		o.ObserveInt64(delayed, int64(st.DelayedRuns))
 		o.ObserveInt64(invalid, int64(st.InvalidRuns))
+		o.ObserveInt64(queued, int64(st.QueuedRuns))
 		for name, cs := range st.Classes {
 			set := metric.WithAttributeSet(attribute.NewSet(AttrClass.String(name)))
 			o.ObserveInt64(capacity, int64(cs.Capacity), set)
 			o.ObserveInt64(inUse, int64(cs.InUse), set)
 			o.ObserveInt64(waiting, int64(cs.Waiting), set)
 		}
+		for name, rs := range st.RunClasses {
+			set := metric.WithAttributeSet(attribute.NewSet(AttrClass.String(name)))
+			o.ObserveInt64(rcCap, int64(rs.Capacity), set)
+			o.ObserveInt64(rcInUse, int64(rs.InUse), set)
+			o.ObserveInt64(rcWaiting, int64(rs.Waiting), set)
+			o.ObserveInt64(rcQueued, int64(rs.Queued), set)
+		}
 		return nil
-	}, active, awaiting, throttled, delayed, invalid, capacity, inUse, waiting)
+	}, active, awaiting, throttled, delayed, invalid, queued, capacity, inUse, waiting, rcCap, rcInUse, rcWaiting, rcQueued)
 }

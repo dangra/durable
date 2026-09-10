@@ -28,6 +28,7 @@ message PipelineOptions {
   string concurrency_class = 6;
   repeated string mutexes = 7;
   string failure_output = 8;
+  string run_class = 9;
   reserved 5;
   reserved "exclusion_group";
 }

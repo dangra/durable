@@ -172,6 +172,7 @@ const (
     RunStateScheduled
     RunStateAwaiting
     RunStateThrottled
+    RunStateQueued
     RunStateInvalid
     RunStateDone
 )
@@ -183,7 +184,9 @@ attempted operation is waiting for its next attempt; `RunStateAwaiting`
 means the in-flight operation is parked on other Runs (see
 [Awaiting other Runs](01-model.md#awaiting-other-runs)); `RunStateThrottled`
 means the next operation is parked on a full concurrency class (see
-[Concurrency classes](#concurrency-classes)).
+[Concurrency classes](#concurrency-classes)); `RunStateQueued` means
+the Run has not started and is in line for a token of its pipeline's
+run class (see [Run classes](01-model.md#run-classes)).
 
 `RunStateInvalid` means the current application deployment cannot safely continue the nonterminal Run.
 
@@ -319,6 +322,13 @@ type Status struct {
 
     // RunStateThrottled: the class waited for.
     ThrottledClass string
+
+    // RunStateQueued: the run class in line for.
+    QueuedClass string
+
+    // When the first attempt was reserved; zero until then. Kept on a
+    // terminal Run.
+    StartedAt time.Time
 
     // RunStateInvalid: why.
     InvalidReason string
@@ -491,6 +501,34 @@ This is the durable form of the in-transition semaphores flyd hand-rolls
 (e.g. bounding concurrent VM snapshot writes), which would starve a
 bounded worker pool if ported as blocking waits.
 
+## Run classes
+
+A run class bounds Runs, not operations: see
+[Run classes](01-model.md#run-classes) for the model. The Engine side:
+
+```go
+engine.WithRunClass("migrations", engine.RunClass{Capacity: 4, MaxQueued: 32})
+```
+
+- The gate sits in the reconcile loop before a Run's first attempt,
+  after the cancel check and the retry gate and before the
+  concurrency-class gate. A started Run (`StartedAt` set) passes on a
+  field check and never touches the pool.
+- Acquisition never blocks a worker: a Run finding its class full is
+  queued (`RunStateQueued`, exposing the class), its worker released,
+  and it is redispatched by the release that frees a token. Grants go
+  out in line order, to every Run that fits.
+- The token is released at the terminality commit, whatever the
+  outcome, and the head of the line is woken.
+- An invalid Run keeps its token if it holds one and leaves the line
+  if it does not, so it never holds up the Runs behind it; a corrected
+  deployment puts it back in line at its own place.
+- At `Start`, before any worker runs, every nonterminal head of a
+  class is seeded: started ones hold, unstarted ones count as queued
+  and take their place at their first dispatch.
+- `MaxQueued` is checked and counted in one step at `Schedule`, before
+  the store write; an admission that creates nothing is taken back.
+
 ---
 
 ## Immediate continuation
@@ -653,8 +691,10 @@ compensation did not happen. `InputBytes` on a terminal Run returns
 The Cursor is the per-Run scheduling state: phase, retry/start
 eligibility, last-error fields, the **single in-flight operation**
 (step, attempt count), its park while awaiting other Runs (targets,
-mode, deadline), and the memory of its last resolved park (targets,
-done, expired) — leaning on the one-operation-per-Run invariant.
+mode, deadline), the memory of its last resolved park (targets, done,
+expired), and the Run's start (`StartedAt`, set by the first attempt's
+reservation and carried unchanged after) — leaning on the
+one-operation-per-Run invariant.
 Because only the Cursor is rewritten per attempt, per-attempt write
 volume is bounded by the Cursor, independent of Input and State sizes
 (a park's target list is the one Cursor field that scales with
@@ -806,7 +846,8 @@ RunUnwinding   the Failure that started an unwind
 RunTerminal    the outcome
 RunInvalid     the reason
 WaiterWoken    a park resolved: targets, done, expired, time parked
-ClassWait      a throttled Run proceeding: class, time waited
+ClassWait      a Run proceeding after a class wait: class, scope
+               (operation or run), time waited
 RunsReaped     a retention sweep's count
 StoreOp        every Store call: op, write-ness, duration, error
 ```
@@ -817,8 +858,9 @@ Run. Middleware classifies a handler's return for its own telemetry with
 `AwaitRequest` (a park) and `FailureInfo` (a permanent failure).
 
 **Snapshots.** `Engine.Stats()` reports the occupancy of the moment —
-Runs with a live worker, awaiting, throttled, delayed, invalid — and per
-concurrency class its capacity, use, and queue.
+Runs with a live worker, awaiting, throttled, queued, delayed, invalid
+— per concurrency class its capacity, use, and queue, and per run class
+its capacity, holders, line, and accepted-but-unstarted count.
 
 The OpenTelemetry bridge (`contrib/durableotel`) is built entirely on
 these seams: spans per attempt linked to the scheduling trace through

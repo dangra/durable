@@ -24,6 +24,7 @@ import (
 	"github.com/dangra/durable/internal/frozen"
 	"github.com/dangra/durable/internal/joinset"
 	"github.com/dangra/durable/internal/ledger"
+	"github.com/dangra/durable/internal/runpool"
 	"github.com/dangra/durable/internal/tokenpool"
 	"github.com/dangra/durable/internal/watchset"
 )
@@ -136,6 +137,36 @@ func WithConcurrencyClass(name string, capacity int) Option {
 	}
 }
 
+// RunClass sizes a run class: a named bound on the started, nonterminal
+// Runs of the pipelines declaring it (WithRunClass).
+type RunClass struct {
+	// Capacity bounds the Runs holding the class token at once: a Run
+	// takes it when its first attempt is reserved and holds it to
+	// terminality, through retries, parks, and unwind. A full class
+	// queues the next Run in eligibility order.
+	Capacity int
+	// MaxQueued bounds the Runs of the class accepted and not yet
+	// started, queued, delayed, or not yet dispatched; Schedule refuses
+	// the next one with *RunClassFullError. Zero is unbounded.
+	MaxQueued int
+}
+
+// WithRunClass sets the capacity of a named run class. A class declared
+// by a pipeline but never configured here is unlimited (the Engine warns
+// at Start). Tokens are in-memory; what persists is the Run's start,
+// which is how a restart re-holds them. A name used both as a run class
+// and as a concurrency class is a Start error.
+func WithRunClass(name string, rc RunClass) Option {
+	return func(e *Engine) {
+		if name != "" && rc.Capacity > 0 {
+			e.runClassCapacity[name] = rc.Capacity
+			if rc.MaxQueued > 0 {
+				e.runClassQueue[name] = rc.MaxQueued
+			}
+		}
+	}
+}
+
 // RetentionPolicy configures reaping of terminal Runs. Retention is off by
 // default: without WithRetentionPolicy, terminal Runs accumulate indefinitely.
 type RetentionPolicy struct {
@@ -228,6 +259,13 @@ type Engine struct {
 	// internally locked, independent of mu.
 	pool *tokenpool.Pool[string, durable.RunID]
 
+	runClassCapacity map[string]int
+	runClassQueue    map[string]int
+	// runs holds the run-class tokens and lines: a Run of a pipeline
+	// with a run class takes its token at its first attempt and holds it
+	// to terminality. Internally locked, independent of mu.
+	runs *runpool.Pool[string, durable.RunID, string]
+
 	mu            sync.Mutex
 	started       bool
 	invalid       map[durable.RunID]*InvalidRunError
@@ -293,11 +331,15 @@ func New(store driver.Store, opts ...Option) *Engine {
 		preempted:     make(map[durable.RunID]string),
 		classCapacity: make(map[string]int),
 		awaitTimers:   make(map[durable.RunID]chan struct{}),
+
+		runClassCapacity: make(map[string]int),
+		runClassQueue:    make(map[string]int),
 	}
 	for _, o := range opts {
 		o(e)
 	}
 	e.pool = tokenpool.New[string, durable.RunID](e.classCapacity)
+	e.runs = runpool.New[string, durable.RunID, string](e.runClassCapacity)
 	// A StoreOp subscription observes every driver.Store call, so the wrap must
 	// cover the engine's own store handle.
 	if e.hasStoreObserver() {
@@ -340,6 +382,10 @@ func (e *Engine) Start(ctx context.Context) error {
 		e.mu.Unlock()
 		return ErrStarted
 	}
+	if err := e.checkRunClasses(); err != nil {
+		e.mu.Unlock()
+		return err
+	}
 	e.started = true
 	e.pipelines.Freeze()
 	e.stepOwner.Freeze()
@@ -361,6 +407,19 @@ func (e *Engine) Start(ctx context.Context) error {
 	}
 	if len(recs) > 0 {
 		e.logger.Info("durable: recovering nonterminal runs", "count", len(recs))
+	}
+	// Run-class holders are seeded before any worker runs, so a Run
+	// that started before the restart holds by right (a lowered
+	// capacity overshoots and drains) and an unstarted one counts as
+	// queued; it takes its place in line at its first dispatch.
+	for _, rec := range recs {
+		if rc := e.runClassOf(rec.PipelineID); rc != "" {
+			if rec.StartedAt.IsZero() {
+				e.runs.Admit(rc, rec.RunID, eligibilityKey(rec), 0)
+			} else {
+				e.runs.Hold(rc, rec.RunID)
+			}
+		}
 	}
 	for _, rec := range recs {
 		delay := time.Duration(0)
@@ -387,10 +446,95 @@ func (e *Engine) Start(ctx context.Context) error {
 				}
 			}
 		}
+		if rc := d.cfg.RunClass; rc != "" {
+			if _, ok := e.runClassCapacity[rc]; !ok {
+				e.logger.Warn("durable: run class has no configured capacity; unlimited",
+					"class", rc, "pipeline", d.cfg.ID)
+			}
+		}
 		return true
 	})
 	e.mu.Unlock()
 	return nil
+}
+
+// runClassOf returns the run class of a bound pipeline, or "" for a
+// pipeline without one or not registered.
+func (e *Engine) runClassOf(id durable.PipelineID) string {
+	if def, _ := e.pipelines.Get(id); def != nil {
+		return def.cfg.RunClass
+	}
+	return ""
+}
+
+// checkRunClasses refuses a name declared both as a run class and as a
+// concurrency class: the two bound different things and the same name
+// would size both.
+func (e *Engine) checkRunClasses() error {
+	for name := range e.runClassCapacity {
+		if _, ok := e.classCapacity[name]; ok {
+			return fmt.Errorf("durable: %q is configured both as a run class and as a concurrency class", name)
+		}
+	}
+	return nil
+}
+
+// acquireRunClass gates a Run's first attempt on its pipeline's run
+// class. A started Run holds already and proceeds on a field check;
+// an unstarted one takes its place in line at its eligibility time and
+// proceeds only with a token. proceed=false leaves the Run queued
+// (RunStateQueued) with its worker released; the release that frees a
+// token redispatches it. Kicks the pool owes are dispatched here.
+func (e *Engine) acquireRunClass(rec *driver.RunRecord, def *boundDef) (proceed bool) {
+	rc := def.cfg.RunClass
+	if rc == "" || !rec.StartedAt.IsZero() {
+		return true
+	}
+	_, wasQueued := e.runs.ParkedOn(rec.RunID)
+	granted, kick, ok := e.runs.Acquire(rc, rec.RunID, eligibilityKey(rec))
+	if ok {
+		e.disp.Dispatch(kick, 0)
+	}
+	if !granted {
+		if e.debugLog() {
+			e.logger.Debug("durable: run queued",
+				"pipeline", string(rec.PipelineID), "resource", string(rec.ResourceID),
+				"run", string(rec.RunID), "class", rc)
+		}
+		return false
+	}
+	if wasQueued {
+		e.emitClassWait(observe.ClassWaitEvent{
+			PipelineID: rec.PipelineID, ResourceID: rec.ResourceID,
+			RunID: rec.RunID, Class: rc, Scope: observe.ClassScopeRun,
+			Duration: e.clock.Now().Sub(eligibleSince(rec))})
+	}
+	return true
+}
+
+// releaseRunClass ends a Run's run-class membership at terminality —
+// the token if it held one, its place in line and its queued count
+// otherwise — and wakes the head of the line if that freed a token.
+func (e *Engine) releaseRunClass(id durable.RunID) {
+	if kick, ok := e.runs.Release(id); ok {
+		e.disp.Dispatch(kick, 0)
+	}
+}
+
+// eligibleSince is when an unstarted Run became eligible to start: its
+// creation, or its delayed start time. Both are in the head, so the
+// line has the same order before and after a restart.
+func eligibleSince(rec *driver.RunRecord) time.Time {
+	if rec.NextAttemptAt.After(rec.CreatedAt) {
+		return rec.NextAttemptAt
+	}
+	return rec.CreatedAt
+}
+
+// eligibilityKey orders a run class's line: eligibility time, then
+// RunID.
+func eligibilityKey(rec *driver.RunRecord) string {
+	return fmt.Sprintf("%020d/%s", eligibleSince(rec).UnixNano(), rec.RunID)
 }
 
 // acquireClass gates an operation on its step's concurrency class via
@@ -677,6 +821,9 @@ func (e *Engine) processRun(id durable.RunID) (time.Duration, bool) {
 			if delay, wait := e.retryGate(rec); wait {
 				return delay, true
 			}
+			if !e.acquireRunClass(rec, def) {
+				return 0, false
+			}
 			class := def.step(durable.StepID(dec.Step)).ConcurrencyClass
 			proceed, held, waited := e.acquireClass(rec, class)
 			if !proceed {
@@ -828,6 +975,7 @@ func (e *Engine) completeRun(rec *driver.RunRecord) {
 		"run", string(rec.RunID), "outcome", rec.Outcome.String(),
 		"elapsed", rec.UpdatedAt.Sub(rec.CreatedAt))
 	e.emitRunTerminal(rec)
+	e.releaseRunClass(rec.RunID)
 	e.waiters.Notify(rec.RunID)
 	e.awaitTargetDone(rec.RunID)
 }
@@ -1180,6 +1328,7 @@ func (e *Engine) runForward(rec *driver.RunRecord, def *boundDef, stepID durable
 	sr.Forward.Status = driver.OpUnresolved
 	sr.Forward.Attempts++
 	rec.NextAttemptAt = time.Time{}
+	e.markStarted(rec)
 	if !e.apply(rec, driver.Transition{Cursor: activeCursor(rec, stepID, sr.Forward.Attempts)}) {
 		return false, time.Second, true
 	}
@@ -1296,6 +1445,7 @@ func (e *Engine) runUnwind(rec *driver.RunRecord, def *boundDef, stepID durable.
 	sr.Unwind.Status = driver.OpUnresolved
 	sr.Unwind.Attempts++
 	rec.NextAttemptAt = time.Time{}
+	e.markStarted(rec)
 	if !e.apply(rec, driver.Transition{Cursor: activeCursor(rec, stepID, sr.Unwind.Attempts)}) {
 		return false, time.Second, true
 	}
@@ -1545,10 +1695,19 @@ func activeCursor(rec *driver.RunRecord, stepID durable.StepID, attempts uint64)
 		LastError:     rec.LastError,
 		LastReason:    rec.LastReason,
 		LastErrorAt:   rec.LastErrorAt,
+		StartedAt:     rec.StartedAt,
 	}
 }
 
 func idleCursor(rec *driver.RunRecord) driver.Cursor { return activeCursor(rec, "", 0) }
+
+// markStarted stamps the Run's first attempt reservation; later
+// reservations keep the stamp.
+func (e *Engine) markStarted(rec *driver.RunRecord) {
+	if rec.StartedAt.IsZero() {
+		rec.StartedAt = e.clock.Now()
+	}
+}
 
 // apply performs one atomic durable transition. Any unresolved operation
 // in rec covered by neither the cursor nor an explicit step write (an
@@ -1618,6 +1777,12 @@ func (e *Engine) markInvalid(rec *driver.RunRecord, stepID durable.StepID, reaso
 	e.invalid[rec.RunID] = ie
 	e.mu.Unlock()
 	e.clearClassWait(rec.RunID)
+	// An invalid Run keeps its run-class token (it is nonterminal) but
+	// must not hold the line: it leaves it, still queued, and takes its
+	// place again when a corrected deployment dispatches it.
+	if kick, ok := e.runs.Clear(rec.RunID); ok {
+		e.disp.Dispatch(kick, 0)
+	}
 	e.logger.Error("durable: run invalid for current deployment",
 		"run", rec.RunID,
 		"pipeline", rec.PipelineID,

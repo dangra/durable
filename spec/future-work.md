@@ -55,11 +55,12 @@ Any bounded retry mechanism must define exhaustion semantics separately from `du
 
 ## Scheduler fairness
 
-Potential:
+Run classes bound a pipeline's Runs in flight and cap its backlog (see
+01-model); concurrency classes bound operations. Remaining:
 
-- per-Pipeline concurrency,
-- priorities,
-- admission policies,
+- priorities, or any order within a class other than eligibility time,
+- a run class chosen at `Schedule` rather than declared by the
+  Pipeline (it would have to persist on the Run),
 - resource classes.
 
 ## Cross-Pipeline Step reuse

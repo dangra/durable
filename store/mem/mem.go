@@ -143,6 +143,7 @@ func (s *Store) ApplyTransition(_ context.Context, id kernel.RunID, t driver.Tra
 	rec.Awaiting = c.Awaiting.Clone()
 	rec.Awaited = c.Awaited.Clone()
 	rec.UpdatedAt = c.UpdatedAt
+	rec.StartedAt = c.StartedAt
 	// The Cursor's operation is the forward one in PhaseForward and the
 	// unwind one in PhaseUnwind (the Cursor contract).
 	delete(s.inflight, id)

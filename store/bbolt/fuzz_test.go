@@ -36,6 +36,7 @@ type canonRecord struct {
 	LastError, LastReason         string
 	Cancel                        *canonCancel
 	CreatedAt, UpdatedAt          int64
+	StartedAt                     int64
 }
 
 type canonStep struct {
@@ -87,6 +88,7 @@ func canonicalize(rec *driver.RunRecord) *canonRecord {
 		Awaited:   rec.Awaited.Clone(),
 		LastError: rec.LastError, LastReason: rec.LastReason,
 		CreatedAt: nanos(rec.CreatedAt), UpdatedAt: nanos(rec.UpdatedAt),
+		StartedAt: nanos(rec.StartedAt),
 	}
 	if a := rec.Awaiting; a != nil {
 		c.Awaiting = &canonAwait{Mode: a.Mode, Targets: append([]durable.RunID(nil), a.Targets...), Deadline: nanos(a.Deadline)}
@@ -280,6 +282,7 @@ func FuzzStoreContract(f *testing.F) {
 					tr.Cursor.LastReason = "reason"
 					tr.Cursor.LastErrorAt = now
 					tr.Cursor.NextAttemptAt = now.Add(time.Minute)
+					tr.Cursor.StartedAt = now
 				}
 				if arg%4 == 0 {
 					// One operation row: a failed status carries its

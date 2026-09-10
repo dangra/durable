@@ -522,6 +522,10 @@ type Cursor struct {
 	UpdatedAt     *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
 	Awaiting      *Await                 `protobuf:"bytes,10,opt,name=awaiting,proto3" json:"awaiting,omitempty"`
 	Awaited       *Wake                  `protobuf:"bytes,11,opt,name=awaited,proto3" json:"awaited,omitempty"`
+	// When the run's first attempt was reserved; unset until then and
+	// carried unchanged by every later cursor write. It is the durable
+	// fact a run class counts: a run with it set holds its class token.
+	StartedAt     *timestamppb.Timestamp `protobuf:"bytes,12,opt,name=started_at,json=startedAt,proto3" json:"started_at,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -622,6 +626,13 @@ func (x *Cursor) GetAwaiting() *Await {
 func (x *Cursor) GetAwaited() *Wake {
 	if x != nil {
 		return x.Awaited
+	}
+	return nil
+}
+
+func (x *Cursor) GetStartedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.StartedAt
 	}
 	return nil
 }
@@ -835,7 +846,10 @@ type Terminal struct {
 	Cancel *CancelRequest `protobuf:"bytes,12,opt,name=cancel,proto3" json:"cancel,omitempty"`
 	// True when the store keeps the output beside the row rather than in
 	// it, so a reader knows to look without probing for every run.
-	OutputBeside  bool `protobuf:"varint,13,opt,name=output_beside,json=outputBeside,proto3" json:"output_beside,omitempty"`
+	OutputBeside bool `protobuf:"varint,13,opt,name=output_beside,json=outputBeside,proto3" json:"output_beside,omitempty"`
+	// The cursor's started_at at terminality; unset for a run that ended
+	// without an attempt (canceled before it started).
+	StartedAt     *timestamppb.Timestamp `protobuf:"bytes,14,opt,name=started_at,json=startedAt,proto3" json:"started_at,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -961,6 +975,13 @@ func (x *Terminal) GetOutputBeside() bool {
 	return false
 }
 
+func (x *Terminal) GetStartedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.StartedAt
+	}
+	return nil
+}
+
 type CancelRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Cause         string                 `protobuf:"bytes,1,opt,name=cause,proto3" json:"cause,omitempty"`
@@ -1037,7 +1058,7 @@ const file_durable_storage_v1_storage_proto_rawDesc = "" +
 	"\x04Wake\x12\x18\n" +
 	"\atargets\x18\x01 \x03(\tR\atargets\x12\x12\n" +
 	"\x04done\x18\x02 \x03(\tR\x04done\x12\x18\n" +
-	"\aexpired\x18\x03 \x01(\bR\aexpired\"\xd8\x03\n" +
+	"\aexpired\x18\x03 \x01(\bR\aexpired\"\x93\x04\n" +
 	"\x06Cursor\x12/\n" +
 	"\x05phase\x18\x01 \x01(\x0e2\x19.durable.storage.v1.PhaseR\x05phase\x12\x17\n" +
 	"\astep_id\x18\x02 \x01(\tR\x06stepId\x12\x1a\n" +
@@ -1052,7 +1073,9 @@ const file_durable_storage_v1_storage_proto_rawDesc = "" +
 	"updated_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x125\n" +
 	"\bawaiting\x18\n" +
 	" \x01(\v2\x19.durable.storage.v1.AwaitR\bawaiting\x122\n" +
-	"\aawaited\x18\v \x01(\v2\x18.durable.storage.v1.WakeR\aawaited\"\xcc\x01\n" +
+	"\aawaited\x18\v \x01(\v2\x18.durable.storage.v1.WakeR\aawaited\x129\n" +
+	"\n" +
+	"started_at\x18\f \x01(\v2\x1a.google.protobuf.TimestampR\tstartedAt\"\xcc\x01\n" +
 	"\x0fOperationRecord\x124\n" +
 	"\x06status\x18\x01 \x01(\x0e2\x1c.durable.storage.v1.OpStatusR\x06status\x12\x1a\n" +
 	"\battempts\x18\x02 \x01(\x04R\battempts\x12\x14\n" +
@@ -1066,7 +1089,7 @@ const file_durable_storage_v1_storage_proto_rawDesc = "" +
 	"\amessage\x18\x04 \x01(\tR\amessage\x12*\n" +
 	"\x02at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\x02at\x123\n" +
 	"\x04kind\x18\x06 \x01(\x0e2\x1f.durable.storage.v1.FailureKindR\x04kind\x12\x16\n" +
-	"\x06reason\x18\a \x01(\tR\x06reason\"\xca\x06\n" +
+	"\x06reason\x18\a \x01(\tR\x06reason\"\x85\a\n" +
 	"\bTerminal\x125\n" +
 	"\aoutcome\x18\x01 \x01(\x0e2\x1b.durable.storage.v1.OutcomeR\aoutcome\x12\x16\n" +
 	"\x06output\x18\x02 \x01(\fR\x06output\x12\x15\n" +
@@ -1084,7 +1107,9 @@ const file_durable_storage_v1_storage_proto_rawDesc = "" +
 	" \x03(\v2/.durable.storage.v1.Terminal.FailedUnwindsEntryR\rfailedUnwinds\x12;\n" +
 	"\afailure\x18\v \x01(\v2!.durable.storage.v1.FailureRecordR\afailure\x129\n" +
 	"\x06cancel\x18\f \x01(\v2!.durable.storage.v1.CancelRequestR\x06cancel\x12#\n" +
-	"\routput_beside\x18\r \x01(\bR\foutputBeside\x1a>\n" +
+	"\routput_beside\x18\r \x01(\bR\foutputBeside\x129\n" +
+	"\n" +
+	"started_at\x18\x0e \x01(\v2\x1a.google.protobuf.TimestampR\tstartedAt\x1a>\n" +
 	"\x10AnnotationsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1ae\n" +
@@ -1163,26 +1188,28 @@ var file_durable_storage_v1_storage_proto_depIdxs = []int32{
 	16, // 7: durable.storage.v1.Cursor.updated_at:type_name -> google.protobuf.Timestamp
 	6,  // 8: durable.storage.v1.Cursor.awaiting:type_name -> durable.storage.v1.Await
 	7,  // 9: durable.storage.v1.Cursor.awaited:type_name -> durable.storage.v1.Wake
-	2,  // 10: durable.storage.v1.OperationRecord.status:type_name -> durable.storage.v1.OpStatus
-	10, // 11: durable.storage.v1.OperationRecord.failure:type_name -> durable.storage.v1.FailureRecord
-	0,  // 12: durable.storage.v1.FailureRecord.phase:type_name -> durable.storage.v1.Phase
-	16, // 13: durable.storage.v1.FailureRecord.at:type_name -> google.protobuf.Timestamp
-	3,  // 14: durable.storage.v1.FailureRecord.kind:type_name -> durable.storage.v1.FailureKind
-	1,  // 15: durable.storage.v1.Terminal.outcome:type_name -> durable.storage.v1.Outcome
-	16, // 16: durable.storage.v1.Terminal.created_at:type_name -> google.protobuf.Timestamp
-	14, // 17: durable.storage.v1.Terminal.annotations:type_name -> durable.storage.v1.Terminal.AnnotationsEntry
-	0,  // 18: durable.storage.v1.Terminal.phase:type_name -> durable.storage.v1.Phase
-	16, // 19: durable.storage.v1.Terminal.committed_at:type_name -> google.protobuf.Timestamp
-	15, // 20: durable.storage.v1.Terminal.failed_unwinds:type_name -> durable.storage.v1.Terminal.FailedUnwindsEntry
-	10, // 21: durable.storage.v1.Terminal.failure:type_name -> durable.storage.v1.FailureRecord
-	12, // 22: durable.storage.v1.Terminal.cancel:type_name -> durable.storage.v1.CancelRequest
-	16, // 23: durable.storage.v1.CancelRequest.at:type_name -> google.protobuf.Timestamp
-	9,  // 24: durable.storage.v1.Terminal.FailedUnwindsEntry.value:type_name -> durable.storage.v1.OperationRecord
-	25, // [25:25] is the sub-list for method output_type
-	25, // [25:25] is the sub-list for method input_type
-	25, // [25:25] is the sub-list for extension type_name
-	25, // [25:25] is the sub-list for extension extendee
-	0,  // [0:25] is the sub-list for field type_name
+	16, // 10: durable.storage.v1.Cursor.started_at:type_name -> google.protobuf.Timestamp
+	2,  // 11: durable.storage.v1.OperationRecord.status:type_name -> durable.storage.v1.OpStatus
+	10, // 12: durable.storage.v1.OperationRecord.failure:type_name -> durable.storage.v1.FailureRecord
+	0,  // 13: durable.storage.v1.FailureRecord.phase:type_name -> durable.storage.v1.Phase
+	16, // 14: durable.storage.v1.FailureRecord.at:type_name -> google.protobuf.Timestamp
+	3,  // 15: durable.storage.v1.FailureRecord.kind:type_name -> durable.storage.v1.FailureKind
+	1,  // 16: durable.storage.v1.Terminal.outcome:type_name -> durable.storage.v1.Outcome
+	16, // 17: durable.storage.v1.Terminal.created_at:type_name -> google.protobuf.Timestamp
+	14, // 18: durable.storage.v1.Terminal.annotations:type_name -> durable.storage.v1.Terminal.AnnotationsEntry
+	0,  // 19: durable.storage.v1.Terminal.phase:type_name -> durable.storage.v1.Phase
+	16, // 20: durable.storage.v1.Terminal.committed_at:type_name -> google.protobuf.Timestamp
+	15, // 21: durable.storage.v1.Terminal.failed_unwinds:type_name -> durable.storage.v1.Terminal.FailedUnwindsEntry
+	10, // 22: durable.storage.v1.Terminal.failure:type_name -> durable.storage.v1.FailureRecord
+	12, // 23: durable.storage.v1.Terminal.cancel:type_name -> durable.storage.v1.CancelRequest
+	16, // 24: durable.storage.v1.Terminal.started_at:type_name -> google.protobuf.Timestamp
+	16, // 25: durable.storage.v1.CancelRequest.at:type_name -> google.protobuf.Timestamp
+	9,  // 26: durable.storage.v1.Terminal.FailedUnwindsEntry.value:type_name -> durable.storage.v1.OperationRecord
+	27, // [27:27] is the sub-list for method output_type
+	27, // [27:27] is the sub-list for method input_type
+	27, // [27:27] is the sub-list for extension type_name
+	27, // [27:27] is the sub-list for extension extendee
+	0,  // [0:27] is the sub-list for field type_name
 }
 
 func init() { file_durable_storage_v1_storage_proto_init() }

@@ -107,6 +107,10 @@ message Cursor {
   google.protobuf.Timestamp updated_at = 8;
   Await awaiting = 10;
   Wake awaited = 11;
+  // When the run's first attempt was reserved; unset until then and
+  // carried unchanged by every later cursor write. It is the durable
+  // fact a run class counts: a run with it set holds its class token.
+  google.protobuf.Timestamp started_at = 12;
 }
 
 // OperationRecord is one operation of one step — its forward execution
@@ -168,6 +172,9 @@ message Terminal {
   // True when the store keeps the output beside the row rather than in
   // it, so a reader knows to look without probing for every run.
   bool output_beside = 13;
+  // The cursor's started_at at terminality; unset for a run that ended
+  // without an attempt (canceled before it started).
+  google.protobuf.Timestamp started_at = 14;
 }
 
 message CancelRequest {

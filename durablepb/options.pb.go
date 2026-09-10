@@ -125,6 +125,13 @@ type PipelineOptions struct {
 	// least one name. A pipeline always excludes with itself, with or
 	// without mutexes.
 	Mutexes []string `protobuf:"bytes,7,rep,name=mutexes,proto3" json:"mutexes,omitempty"`
+	// Optional run class: a named bound on this pipeline's started,
+	// nonterminal Runs. A Run takes the class token when its first attempt
+	// is reserved and holds it to terminality; a full class queues the Run
+	// in eligibility order. The engine configures the capacity
+	// (WithRunClass); a declared class without configured capacity is
+	// unlimited. Pipelines naming the same class share its capacity.
+	RunClass string `protobuf:"bytes,9,opt,name=run_class,json=runClass,proto3" json:"run_class,omitempty"`
 	// Fully-qualified failure Output message type, optional. When set, a
 	// failure reducer folds the immutable Input, the committed Step States,
 	// the Run's Failure, and the permanent unwind failures into it when the
@@ -207,6 +214,13 @@ func (x *PipelineOptions) GetMutexes() []string {
 	return nil
 }
 
+func (x *PipelineOptions) GetRunClass() string {
+	if x != nil {
+		return x.RunClass
+	}
+	return ""
+}
+
 func (x *PipelineOptions) GetFailureOutput() string {
 	if x != nil {
 		return x.FailureOutput
@@ -256,14 +270,15 @@ const file_durable_v1_options_proto_rawDesc = "" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x16\n" +
 	"\x06unwind\x18\x02 \x01(\bR\x06unwind\x12\x18\n" +
 	"\aretired\x18\x03 \x01(\bR\aretired\x12+\n" +
-	"\x11concurrency_class\x18\x04 \x01(\tR\x10concurrencyClass\"\xd3\x01\n" +
+	"\x11concurrency_class\x18\x04 \x01(\tR\x10concurrencyClass\"\xf0\x01\n" +
 	"\x0fPipelineOptions\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05input\x18\x02 \x01(\tR\x05input\x12\x16\n" +
 	"\x06output\x18\x03 \x01(\tR\x06output\x12\x14\n" +
 	"\x05steps\x18\x04 \x03(\tR\x05steps\x12+\n" +
 	"\x11concurrency_class\x18\x06 \x01(\tR\x10concurrencyClass\x12\x18\n" +
-	"\amutexes\x18\a \x03(\tR\amutexes\x12%\n" +
+	"\amutexes\x18\a \x03(\tR\amutexes\x12\x1b\n" +
+	"\trun_class\x18\t \x01(\tR\brunClass\x12%\n" +
 	"\x0efailure_output\x18\b \x01(\tR\rfailureOutput:N\n" +
 	"\x04step\x12\x1f.google.protobuf.MessageOptions\x18\x81\x95\x03 \x01(\v2\x17.durable.v1.StepOptionsR\x04step:Z\n" +
 	"\bpipeline\x12\x1f.google.protobuf.MessageOptions\x18\x82\x95\x03 \x01(\v2\x1b.durable.v1.PipelineOptionsR\bpipelineB/Z-github.com/dangra/durable/durablepb;durablepbb\x06proto3"

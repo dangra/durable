@@ -46,3 +46,16 @@ type InvalidRunError struct {
 func (e *InvalidRunError) Error() string {
 	return fmt.Sprintf("durable: run %s (pipeline %q) is invalid for the current deployment: %s", e.RunID, e.PipelineID, e.Reason)
 }
+
+// RunClassFullError reports a Schedule refused because the pipeline's
+// run class already has MaxQueued Runs accepted and not yet started.
+// Nothing was created; the caller retries once one of them starts or
+// ends.
+type RunClassFullError struct {
+	Class     string
+	MaxQueued int
+}
+
+func (e *RunClassFullError) Error() string {
+	return fmt.Sprintf("durable: run class %q has %d runs queued; schedule refused", e.Class, e.MaxQueued)
+}

@@ -30,11 +30,10 @@ type shipInvocation interface {
 	AwaitedRunID() (durable.RunID, bool)
 }
 
-// ship schedules the service's deploy as a child run — Schedule is
-// called with the attempt's ctx, so the engine records the train as its
-// parent — and parks until it lands. If the train is canceled while
-// parked, the park resolves as canceled without this handler running
-// again, and the engine cancels the child with it.
+// ship schedules the service's deploy as a child run and parks until
+// it lands, with CancelTargets: if the train is canceled while parked,
+// the park resolves as canceled without this handler running again and
+// the engine cancels the child with it.
 func (s *shipper) ship(ctx context.Context, inv shipInvocation, service string, store *durable.RunID) error {
 	if _, woken := inv.AwaitedRunID(); woken {
 		s.w.logf("[train] %s shipped", service)
@@ -48,7 +47,7 @@ func (s *shipper) ship(ctx context.Context, inv shipInvocation, service string, 
 	*store = id
 	s.w.mu.Unlock()
 	s.w.logf("[train] %s deploy scheduled; parking until it lands", service)
-	return durable.AwaitRun(id)
+	return durable.AwaitRun(id, durable.CancelTargets())
 }
 
 func (s *shipper) shipWeb(ctx context.Context, inv releasepb.ShipWebInvocation) error {

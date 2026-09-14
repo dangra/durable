@@ -262,11 +262,12 @@ func (h *shiftTraffic) Run(ctx context.Context, inv deploypb.ShiftTrafficInvocat
 Then the successful steps unwind in reverse and the run ends
 `Canceled()`. Two more rules complete the picture:
 
-- **Children are canceled with their parent.** A run scheduled from
-  inside a handler records the scheduling run as its parent; canceling
-  the parent cancels every nonterminal child, and their children in
-  turn. A parent parked on its children does not wake to do this — the
-  engine does.
+- **A park can claim its targets.** A handler that parks on runs it
+  scheduled says `durable.AwaitAll(ids, durable.CancelTargets())`;
+  canceling the run then cancels those targets too, and their own
+  flagged parks cascade on. Without the flag a park never cancels its
+  targets: waiting on a peer's run must not destroy it. The parked run
+  does not wake to do any of this — the engine does.
 - **The reduction is uncancellable.** Once the last forward step has
   succeeded, the run reduces and succeeds; a request arriving then is
   recorded and has no effect.
@@ -286,8 +287,7 @@ contexts are in play, deliberately unrelated:
 
 1. **`Schedule`'s ctx** governs only the store write that accepts the
    run. It never reaches handlers — the run outlives the request — and
-   no values flow from it. Called with an attempt's ctx from inside a
-   handler, it also records the parent for the cancel cascade.
+   no values flow from it.
 2. **The attempt ctx** a handler receives is derived fresh per attempt
    from the *engine's* context. It dies for exactly two reasons, and
    `context.Cause(ctx)` names which: engine shutdown
@@ -402,9 +402,9 @@ N children in one attempt is safe against a crash halfway only because
 is nonterminal*; a child that finishes before the retry is terminal, and
 the retry creates a fresh one, so keep child resource IDs deterministic
 and don't let a scheduling attempt do slow work after scheduling. "On
-freeze, cancel my pending children" is not the handler's job: a cancel
-resolves the park without a wake and the engine cancels the children
-it scheduled, under every mode. Cycle detection is
+freeze, cancel my pending children" is one option away: park with
+`durable.CancelTargets()` and a cancel resolves the park without a wake
+and cancels the children, under every mode. Cycle detection is
 conservative: a cycle through any edge invalidates the run, even under
 `AwaitAny` where another target might have let it escape.
 

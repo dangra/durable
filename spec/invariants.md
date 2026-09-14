@@ -232,7 +232,7 @@ Part of the [`durable` specification](README.md). This list is append-only; inva
 
 115. An attempt whose context shutdown killed and that returns an ordinary error is interrupted, not failed: no last error and no retry backoff are recorded, and the next Engine re-executes the operation subject only to recovery backoff.
 
-116. A Run scheduled from inside an attempt records that attempt's Run as its parent; canceling a Run cancels its nonterminal children with the same cause, recursively, at acceptance for a child accepted later, and at startup for one whose parent's request a crash left unapplied.
+116. A cancellation that resolves a park flagged `CancelTargets` cancels the park's targets with the same cause; a park without the flag never cancels its targets. The flag is on the cursor, so the cascade survives restart with the park.
 
 117. The operation a cancellation resolves keeps the attempts it had reserved and carries the cancellation on its record; the Run's Failure names its Step.
 

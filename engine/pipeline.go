@@ -2,7 +2,6 @@ package engine
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"github.com/dangra/durable"
 	"github.com/dangra/durable/observe"
@@ -85,11 +84,6 @@ func (p *Pipeline) Schedule(ctx context.Context, resource durable.ResourceID, in
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
-	// Scheduled from inside a forward attempt: the Run is that attempt's
-	// child, canceled with its parent.
-	if parent, ok := forwardAttemptOf(ctx); ok {
-		rec.Parent = parent
-	}
 	switch {
 	case !so.StartAt.IsZero():
 		rec.NextAttemptAt = so.StartAt
@@ -141,15 +135,6 @@ func (p *Pipeline) Schedule(ctx context.Context, resource durable.ResourceID, in
 			RunID: rec.RunID, StartAt: rec.NextAttemptAt,
 			Annotations: copyAnnotations(rec.Annotations)})
 		e.disp.Dispatch(rec.RunID, 0)
-		// A parent's cancellation cancels its attempt ctx before it lists
-		// the children to cascade to. A child committed before that
-		// point is on the list; one committed after it finds the ctx
-		// dead here. Checked after the write, so no commit falls between.
-		if pe := preemptedBy(ctx); rec.Parent != "" && pe != nil {
-			if err := e.requestCancel(context.WithoutCancel(ctx), rec.RunID, pe.Cause); err != nil && !errors.Is(err, durable.ErrRunTerminal) {
-				e.logger.Error("durable: canceling child of canceled run failed", "run", string(rec.RunID), "parent", string(rec.Parent), "error", err)
-			}
-		}
 		return Run{id: rec.RunID, engine: e}, true, nil
 	}
 

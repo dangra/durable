@@ -45,7 +45,6 @@ func MarshalRunMeta(rec *driver.RunRecord) ([]byte, error) {
 		ResourceId:  string(rec.ResourceID),
 		CreatedAt:   ts(rec.CreatedAt),
 		Annotations: rec.Annotations,
-		ParentRunId: string(rec.Parent),
 	})
 }
 
@@ -63,7 +62,6 @@ func UnmarshalRunMetaInto(b []byte, rec *driver.RunRecord) error {
 	if len(pb.GetAnnotations()) > 0 {
 		rec.Annotations = pb.GetAnnotations()
 	}
-	rec.Parent = kernel.RunID(pb.GetParentRunId())
 	return nil
 }
 
@@ -108,9 +106,10 @@ func awaitToProto(a *kernel.Await) *Await {
 		return nil
 	}
 	return &Await{
-		Mode:     awaitModeToProto(a.Mode),
-		RunIds:   runIDsToProto(a.Targets),
-		Deadline: ts(a.Deadline),
+		Mode:          awaitModeToProto(a.Mode),
+		RunIds:        runIDsToProto(a.Targets),
+		Deadline:      ts(a.Deadline),
+		CancelTargets: a.CancelTargets,
 	}
 }
 
@@ -119,9 +118,10 @@ func awaitFromProto(pb *Await) *kernel.Await {
 		return nil
 	}
 	return &kernel.Await{
-		Mode:     awaitModeFromProto(pb.GetMode()),
-		Targets:  runIDsFromProto(pb.GetRunIds()),
-		Deadline: fromTS(pb.GetDeadline()),
+		Mode:          awaitModeFromProto(pb.GetMode()),
+		Targets:       runIDsFromProto(pb.GetRunIds()),
+		Deadline:      fromTS(pb.GetDeadline()),
+		CancelTargets: pb.GetCancelTargets(),
 	}
 }
 

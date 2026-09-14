@@ -18,9 +18,10 @@
 //     via AwaitRun; the parks hold no workers and survive the restart.
 //  5. CANCELLATION — an incident freezes the release mid-way through
 //     the api deploy. Cancel cascades: the parked parent resolves as
-//     canceled without waking, the engine cancels its child deploy —
-//     the running canary's ctx dies — and both runs unwind: migrations
-//     roll back, the environment is torn down.
+//     canceled without waking, and because it parked with CancelTargets
+//     the engine cancels its child deploy — the running canary's ctx
+//     dies — and both runs unwind: migrations roll back, the
+//     environment is torn down.
 //
 // The cast: world.go is the fake platform backend, deploy.go and
 // legacy.go are today's and yesterday's deploy-service handlers,

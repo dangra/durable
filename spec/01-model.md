@@ -432,13 +432,20 @@ them is the unwind of the Steps that did succeed, and idempotent
 handlers on a later Run — the same at-least-once discipline every
 handler already owes.
 
-**Cancellation cascades to children.** A Run scheduled from inside an
-attempt — `Schedule` called with the attempt's context — records the
-scheduling Run as its parent. Canceling a Run cancels every nonterminal
-child with the same cause, and their children in turn; a child accepted
-after its parent's cancellation is canceled at acceptance. A parked
-parent does not wake to do this itself: its park resolves as canceled,
-and the Engine cancels the children.
+**Cancellation cascades through a park that claims its targets.** A
+handler that parks on Runs it scheduled says so with `CancelTargets`:
+
+```go
+return durable.AwaitAll(ids, durable.CancelTargets())
+```
+
+When a cancellation resolves such a park, the Engine cancels its
+targets with the same cause, and their own flagged parks cascade on. A
+park without the flag never cancels its targets: a Run parked on a
+peer's work must not destroy it. The parked Run does not wake to do
+any of this. A cancel landing between a handler's `Schedule` and its
+park kills the attempt's context, which is the attempt's cue to stop
+scheduling.
 
 **The reduction is uncancellable.** Once the last forward operation has
 succeeded, the Run reduces and commits its success; a request arriving
@@ -449,8 +456,9 @@ and terminates immediately, freeing its slot.
 
 Additional semantics:
 
-- The request survives restart, and so does the cascade: a child found
-  at startup whose parent carries a request is canceled.
+- The request survives restart, and so does the cascade: the park is on
+  the Run's cursor, and resolving it as canceled under a later Engine
+  cancels its targets then.
 - Canceling a Run already in unwind is recorded but changes nothing:
   unwind always runs to completion, and an unwind attempt's context is
   never canceled for a cancellation request.
@@ -481,9 +489,12 @@ return durable.AwaitRun(child.ID())                        // one target
 return durable.AwaitAll(ids)                               // every target
 return durable.AwaitAny(ids)                               // the first target
 return durable.AwaitRun(id, durable.WithAwaitTimeout(d))  // bounded
+return durable.AwaitAll(ids, durable.CancelTargets())      // targets are mine
 ```
 
-A park names its targets, its mode, and an optional deadline. It parks
+A park names its targets, its mode, an optional deadline, and whether
+its targets are the parking Run's own (see
+[Cancellation](#cancellation)). It parks
 the current operation: the operation remains unresolved (still pinning
 the Run), the worker is released, no retry attempts burn, and `Status`
 reports `RunStateAwaiting` with the targets, mode, and deadline. Any Run
@@ -544,9 +555,9 @@ mode, including `AwaitModeAny`, where another target might have let the
 park escape — a park that can deadlock is refused, not gambled on.
 
 A pending cancellation resolves the park as canceled: the operation is
-not woken and no attempt observes it; children the operation scheduled
-are canceled by the Engine (see [Cancellation](#cancellation)). The
-park survives restart.
+not woken and no attempt observes it; a park flagged `CancelTargets`
+cancels its targets (see [Cancellation](#cancellation)). The park
+survives restart.
 
 Canonical shapes:
 

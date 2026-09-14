@@ -78,9 +78,9 @@ func (r Run) Wait(ctx context.Context) (Result, error) {
 // an attempt is executing, its context is canceled (context.Cause is a
 // *PreemptedError carrying cause) and whatever it returns except success
 // resolves it as canceled. Successfully executed Steps unwind normally
-// and the Run terminates with OutcomeFailure. Nonterminal children —
-// Runs scheduled from inside this Run's attempts — are canceled with it.
-// Once the last forward operation has succeeded the Run is reducing and
+// and the Run terminates with OutcomeFailure. A park flagged
+// durable.CancelTargets cancels its targets with it. Once the last
+// forward operation has succeeded the Run is reducing and
 // no longer cancelable: the request is recorded and has no effect.
 //
 // A terminal Run returns durable.ErrRunTerminal; a missing Run durable.ErrRunNotFound. The

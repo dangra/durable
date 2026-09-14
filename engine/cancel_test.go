@@ -420,9 +420,9 @@ func childPipeline(id durable.PipelineID, release <-chan struct{}) *pipelinedef.
 	})
 }
 
-// Canceling a parent cancels the child its attempt scheduled, with the
-// same cause, and the parked parent is not woken to do it.
-func TestCancelCascadesToChild(t *testing.T) {
+// Canceling a parent parked with CancelTargets cancels the child it
+// parked on, with the same cause, and the parent is not woken to do it.
+func TestCancelCascadesThroughFlaggedPark(t *testing.T) {
 	release := make(chan struct{})
 	defer close(release)
 	var childPipe *engine.Pipeline
@@ -435,11 +435,10 @@ func TestCancelCascadesToChild(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			return durable.AwaitRun(child.ID())
+			return durable.AwaitRun(child.ID(), durable.CancelTargets())
 		})},
 	})
-	store := mem.New()
-	_, pipes := startEngine(t, store, childPipeline("cascade-child", release), parent)
+	_, pipes := startEngine(t, mem.New(), childPipeline("cascade-child", release), parent)
 	childPipe = pipes[0]
 	pRun, _, err := pipes[1].Schedule(context.Background(), "parent-res", nil)
 	if err != nil {
@@ -449,9 +448,6 @@ func TestCancelCascadesToChild(t *testing.T) {
 	child, err := childPipe.GetRun(context.Background(), st.AwaitingRunIDs[0])
 	if err != nil {
 		t.Fatalf("GetRun child: %v", err)
-	}
-	if head, err := store.GetRunHead(context.Background(), child.ID()); err != nil || head.Parent != pRun.ID() {
-		t.Fatalf("child head = %+v, %v; want parent %s", head, err, pRun.ID())
 	}
 	if err := pRun.Cancel(context.Background(), "abandon"); err != nil {
 		t.Fatalf("Cancel: %v", err)
@@ -466,130 +462,78 @@ func TestCancelCascadesToChild(t *testing.T) {
 	if n := attempts.Load(); n != 1 {
 		t.Errorf("parent attempts = %d; want 1", n)
 	}
-	if children, err := store.ListChildren(context.Background(), pRun.ID()); err != nil || len(children) != 0 {
-		t.Fatalf("ListChildren after terminality = %v, %v; want none", children, err)
-	}
 }
 
-// A child scheduled by a parent's attempt after the parent's request
-// landed is canceled at acceptance.
-func TestChildScheduledAfterParentCancelIsCanceled(t *testing.T) {
-	release := make(chan struct{})
-	defer close(release)
-	var childPipe *engine.Pipeline
-	var childID atomic.Value
-	blocked := make(chan struct{})
-	parent := pipelinedef.New(pipelinedef.Config{
-		ID: "late-parent",
-		Steps: []pipelinedef.Step{stateless("p/v1", func(ctx context.Context, inv durable.Invocation) error {
-			close(blocked)
-			<-ctx.Done() // the cancel lands here
-			child, _, err := childPipe.Schedule(ctx, "child-res", nil)
-			if err != nil {
-				return err
-			}
-			childID.Store(child.ID())
-			return ctx.Err()
-		})},
-	})
-	_, pipes := startEngine(t, mem.New(), childPipeline("late-child", release), parent)
-	childPipe = pipes[0]
-	pRun, _, err := pipes[1].Schedule(context.Background(), "parent-res", nil)
-	if err != nil {
-		t.Fatalf("Schedule parent: %v", err)
-	}
-	<-blocked
-	if err := pRun.Cancel(context.Background(), "abandon"); err != nil {
-		t.Fatalf("Cancel: %v", err)
-	}
-	if res, err := pRun.Wait(context.Background()); err != nil || !res.Canceled() {
-		t.Fatalf("parent Wait = %+v, %v; want canceled", res, err)
-	}
-	child, err := childPipe.GetRun(context.Background(), childID.Load().(durable.RunID))
-	if err != nil {
-		t.Fatalf("GetRun child: %v", err)
-	}
-	if res, err := child.Wait(context.Background()); err != nil || !res.Canceled() {
-		t.Fatalf("child Wait = %+v, %v; want canceled", res, err)
-	}
-}
-
-// A crash between a parent's request and its cascade leaves the child
-// uncanceled; the next engine reconciles it against the parent's
-// durable request.
-func TestCascadeReconciledAtStartup(t *testing.T) {
+// The flag is on the cursor: a request that reaches a parked Run under
+// a later engine cancels its targets then.
+func TestCascadeSurvivesRestart(t *testing.T) {
 	release := make(chan struct{})
 	defer close(release)
 	store := mem.New()
-	now := time.Now()
-	parentRec := &driver.RunRecord{RunID: "01PARENT", PipelineID: "recon-parent", ResourceID: "p", Phase: durable.PhaseForward, CreatedAt: now, UpdatedAt: now}
-	childRec := &driver.RunRecord{RunID: "01CHILD", PipelineID: "recon-child", ResourceID: "c", Parent: "01PARENT", Phase: durable.PhaseForward, CreatedAt: now, UpdatedAt: now}
-	for _, rec := range []*driver.RunRecord{parentRec, childRec} {
-		if _, created, err := store.CreateRun(context.Background(), rec, nil); err != nil || !created {
-			t.Fatalf("CreateRun(%s) = %v, %v", rec.RunID, created, err)
-		}
+	var childPipe *engine.Pipeline
+	parentDef := func() *pipelinedef.Definition {
+		return pipelinedef.New(pipelinedef.Config{
+			ID: "restart-parent",
+			Steps: []pipelinedef.Step{stateless("p/v1", func(ctx context.Context, inv durable.Invocation) error {
+				child, _, err := childPipe.Schedule(ctx, "child-res", nil)
+				if err != nil {
+					return err
+				}
+				return durable.AwaitRun(child.ID(), durable.CancelTargets())
+			})},
+		})
 	}
-	// The request reached the parent; the process died before the cascade.
-	if ok, err := store.RequestCancel(context.Background(), "01PARENT", driver.CancelRequest{Cause: "abandon", At: now}); err != nil || !ok {
+	e1 := engine.New(store, fastRetry, engine.WithLogger(discardTestLogger()))
+	cp, err := e1.Bind(childPipeline("restart-child", release))
+	if err != nil {
+		t.Fatalf("Bind: %v", err)
+	}
+	childPipe = cp
+	pp, err := e1.Bind(parentDef())
+	if err != nil {
+		t.Fatalf("Bind: %v", err)
+	}
+	if err := e1.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	pRun, _, err := pp.Schedule(context.Background(), "parent-res", nil)
+	if err != nil {
+		t.Fatalf("Schedule parent: %v", err)
+	}
+	childID := waitForState(t, pRun, engine.RunStateAwaiting).AwaitingRunIDs[0]
+	if err := e1.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	// The request lands while no engine runs.
+	if ok, err := store.RequestCancel(context.Background(), pRun.ID(), driver.CancelRequest{Cause: "abandon", At: time.Now()}); err != nil || !ok {
 		t.Fatalf("RequestCancel = %v, %v", ok, err)
 	}
-	parent := pipelinedef.New(pipelinedef.Config{
-		ID:    "recon-parent",
-		Steps: []pipelinedef.Step{stateless("p/v1", func(ctx context.Context, inv durable.Invocation) error { return nil })},
-	})
-	_, pipes := startEngine(t, store, childPipeline("recon-child", release), parent)
-	child, err := pipes[0].GetRun(context.Background(), "01CHILD")
+	e2 := engine.New(store, fastRetry, engine.WithRecoveryBackoff(0), engine.WithLogger(discardTestLogger()))
+	cp2, err := e2.Bind(childPipeline("restart-child", release))
+	if err != nil {
+		t.Fatalf("Bind: %v", err)
+	}
+	childPipe = cp2
+	pp2, err := e2.Bind(parentDef())
+	if err != nil {
+		t.Fatalf("Bind: %v", err)
+	}
+	if err := e2.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer e2.Stop(context.Background())
+	parent, err := pp2.GetRun(context.Background(), pRun.ID())
+	if err != nil {
+		t.Fatalf("GetRun parent: %v", err)
+	}
+	if res, err := parent.Wait(context.Background()); err != nil || !res.Canceled() {
+		t.Fatalf("parent Wait = %+v, %v; want canceled", res, err)
+	}
+	child, err := cp2.GetRun(context.Background(), childID)
 	if err != nil {
 		t.Fatalf("GetRun child: %v", err)
 	}
 	if res, err := child.Wait(context.Background()); err != nil || !res.Canceled() || res.Failure.Message != "abandon" {
 		t.Fatalf("child Wait = %+v, %v; want canceled with the parent's cause", res, err)
-	}
-}
-
-// A Run scheduled from an unwind handler is not a child: compensation
-// may need Runs that outlive the cancellation.
-func TestUnwindScheduledRunHasNoParent(t *testing.T) {
-	release := make(chan struct{})
-	defer close(release)
-	var childPipe *engine.Pipeline
-	var childID atomic.Value
-	parent := pipelinedef.New(pipelinedef.Config{
-		ID: "unwind-parent",
-		Steps: []pipelinedef.Step{
-			{
-				ID:     "a/v1",
-				Unwind: true,
-				Run:    func(ctx context.Context, inv durable.Invocation) (proto.Message, error) { return nil, nil },
-				UnwindFunc: func(ctx context.Context, inv durable.Invocation) error {
-					child, _, err := childPipe.Schedule(ctx, "cleanup-res", nil)
-					if err != nil {
-						return err
-					}
-					childID.Store(child.ID())
-					return nil
-				},
-			},
-			stateless("b/v1", func(ctx context.Context, inv durable.Invocation) error {
-				return durable.Fail(errors.New("organic"))
-			}),
-		},
-	})
-	store := mem.New()
-	_, pipes := startEngine(t, store, childPipeline("cleanup", release), parent)
-	childPipe = pipes[0]
-	pRun, _, err := pipes[1].Schedule(context.Background(), "parent-res", nil)
-	if err != nil {
-		t.Fatalf("Schedule parent: %v", err)
-	}
-	if res, err := pRun.Wait(context.Background()); err != nil || !res.Failed() {
-		t.Fatalf("parent Wait = %+v, %v; want failed", res, err)
-	}
-	head, err := store.GetRunHead(context.Background(), childID.Load().(durable.RunID))
-	if err != nil {
-		t.Fatalf("GetRunHead: %v", err)
-	}
-	if head.Parent != "" {
-		t.Fatalf("cleanup run parent = %q; want none", head.Parent)
 	}
 }

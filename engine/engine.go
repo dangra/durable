@@ -426,14 +426,6 @@ func (e *Engine) Start(ctx context.Context) error {
 		}
 		e.disp.Dispatch(rec.RunID, delay)
 	}
-	// A crash between a parent's cancel request and its cascade leaves
-	// children uncanceled; the durable request on the parent is the
-	// fact to reconcile them against.
-	for _, rec := range recs {
-		if rec.Parent != "" && rec.Cancel == nil {
-			e.cancelIfParentCanceled(ctx, rec.RunID, rec.Parent)
-		}
-	}
 
 	if e.retention.TerminalAfter > 0 {
 		e.wg.Add(1)
@@ -690,16 +682,9 @@ func hasUnresolvedOp(rec *driver.RunRecord) bool {
 	return false
 }
 
-// attemptKey marks a context as an in-flight attempt's; its value is an
-// attemptRef. Run.Wait consults it to refuse blocking a worker, and
-// Schedule to record the parent of a Run scheduled from a handler.
+// attemptKey marks a context as an in-flight attempt's; its value is the
+// executing RunID. Run.Wait consults it to refuse blocking a worker.
 type attemptKey struct{}
-
-// attemptRef identifies the attempt a context belongs to.
-type attemptRef struct {
-	id    durable.RunID
-	phase durable.Phase
-}
 
 // attemptHandle is the registered cancel of an in-flight attempt and
 // the phase it runs in: a cancellation request preempts forward
@@ -711,24 +696,14 @@ type attemptHandle struct {
 
 // inAttempt reports whether ctx is (derived from) a handler attempt context.
 func inAttempt(ctx context.Context) bool {
-	_, ok := ctx.Value(attemptKey{}).(attemptRef)
+	_, ok := ctx.Value(attemptKey{}).(durable.RunID)
 	return ok
-}
-
-// forwardAttemptOf reports the Run whose forward attempt ctx belongs to,
-// if it is one: the parent a Schedule from inside that attempt records.
-func forwardAttemptOf(ctx context.Context) (durable.RunID, bool) {
-	ref, ok := ctx.Value(attemptKey{}).(attemptRef)
-	if !ok || ref.phase != durable.PhaseForward {
-		return "", false
-	}
-	return ref.id, true
 }
 
 // attemptContext derives the per-attempt handler context and registers its
 // cancel so a cancellation request can preempt the in-flight attempt.
 func (e *Engine) attemptContext(id durable.RunID, phase durable.Phase) (context.Context, func()) {
-	ctx, cancel := context.WithCancelCause(context.WithValue(e.baseCtx, attemptKey{}, attemptRef{id: id, phase: phase}))
+	ctx, cancel := context.WithCancelCause(context.WithValue(e.baseCtx, attemptKey{}, id))
 	e.mu.Lock()
 	e.attemptCancel[id] = attemptHandle{cancel: cancel, phase: phase}
 	e.mu.Unlock()
@@ -925,10 +900,11 @@ func (e *Engine) processRun(id durable.RunID) (time.Duration, bool) {
 
 // requestCancel is the one path a cancel request takes to the store.
 // Once accepted, the Run is marked dirty so its worker re-reads, the
-// in-flight forward attempt is preempted, the Run is dispatched, and
-// the request cascades to the Run's nonterminal children. A terminal
-// Run returns durable.ErrRunTerminal, a missing one durable.ErrRunNotFound;
-// a request after the first is a no-op, since the first did all of this.
+// in-flight forward attempt is preempted, and the Run is dispatched. A
+// terminal Run returns durable.ErrRunTerminal, a missing one
+// durable.ErrRunNotFound; a request after the first is a no-op, since
+// the first did all of this. A park flagged CancelTargets cascades when
+// the worker resolves it (see cancelOperation).
 func (e *Engine) requestCancel(ctx context.Context, id durable.RunID, cause string) error {
 	cause = e.boundText(cause)
 	accepted, err := e.store.RequestCancel(ctx, id, driver.CancelRequest{Cause: cause, At: e.clock.Now()})
@@ -946,44 +922,7 @@ func (e *Engine) requestCancel(ctx context.Context, id durable.RunID, cause stri
 	e.preemptAttempt(id, cause)
 	e.disp.Wake(id)
 	e.disp.Dispatch(id, 0)
-	e.cascadeCancel(ctx, id, cause)
 	return nil
-}
-
-// cancelIfParentCanceled cancels child when its parent carries a cancel
-// request. A parent that is gone (reaped) or terminal is not canceled
-// and cancels nothing.
-func (e *Engine) cancelIfParentCanceled(ctx context.Context, child, parent durable.RunID) {
-	head, err := e.store.GetRunHead(ctx, parent)
-	switch {
-	case errors.Is(err, durable.ErrRunNotFound):
-		return
-	case err != nil:
-		e.logger.Error("durable: reading parent of run failed", "run", string(child), "parent", string(parent), "error", err)
-		return
-	case head.Cancel == nil:
-		return
-	}
-	if err := e.requestCancel(ctx, child, head.Cancel.Cause); err != nil && !errors.Is(err, durable.ErrRunTerminal) && !errors.Is(err, durable.ErrRunNotFound) {
-		e.logger.Error("durable: canceling child of canceled run failed", "run", string(child), "parent", string(parent), "error", err)
-	}
-}
-
-// cascadeCancel requests the cancellation of every nonterminal child of
-// parent. A child that cannot be reached is logged, not retried here:
-// the request is durable on the parent and startup reconciles children
-// against it.
-func (e *Engine) cascadeCancel(ctx context.Context, parent durable.RunID, cause string) {
-	children, err := e.store.ListChildren(ctx, parent)
-	if err != nil {
-		e.logger.Error("durable: listing children to cancel failed", "run", string(parent), "error", err)
-		return
-	}
-	for _, child := range children {
-		if err := e.requestCancel(ctx, child, cause); err != nil && !errors.Is(err, durable.ErrRunTerminal) && !errors.Is(err, durable.ErrRunNotFound) {
-			e.logger.Error("durable: canceling child failed", "run", string(parent), "child", string(child), "error", err)
-		}
-	}
 }
 
 // cancelOperation resolves the Run's pending forward operation as
@@ -991,8 +930,10 @@ func (e *Engine) cascadeCancel(ctx context.Context, parent durable.RunID, cause 
 // the cancellation with the attempts it had reserved — zero for a Step
 // never attempted — and the Run's Failure names the Step. err is what
 // an executing attempt returned, nil when the operation was dormant or
-// parked; a park is dropped without a wake. The cause is the request's,
-// read from the record or from the preemption that cut the attempt.
+// parked; a park is dropped without a wake, and one flagged
+// CancelTargets cancels its targets with the same cause. The cause is
+// the request's, read from the record or from the preemption that cut
+// the attempt.
 func (e *Engine) cancelOperation(rec *driver.RunRecord, stepID durable.StepID, preempted *durable.PreemptedError, err error, elapsed time.Duration) bool {
 	sr := rec.Step(stepID)
 	now := e.clock.Now()
@@ -1022,7 +963,8 @@ func (e *Engine) cancelOperation(rec *driver.RunRecord, stepID durable.StepID, p
 		Reason:  e.boundText(reason)}
 	rec.Phase = durable.PhaseUnwind
 	rec.NextAttemptAt = time.Time{}
-	if rec.Awaiting != nil {
+	park := rec.Awaiting
+	if park != nil {
 		e.unpark(rec.RunID)
 	}
 	rec.Awaiting, rec.Awaited = nil, nil
@@ -1032,6 +974,13 @@ func (e *Engine) cancelOperation(rec *driver.RunRecord, stepID durable.StepID, p
 	sr.Forward.Order = rec.NextOrder()
 	if !e.apply(rec, driver.Transition{Cursor: idleCursor(rec), Ops: []driver.OpWrite{{StepID: stepID, Phase: durable.PhaseForward, Record: sr.Forward}}, Failure: rec.Failure}) {
 		return false
+	}
+	if park != nil && park.CancelTargets {
+		for _, t := range park.Targets {
+			if err := e.requestCancel(e.baseCtx, t, cause); err != nil && !errors.Is(err, durable.ErrRunTerminal) && !errors.Is(err, durable.ErrRunNotFound) {
+				e.logger.Error("durable: canceling awaited run failed", "run", string(rec.RunID), "target", string(t), "error", err)
+			}
+		}
 	}
 	// A canceled Run may have been parked on a class without ever
 	// re-entering acquireClass; drop its park state so Stats stays

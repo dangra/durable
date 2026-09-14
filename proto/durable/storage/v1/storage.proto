@@ -67,9 +67,6 @@ message RunMeta {
   // Caller-supplied propagation metadata, immutable after acceptance:
   // trace contexts, tenant tags. Never part of dedup identity.
   map<string, string> annotations = 7;
-  // The run whose attempt scheduled this one, when scheduled from inside
-  // a handler; empty otherwise. Canceling the parent cancels the child.
-  string parent_run_id = 8;
 }
 
 enum AwaitMode {
@@ -85,6 +82,8 @@ message Await {
   repeated string run_ids = 2;
   // Absent when the park has no deadline.
   google.protobuf.Timestamp deadline = 3;
+  // The targets are the parking run's own: canceling it cancels them.
+  bool cancel_targets = 4;
 }
 
 // Wake is the resolved memory of a park: its targets, the ones terminal or

@@ -88,6 +88,9 @@ type Await struct {
 	// Deadline is the absolute time the park expires; zero when it has
 	// none.
 	Deadline time.Time
+	// CancelTargets marks the Targets as the parking Run's own: a
+	// cancellation that resolves the park cancels them too.
+	CancelTargets bool
 }
 
 // Clone returns a deep copy.

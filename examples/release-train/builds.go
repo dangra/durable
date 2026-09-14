@@ -27,9 +27,7 @@ func fast() engine.Option {
 // pipeline handle.
 func yesterdaysBuild(ctx context.Context, store driver.Store, w *world) (*engine.Engine, *releasepb.ReleaseTrainPipeline, error) {
 	eng := engine.New(store, quiet(), fast(), engine.WithRecoveryBackoff(0))
-	deploy, err := legacypb.NewDeployService(
-		&legacyProvisionEnv{w}, &legacyRunMigrations{w}, &legacyShiftTraffic{w}, reduceLegacyDeploy,
-	).Bind(eng)
+	deploy, err := legacypb.NewDeployService(&legacyDeploy{w}).Bind(eng)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -41,10 +39,7 @@ func yesterdaysBuild(ctx context.Context, store driver.Store, w *world) (*engine
 			return run.ID(), err
 		},
 	}
-	train, err := releasepb.NewReleaseTrain(
-		releasepb.PlanReleaseFunc(s.plan), releasepb.ShipWebFunc(s.shipWeb), releasepb.ShipApiFunc(s.shipApi),
-		releasepb.AnnounceFunc(s.announce),
-	).Bind(eng)
+	train, err := releasepb.NewReleaseTrain(s).Bind(eng)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -55,9 +50,7 @@ func yesterdaysBuild(ctx context.Context, store driver.Store, w *world) (*engine
 // canary-analysis step added — and the same release train.
 func todaysBuild(ctx context.Context, store driver.Store, w *world) (*engine.Engine, *releasepb.ReleaseTrainPipeline, *releasepb.DeployServicePipeline, error) {
 	eng := engine.New(store, quiet(), fast(), engine.WithRecoveryBackoff(0))
-	deploy, err := releasepb.NewDeployService(
-		&provisionEnv{w}, &runMigrations{w}, &canaryAnalysis{w}, &shiftTraffic{w}, reduceDeploy,
-	).Bind(eng)
+	deploy, err := releasepb.NewDeployService(&deploy{w}).Bind(eng)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -69,10 +62,7 @@ func todaysBuild(ctx context.Context, store driver.Store, w *world) (*engine.Eng
 			return run.ID(), err
 		},
 	}
-	train, err := releasepb.NewReleaseTrain(
-		releasepb.PlanReleaseFunc(s.plan), releasepb.ShipWebFunc(s.shipWeb), releasepb.ShipApiFunc(s.shipApi),
-		releasepb.AnnounceFunc(s.announce),
-	).Bind(eng)
+	train, err := releasepb.NewReleaseTrain(s).Bind(eng)
 	if err != nil {
 		return nil, nil, nil, err
 	}

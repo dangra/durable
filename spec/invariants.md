@@ -140,7 +140,7 @@ Part of the [`durable` specification](README.md). This list is append-only; inva
 
 69. Duplicate scheduling uses exact `proto.Equal`, including unknown fields.
 
-70. Positional generated constructors remain compile-time type-safe because every Step position has a distinct generated interface.
+70. A generated constructor takes one implementation of the pipeline's handler interface, a named method per Step; a missing or mis-typed Step is a compile error, never a positional mistake.
 
 71. Middleware wraps operations per attempt and preserves at-least-once semantics.
 

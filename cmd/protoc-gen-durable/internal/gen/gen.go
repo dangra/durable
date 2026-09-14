@@ -162,6 +162,30 @@ func Generate(p *protogen.Plugin) error {
 		}
 	}
 
+	// Every step is a method on its pipeline's handler interface, so the
+	// names a pipeline's steps and reducers take must not collide.
+	for _, pl := range pipelines {
+		methods := map[string]string{}
+		claim := func(method, by string) {
+			if prev, dup := methods[method]; dup {
+				fail("%s: handler method %s is claimed by both %s and %s", pl.msg.Desc.FullName(), method, prev, by)
+			}
+			methods[method] = by
+		}
+		if pl.output != nil {
+			claim("Reduce", "the output reducer")
+		}
+		if pl.failureOutput != nil {
+			claim("ReduceFailure", "the failure reducer")
+		}
+		for _, s := range pl.steps {
+			claim(s.msg.GoIdent.GoName, "step "+s.opts.GetId())
+			if s.opts.GetUnwind() {
+				claim("Unwind"+s.msg.GoIdent.GoName, "the unwind of step "+s.opts.GetId())
+			}
+		}
+	}
+
 	if len(errs) > 0 {
 		return errors.Join(errs...)
 	}
@@ -262,17 +286,13 @@ func emitPipeline(g *protogen.GeneratedFile, pl *pipelineDecl) {
 	for _, s := range pl.steps {
 		emitStepRef(g, s)
 	}
-	for _, s := range pl.steps {
-		emitInvocation(g, pl, s)
-		emitHandler(g, s)
-	}
+	emitInvocationAlias(g, pl)
+	emitHandlers(g, pl)
 	if pl.output != nil {
-		emitReducerType(g, pl, "Reducer", pl.output,
-			"produces the pipeline output from the immutable input and committed step states on success")
+		emitReduceHelper(g, pl, "", pl.output)
 	}
 	if pl.failureOutput != nil {
-		emitReducerType(g, pl, "FailureReducer", pl.failureOutput,
-			"produces the pipeline failure output from the immutable input, the committed step states, the run's Failure, and the permanent unwind failures once the unwind completes")
+		emitReduceHelper(g, pl, "Failure", pl.failureOutput)
 	}
 	emitMarkerView(g, pl)
 	emitDefinition(g, pl)
@@ -309,145 +329,102 @@ func emitStepRef(g *protogen.GeneratedFile, s *stepDecl) {
 	g.P()
 }
 
-func emitInvocation(g *protogen.GeneratedFile, pl *pipelineDecl, s *stepDecl) {
-	goName := s.msg.GoIdent.GoName
-	inv := goName + "Invocation"
-	core := g.QualifiedGoIdent(durablePkg.Ident("Invocation"))
+// invocationName is the pipeline's Invocation alias.
+func (pl *pipelineDecl) invocationName() string { return pl.msg.GoIdent.GoName + "Invocation" }
 
-	g.P("// ", inv, " is passed to ", goName, "Handler methods.")
-	g.P("type ", inv, " struct {")
-	g.P("core ", core)
-	g.P("}")
-	g.P()
-	g.P("// New", inv, " wraps core for calling a ", goName, "Handler directly, outside")
-	g.P("// an engine: hand it durabletest.NewInvocation to unit-test the handler.")
-	g.P("// The engine wraps its own invocations; application code never needs")
-	g.P("// this at runtime.")
-	g.P("func New", inv, "(core ", core, ") ", inv, " { return ", inv, "{core: core} }")
-	g.P()
-	g.P("func (inv ", inv, ") PipelineID() ", g.QualifiedGoIdent(durablePkg.Ident("PipelineID")), " { return inv.core.PipelineID() }")
-	g.P("func (inv ", inv, ") ResourceID() ", g.QualifiedGoIdent(durablePkg.Ident("ResourceID")), " { return inv.core.ResourceID() }")
-	g.P("func (inv ", inv, ") RunID() ", g.QualifiedGoIdent(durablePkg.Ident("RunID")), " { return inv.core.RunID() }")
-	g.P("func (inv ", inv, ") StepID() ", g.QualifiedGoIdent(durablePkg.Ident("StepID")), " { return inv.core.StepID() }")
-	g.P("func (inv ", inv, ") Attempt() uint64 { return inv.core.Attempt() }")
-	g.P("func (inv ", inv, ") Phase() ", g.QualifiedGoIdent(durablePkg.Ident("Phase")), " { return inv.core.Phase() }")
-	g.P()
-	g.P("// AwaitedRunID reports the run an earlier attempt of this operation parked")
-	g.P("// on via durable.AwaitRun, once that park resolved. Multi-target parks")
-	g.P("// are read through Awaited.")
-	g.P("func (inv ", inv, ") AwaitedRunID() (", g.QualifiedGoIdent(durablePkg.Ident("RunID")), ", bool) { return inv.core.AwaitedRunID() }")
-	g.P()
-	g.P("// Awaited reports the park an earlier attempt of this operation made, once")
-	g.P("// it resolved; ok is false on a first execution.")
-	g.P("func (inv ", inv, ") Awaited() (", g.QualifiedGoIdent(durablePkg.Ident("Wake")), ", bool) { return inv.core.Awaited() }")
-	g.P()
-	g.P("// Annotations returns a caller-owned copy of the run's immutable")
-	g.P("// acceptance-time annotations (trace contexts, tenant tags).")
-	g.P("func (inv ", inv, ") Annotations() map[string]string { return inv.core.Annotations() }")
-	g.P()
-	g.P("// Failure is the failure this run is unwinding: non-nil exactly in")
-	g.P("// durable.PhaseUnwind, nil during forward attempts.")
-	g.P("func (inv ", inv, ") Failure() *", g.QualifiedGoIdent(durablePkg.Ident("Failure")), " { return inv.core.Failure() }")
-	g.P()
-	g.P("// Logger returns a logger scoped to this invocation, with the canonical")
-	g.P("// pipeline, resource, run, step, phase, and attempt keys attached.")
-	g.P("func (inv ", inv, ") Logger() *", g.QualifiedGoIdent(slogPkg.Ident("Logger")), " { return inv.core.Logger() }")
-	g.P()
-	if pl.input != nil {
-		g.P("// Input returns a defensive caller-owned copy of the immutable pipeline input.")
-		g.P("func (inv ", inv, ") Input() *", g.QualifiedGoIdent(pl.input.GoIdent), " {")
-		g.P("msg, _ := inv.core.InputMessage().(*", g.QualifiedGoIdent(pl.input.GoIdent), ")")
-		g.P("return msg")
-		g.P("}")
-		g.P()
+// handlersName is the pipeline's handler interface.
+func (pl *pipelineDecl) handlersName() string { return pl.msg.GoIdent.GoName + "Handlers" }
+
+// inputType is the Go expression of the pipeline's Input type parameter.
+func (pl *pipelineDecl) inputType(g *protogen.GeneratedFile) string {
+	if pl.input == nil {
+		return g.QualifiedGoIdent(durablePkg.Ident("NoInput"))
 	}
-	g.P("// State returns the committed state of the referenced step for this run.")
-	g.P("// ok is false when no committed state exists.")
-	g.P("func (inv ", inv, ") State[T ", g.QualifiedGoIdent(protoPkg.Ident("Message")), "](step ", g.QualifiedGoIdent(durablePkg.Ident("StateStepRef")), "[T]) (T, bool) {")
-	g.P("return ", g.QualifiedGoIdent(durablePkg.Ident("LookupState")), "(inv.core, step)")
+	return "*" + g.QualifiedGoIdent(pl.input.GoIdent)
+}
+
+// emitInvocationAlias names the pipeline's typed invocation: one alias
+// per pipeline, shared by every handler method.
+func emitInvocationAlias(g *protogen.GeneratedFile, pl *pipelineDecl) {
+	inv := pl.invocationName()
+	g.P("// ", inv, " is the invocation every ", pl.handlersName(), " method receives:")
+	g.P("// durable.Invocation with the pipeline's Input typed.")
+	g.P("type ", inv, " = ", g.QualifiedGoIdent(durablePkg.Ident("TypedInvocation")), "[", pl.inputType(g), "]")
+	g.P()
+	g.P("// New", inv, " wraps core for calling a ", pl.handlersName(), " method directly,")
+	g.P("// outside an engine: hand it durabletest.NewInvocation to unit-test a")
+	g.P("// handler. The engine wraps its own invocations; application code never")
+	g.P("// needs this at runtime.")
+	g.P("func New", inv, "(core ", g.QualifiedGoIdent(durablePkg.Ident("Invocation")), ") ", inv, " {")
+	g.P("return ", g.QualifiedGoIdent(durablePkg.Ident("Typed")), "[", pl.inputType(g), "](core)")
 	g.P("}")
 	g.P()
 }
 
-func emitHandler(g *protogen.GeneratedFile, s *stepDecl) {
-	goName := s.msg.GoIdent.GoName
-	inv := goName + "Invocation"
-	ctx := g.QualifiedGoIdent(contextPkg.Ident("Context"))
-
-	g.P("// ", goName, "Handler implements step ", strconv(s.opts.GetId()), ".")
-	g.P("type ", goName, "Handler interface {")
+// runSig is the signature of a step's forward method, after the name.
+func (s *stepDecl) runSig(g *protogen.GeneratedFile, inv string) string {
+	sig := "(ctx " + g.QualifiedGoIdent(contextPkg.Ident("Context")) + ", inv " + inv + ") "
 	if s.hasState {
-		g.P("Run(", ctx, ", ", inv, ") (*", g.QualifiedGoIdent(s.msg.GoIdent), ", error)")
-	} else {
-		g.P("Run(", ctx, ", ", inv, ") error")
+		return sig + "(*" + g.QualifiedGoIdent(s.msg.GoIdent) + ", error)"
 	}
-	if s.opts.GetUnwind() {
-		g.P()
-		g.P("Unwind(", ctx, ", ", inv, ") error")
-	}
-	g.P("}")
-	g.P()
-	emitHandlerFuncs(g, s)
+	return sig + "error"
 }
 
-// emitHandlerFuncs emits http.HandlerFunc-style adapters: a func type for
-// single-method handler interfaces, a struct of funcs for unwind-bearing
-// ones (a func type cannot implement a two-method interface).
-func emitHandlerFuncs(g *protogen.GeneratedFile, s *stepDecl) {
-	goName := s.msg.GoIdent.GoName
-	inv := goName + "Invocation"
-	ctx := g.QualifiedGoIdent(contextPkg.Ident("Context"))
-
-	runSig := "(ctx " + ctx + ", inv " + inv + ") "
-	if s.hasState {
-		runSig += "(*" + g.QualifiedGoIdent(s.msg.GoIdent) + ", error)"
-	} else {
-		runSig += "error"
-	}
-
-	if !s.opts.GetUnwind() {
-		g.P("// ", goName, "Func adapts a function to ", goName, "Handler, in the style of")
-		g.P("// http.HandlerFunc.")
-		g.P("type ", goName, "Func func", runSig)
-		g.P()
-		g.P("func (f ", goName, "Func) Run", runSig, " { return f(ctx, inv) }")
-		g.P()
-		return
-	}
-
-	unwindSig := "(ctx " + ctx + ", inv " + inv + ") error"
-	g.P("// ", goName, "Funcs adapts a pair of functions to ", goName, "Handler.")
-	g.P("type ", goName, "Funcs struct {")
-	g.P("RunFunc func", runSig)
-	g.P("UnwindFunc func", unwindSig)
-	g.P("}")
-	g.P()
-	g.P("func (f ", goName, "Funcs) Run", runSig, " { return f.RunFunc(ctx, inv) }")
-	g.P()
-	g.P("func (f ", goName, "Funcs) Unwind", unwindSig, " { return f.UnwindFunc(ctx, inv) }")
-	g.P()
-}
-
-// emitReducerType emits one reducer func type (Reducer or FailureReducer)
-// over the pipeline marker, producing out, with its Reduce method.
-func emitReducerType(g *protogen.GeneratedFile, pl *pipelineDecl, kind string, out *protogen.Message, doc string) {
+// emitHandlers emits the pipeline's handler interface: one method per
+// step, named after the step message, an Unwind<Step> method for each
+// step that unwinds, and the reducers the pipeline declares.
+func emitHandlers(g *protogen.GeneratedFile, pl *pipelineDecl) {
 	name := pl.msg.GoIdent.GoName
-	g.P("// ", name, kind, " ", doc, ".")
-	g.P("// It must be pure: deterministic, side-effect free, synchronous, and")
-	g.P("// non-failing.")
-	g.P("type ", name, kind, " func(*", g.QualifiedGoIdent(pl.msg.GoIdent), ") *", g.QualifiedGoIdent(out.GoIdent))
+	inv := pl.invocationName()
+	ctx := g.QualifiedGoIdent(contextPkg.Ident("Context"))
+
+	g.P("// ", pl.handlersName(), " implements the ", strconv(pl.opts.GetId()), " pipeline: one method per")
+	g.P("// step, named after the step, plus Unwind<Step> for each step that")
+	g.P("// unwinds. A type implements every step or does not compile; a step")
+	g.P("// added to the pipeline is a method the next build demands.")
+	g.P("type ", pl.handlersName(), " interface {")
+	for _, s := range pl.steps {
+		goName := s.msg.GoIdent.GoName
+		g.P("// ", goName, " runs step ", strconv(s.opts.GetId()), ".")
+		g.P(goName, s.runSig(g, inv))
+		if s.opts.GetUnwind() {
+			g.P("// Unwind", goName, " compensates step ", strconv(s.opts.GetId()), " once it")
+			g.P("// succeeded and the run unwinds.")
+			g.P("Unwind", goName, "(ctx ", ctx, ", inv ", inv, ") error")
+		}
+	}
+	if pl.output != nil {
+		g.P("// Reduce produces the pipeline output from the immutable input and")
+		g.P("// committed step states on success. It must be pure: deterministic,")
+		g.P("// side-effect free, synchronous, and non-failing.")
+		g.P("Reduce(*", g.QualifiedGoIdent(pl.msg.GoIdent), ") *", g.QualifiedGoIdent(pl.output.GoIdent))
+	}
+	if pl.failureOutput != nil {
+		g.P("// ReduceFailure produces the pipeline failure output from the immutable")
+		g.P("// input, the committed step states, the run's Failure, and the permanent")
+		g.P("// unwind failures once the unwind completes. It must be pure.")
+		g.P("ReduceFailure(*", g.QualifiedGoIdent(pl.msg.GoIdent), ") *", g.QualifiedGoIdent(pl.failureOutput.GoIdent))
+	}
+	g.P("}")
 	g.P()
+	_ = name
+}
+
+// emitReduceHelper emits Reduce<Pipeline>[Failure](h, view): the fold the
+// engine reduces through and a reducer unit test calls with a
+// durabletest.NewInvocation (which is also a durable.ReduceView).
+func emitReduceHelper(g *protogen.GeneratedFile, pl *pipelineDecl, kind string, out *protogen.Message) {
+	name := pl.msg.GoIdent.GoName
 	views := lowerFirst(name) + "Views"
-	g.P("// Reduce folds view through r: the marker the reducer receives reads")
-	g.P("// its Input, States, and failures from view for the duration of the")
-	g.P("// call. The engine reduces through it; a unit test hands it")
-	g.P("// durabletest.NewInvocation (which is also a durable.ReduceView) to")
-	g.P("// exercise the reducer alone.")
-	g.P("func (r ", name, kind, ") Reduce(view ", g.QualifiedGoIdent(durablePkg.Ident("ReduceView")), ") *", g.QualifiedGoIdent(out.GoIdent), " {")
+	fn := "Reduce" + name + kind
+	g.P("// ", fn, " folds view through h.Reduce", kind, ": the marker the reducer")
+	g.P("// receives reads its Input, States, and failures from view for the")
+	g.P("// duration of the call.")
+	g.P("func ", fn, "(h ", pl.handlersName(), ", view ", g.QualifiedGoIdent(durablePkg.Ident("ReduceView")), ") *", g.QualifiedGoIdent(out.GoIdent), " {")
 	g.P("x := &", g.QualifiedGoIdent(pl.msg.GoIdent), "{}")
 	g.P(views, ".Store(x, view)")
 	g.P("defer ", views, ".Delete(x)")
-	g.P("return r(x)")
+	g.P("return h.Reduce", kind, "(x)")
 	g.P("}")
 	g.P()
 }
@@ -508,26 +485,8 @@ func emitDefinition(g *protogen.GeneratedFile, pl *pipelineDecl) {
 	g.P()
 
 	g.P("// New", name, " assembles the ", strconv(pl.opts.GetId()), " pipeline definition")
-	g.P("// from its step handlers", func() string {
-		switch {
-		case pl.output != nil && pl.failureOutput != nil:
-			return " and reducers"
-		case pl.output != nil || pl.failureOutput != nil:
-			return " and reducer"
-		}
-		return ""
-	}(), ".")
-	g.P("func New", name, "(")
-	for _, s := range pl.steps {
-		g.P(lowerFirst(s.msg.GoIdent.GoName), " ", s.msg.GoIdent.GoName, "Handler,")
-	}
-	if pl.output != nil {
-		g.P("reduce ", name, "Reducer,")
-	}
-	if pl.failureOutput != nil {
-		g.P("reduceFailure ", name, "FailureReducer,")
-	}
-	g.P(") *", name, "Definition {")
+	g.P("// from its handlers.")
+	g.P("func New", name, "(h ", pl.handlersName(), ") *", name, "Definition {")
 	g.P("return &", name, "Definition{def: ", g.QualifiedGoIdent(defPkg.Ident("New")), "(", g.QualifiedGoIdent(defPkg.Ident("Config")), "{")
 	g.P("ID: ", strconv(pl.opts.GetId()), ",")
 	if ms := pl.opts.GetMutexes(); len(ms) > 0 {
@@ -548,18 +507,18 @@ func emitDefinition(g *protogen.GeneratedFile, pl *pipelineDecl) {
 	}
 	if pl.output != nil {
 		g.P("Reduce: func(view ", g.QualifiedGoIdent(durablePkg.Ident("ReduceView")), ") ", protoMsg, " {")
-		g.P("return reduce.Reduce(view)")
+		g.P("return Reduce", name, "(h, view)")
 		g.P("},")
 	}
 	if pl.failureOutput != nil {
 		g.P("ReduceFailure: func(view ", g.QualifiedGoIdent(durablePkg.Ident("ReduceView")), ") ", protoMsg, " {")
-		g.P("return reduceFailure.Reduce(view)")
+		g.P("return Reduce", name, "Failure(h, view)")
 		g.P("},")
 	}
 	g.P("Steps: []", g.QualifiedGoIdent(defPkg.Ident("Step")), "{")
+	typed := g.QualifiedGoIdent(durablePkg.Ident("Typed")) + "[" + pl.inputType(g) + "]"
 	for _, s := range pl.steps {
 		goName := s.msg.GoIdent.GoName
-		param := lowerFirst(goName)
 		g.P("{")
 		g.P("ID: ", strconv(s.opts.GetId()), ",")
 		if s.opts.GetUnwind() {
@@ -574,7 +533,7 @@ func emitDefinition(g *protogen.GeneratedFile, pl *pipelineDecl) {
 		if s.hasState {
 			g.P("HasState: true,")
 			g.P("Run: func(ctx ", ctx, ", core ", core, ") (", protoMsg, ", error) {")
-			g.P("state, err := ", param, ".Run(ctx, ", goName, "Invocation{core: core})")
+			g.P("state, err := h.", goName, "(ctx, ", typed, "(core))")
 			g.P("if state == nil {")
 			g.P("return nil, err")
 			g.P("}")
@@ -582,12 +541,12 @@ func emitDefinition(g *protogen.GeneratedFile, pl *pipelineDecl) {
 			g.P("},")
 		} else {
 			g.P("Run: func(ctx ", ctx, ", core ", core, ") (", protoMsg, ", error) {")
-			g.P("return nil, ", param, ".Run(ctx, ", goName, "Invocation{core: core})")
+			g.P("return nil, h.", goName, "(ctx, ", typed, "(core))")
 			g.P("},")
 		}
 		if s.opts.GetUnwind() {
 			g.P("UnwindFunc: func(ctx ", ctx, ", core ", core, ") error {")
-			g.P("return ", param, ".Unwind(ctx, ", goName, "Invocation{core: core})")
+			g.P("return h.Unwind", goName, "(ctx, ", typed, "(core))")
 			g.P("},")
 		}
 		g.P("},")

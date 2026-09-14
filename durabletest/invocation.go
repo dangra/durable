@@ -54,7 +54,9 @@ type InvocationConfig struct {
 // Invocation is a fake durable.Invocation (and durable.ReduceView) for
 // handler and reducer unit tests: it needs no engine and no store, and it
 // records the contract violations a real engine would invalidate the Run
-// for, readable through Violation.
+// for, readable through Violation. A generated pipeline's method takes it
+// through the package's NewXxxInvocation (durable.Typed underneath), and
+// its ReduceXxx folds the reducer over it.
 type Invocation struct {
 	cfg    InvocationConfig
 	states map[durable.StepID][]byte

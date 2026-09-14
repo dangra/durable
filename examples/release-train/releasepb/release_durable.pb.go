@@ -12,7 +12,6 @@ import (
 	engine "github.com/dangra/durable/engine"
 	pipelinedef "github.com/dangra/durable/pipelinedef"
 	proto "google.golang.org/protobuf/proto"
-	slog "log/slog"
 	sync "sync"
 )
 
@@ -28,309 +27,51 @@ var CanaryAnalysisStep = pipelinedef.StateStepRef("canary-analysis/v1", func() *
 // ShiftTrafficStep is the typed reference to the state-producing step "shift-traffic/v1".
 var ShiftTrafficStep = pipelinedef.StateStepRef("shift-traffic/v1", func() *ShiftTraffic { return &ShiftTraffic{} })
 
-// ProvisionEnvInvocation is passed to ProvisionEnvHandler methods.
-type ProvisionEnvInvocation struct {
-	core durable.Invocation
+// DeployServiceInvocation is the invocation every DeployServiceHandlers method receives:
+// durable.Invocation with the pipeline's Input typed.
+type DeployServiceInvocation = durable.TypedInvocation[*DeployServiceInput]
+
+// NewDeployServiceInvocation wraps core for calling a DeployServiceHandlers method directly,
+// outside an engine: hand it durabletest.NewInvocation to unit-test a
+// handler. The engine wraps its own invocations; application code never
+// needs this at runtime.
+func NewDeployServiceInvocation(core durable.Invocation) DeployServiceInvocation {
+	return durable.Typed[*DeployServiceInput](core)
 }
 
-// NewProvisionEnvInvocation wraps core for calling a ProvisionEnvHandler directly, outside
-// an engine: hand it durabletest.NewInvocation to unit-test the handler.
-// The engine wraps its own invocations; application code never needs
-// this at runtime.
-func NewProvisionEnvInvocation(core durable.Invocation) ProvisionEnvInvocation {
-	return ProvisionEnvInvocation{core: core}
+// DeployServiceHandlers implements the "deploy-service" pipeline: one method per
+// step, named after the step, plus Unwind<Step> for each step that
+// unwinds. A type implements every step or does not compile; a step
+// added to the pipeline is a method the next build demands.
+type DeployServiceHandlers interface {
+	// ProvisionEnv runs step "provision-env/v1".
+	ProvisionEnv(ctx context.Context, inv DeployServiceInvocation) (*ProvisionEnv, error)
+	// UnwindProvisionEnv compensates step "provision-env/v1" once it
+	// succeeded and the run unwinds.
+	UnwindProvisionEnv(ctx context.Context, inv DeployServiceInvocation) error
+	// RunMigrations runs step "run-migrations/v1".
+	RunMigrations(ctx context.Context, inv DeployServiceInvocation) (*RunMigrations, error)
+	// UnwindRunMigrations compensates step "run-migrations/v1" once it
+	// succeeded and the run unwinds.
+	UnwindRunMigrations(ctx context.Context, inv DeployServiceInvocation) error
+	// CanaryAnalysis runs step "canary-analysis/v1".
+	CanaryAnalysis(ctx context.Context, inv DeployServiceInvocation) (*CanaryAnalysis, error)
+	// ShiftTraffic runs step "shift-traffic/v1".
+	ShiftTraffic(ctx context.Context, inv DeployServiceInvocation) (*ShiftTraffic, error)
+	// Reduce produces the pipeline output from the immutable input and
+	// committed step states on success. It must be pure: deterministic,
+	// side-effect free, synchronous, and non-failing.
+	Reduce(*DeployService) *DeployServiceOutput
 }
 
-func (inv ProvisionEnvInvocation) PipelineID() durable.PipelineID { return inv.core.PipelineID() }
-func (inv ProvisionEnvInvocation) ResourceID() durable.ResourceID { return inv.core.ResourceID() }
-func (inv ProvisionEnvInvocation) RunID() durable.RunID           { return inv.core.RunID() }
-func (inv ProvisionEnvInvocation) StepID() durable.StepID         { return inv.core.StepID() }
-func (inv ProvisionEnvInvocation) Attempt() uint64                { return inv.core.Attempt() }
-func (inv ProvisionEnvInvocation) Phase() durable.Phase           { return inv.core.Phase() }
-
-// AwaitedRunID reports the run an earlier attempt of this operation parked
-// on via durable.AwaitRun, once that park resolved. Multi-target parks
-// are read through Awaited.
-func (inv ProvisionEnvInvocation) AwaitedRunID() (durable.RunID, bool) {
-	return inv.core.AwaitedRunID()
-}
-
-// Awaited reports the park an earlier attempt of this operation made, once
-// it resolved; ok is false on a first execution.
-func (inv ProvisionEnvInvocation) Awaited() (durable.Wake, bool) { return inv.core.Awaited() }
-
-// Annotations returns a caller-owned copy of the run's immutable
-// acceptance-time annotations (trace contexts, tenant tags).
-func (inv ProvisionEnvInvocation) Annotations() map[string]string { return inv.core.Annotations() }
-
-// Failure is the failure this run is unwinding: non-nil exactly in
-// durable.PhaseUnwind, nil during forward attempts.
-func (inv ProvisionEnvInvocation) Failure() *durable.Failure { return inv.core.Failure() }
-
-// Logger returns a logger scoped to this invocation, with the canonical
-// pipeline, resource, run, step, phase, and attempt keys attached.
-func (inv ProvisionEnvInvocation) Logger() *slog.Logger { return inv.core.Logger() }
-
-// Input returns a defensive caller-owned copy of the immutable pipeline input.
-func (inv ProvisionEnvInvocation) Input() *DeployServiceInput {
-	msg, _ := inv.core.InputMessage().(*DeployServiceInput)
-	return msg
-}
-
-// State returns the committed state of the referenced step for this run.
-// ok is false when no committed state exists.
-func (inv ProvisionEnvInvocation) State[T proto.Message](step durable.StateStepRef[T]) (T, bool) {
-	return durable.LookupState(inv.core, step)
-}
-
-// ProvisionEnvHandler implements step "provision-env/v1".
-type ProvisionEnvHandler interface {
-	Run(context.Context, ProvisionEnvInvocation) (*ProvisionEnv, error)
-
-	Unwind(context.Context, ProvisionEnvInvocation) error
-}
-
-// ProvisionEnvFuncs adapts a pair of functions to ProvisionEnvHandler.
-type ProvisionEnvFuncs struct {
-	RunFunc    func(ctx context.Context, inv ProvisionEnvInvocation) (*ProvisionEnv, error)
-	UnwindFunc func(ctx context.Context, inv ProvisionEnvInvocation) error
-}
-
-func (f ProvisionEnvFuncs) Run(ctx context.Context, inv ProvisionEnvInvocation) (*ProvisionEnv, error) {
-	return f.RunFunc(ctx, inv)
-}
-
-func (f ProvisionEnvFuncs) Unwind(ctx context.Context, inv ProvisionEnvInvocation) error {
-	return f.UnwindFunc(ctx, inv)
-}
-
-// RunMigrationsInvocation is passed to RunMigrationsHandler methods.
-type RunMigrationsInvocation struct {
-	core durable.Invocation
-}
-
-// NewRunMigrationsInvocation wraps core for calling a RunMigrationsHandler directly, outside
-// an engine: hand it durabletest.NewInvocation to unit-test the handler.
-// The engine wraps its own invocations; application code never needs
-// this at runtime.
-func NewRunMigrationsInvocation(core durable.Invocation) RunMigrationsInvocation {
-	return RunMigrationsInvocation{core: core}
-}
-
-func (inv RunMigrationsInvocation) PipelineID() durable.PipelineID { return inv.core.PipelineID() }
-func (inv RunMigrationsInvocation) ResourceID() durable.ResourceID { return inv.core.ResourceID() }
-func (inv RunMigrationsInvocation) RunID() durable.RunID           { return inv.core.RunID() }
-func (inv RunMigrationsInvocation) StepID() durable.StepID         { return inv.core.StepID() }
-func (inv RunMigrationsInvocation) Attempt() uint64                { return inv.core.Attempt() }
-func (inv RunMigrationsInvocation) Phase() durable.Phase           { return inv.core.Phase() }
-
-// AwaitedRunID reports the run an earlier attempt of this operation parked
-// on via durable.AwaitRun, once that park resolved. Multi-target parks
-// are read through Awaited.
-func (inv RunMigrationsInvocation) AwaitedRunID() (durable.RunID, bool) {
-	return inv.core.AwaitedRunID()
-}
-
-// Awaited reports the park an earlier attempt of this operation made, once
-// it resolved; ok is false on a first execution.
-func (inv RunMigrationsInvocation) Awaited() (durable.Wake, bool) { return inv.core.Awaited() }
-
-// Annotations returns a caller-owned copy of the run's immutable
-// acceptance-time annotations (trace contexts, tenant tags).
-func (inv RunMigrationsInvocation) Annotations() map[string]string { return inv.core.Annotations() }
-
-// Failure is the failure this run is unwinding: non-nil exactly in
-// durable.PhaseUnwind, nil during forward attempts.
-func (inv RunMigrationsInvocation) Failure() *durable.Failure { return inv.core.Failure() }
-
-// Logger returns a logger scoped to this invocation, with the canonical
-// pipeline, resource, run, step, phase, and attempt keys attached.
-func (inv RunMigrationsInvocation) Logger() *slog.Logger { return inv.core.Logger() }
-
-// Input returns a defensive caller-owned copy of the immutable pipeline input.
-func (inv RunMigrationsInvocation) Input() *DeployServiceInput {
-	msg, _ := inv.core.InputMessage().(*DeployServiceInput)
-	return msg
-}
-
-// State returns the committed state of the referenced step for this run.
-// ok is false when no committed state exists.
-func (inv RunMigrationsInvocation) State[T proto.Message](step durable.StateStepRef[T]) (T, bool) {
-	return durable.LookupState(inv.core, step)
-}
-
-// RunMigrationsHandler implements step "run-migrations/v1".
-type RunMigrationsHandler interface {
-	Run(context.Context, RunMigrationsInvocation) (*RunMigrations, error)
-
-	Unwind(context.Context, RunMigrationsInvocation) error
-}
-
-// RunMigrationsFuncs adapts a pair of functions to RunMigrationsHandler.
-type RunMigrationsFuncs struct {
-	RunFunc    func(ctx context.Context, inv RunMigrationsInvocation) (*RunMigrations, error)
-	UnwindFunc func(ctx context.Context, inv RunMigrationsInvocation) error
-}
-
-func (f RunMigrationsFuncs) Run(ctx context.Context, inv RunMigrationsInvocation) (*RunMigrations, error) {
-	return f.RunFunc(ctx, inv)
-}
-
-func (f RunMigrationsFuncs) Unwind(ctx context.Context, inv RunMigrationsInvocation) error {
-	return f.UnwindFunc(ctx, inv)
-}
-
-// CanaryAnalysisInvocation is passed to CanaryAnalysisHandler methods.
-type CanaryAnalysisInvocation struct {
-	core durable.Invocation
-}
-
-// NewCanaryAnalysisInvocation wraps core for calling a CanaryAnalysisHandler directly, outside
-// an engine: hand it durabletest.NewInvocation to unit-test the handler.
-// The engine wraps its own invocations; application code never needs
-// this at runtime.
-func NewCanaryAnalysisInvocation(core durable.Invocation) CanaryAnalysisInvocation {
-	return CanaryAnalysisInvocation{core: core}
-}
-
-func (inv CanaryAnalysisInvocation) PipelineID() durable.PipelineID { return inv.core.PipelineID() }
-func (inv CanaryAnalysisInvocation) ResourceID() durable.ResourceID { return inv.core.ResourceID() }
-func (inv CanaryAnalysisInvocation) RunID() durable.RunID           { return inv.core.RunID() }
-func (inv CanaryAnalysisInvocation) StepID() durable.StepID         { return inv.core.StepID() }
-func (inv CanaryAnalysisInvocation) Attempt() uint64                { return inv.core.Attempt() }
-func (inv CanaryAnalysisInvocation) Phase() durable.Phase           { return inv.core.Phase() }
-
-// AwaitedRunID reports the run an earlier attempt of this operation parked
-// on via durable.AwaitRun, once that park resolved. Multi-target parks
-// are read through Awaited.
-func (inv CanaryAnalysisInvocation) AwaitedRunID() (durable.RunID, bool) {
-	return inv.core.AwaitedRunID()
-}
-
-// Awaited reports the park an earlier attempt of this operation made, once
-// it resolved; ok is false on a first execution.
-func (inv CanaryAnalysisInvocation) Awaited() (durable.Wake, bool) { return inv.core.Awaited() }
-
-// Annotations returns a caller-owned copy of the run's immutable
-// acceptance-time annotations (trace contexts, tenant tags).
-func (inv CanaryAnalysisInvocation) Annotations() map[string]string { return inv.core.Annotations() }
-
-// Failure is the failure this run is unwinding: non-nil exactly in
-// durable.PhaseUnwind, nil during forward attempts.
-func (inv CanaryAnalysisInvocation) Failure() *durable.Failure { return inv.core.Failure() }
-
-// Logger returns a logger scoped to this invocation, with the canonical
-// pipeline, resource, run, step, phase, and attempt keys attached.
-func (inv CanaryAnalysisInvocation) Logger() *slog.Logger { return inv.core.Logger() }
-
-// Input returns a defensive caller-owned copy of the immutable pipeline input.
-func (inv CanaryAnalysisInvocation) Input() *DeployServiceInput {
-	msg, _ := inv.core.InputMessage().(*DeployServiceInput)
-	return msg
-}
-
-// State returns the committed state of the referenced step for this run.
-// ok is false when no committed state exists.
-func (inv CanaryAnalysisInvocation) State[T proto.Message](step durable.StateStepRef[T]) (T, bool) {
-	return durable.LookupState(inv.core, step)
-}
-
-// CanaryAnalysisHandler implements step "canary-analysis/v1".
-type CanaryAnalysisHandler interface {
-	Run(context.Context, CanaryAnalysisInvocation) (*CanaryAnalysis, error)
-}
-
-// CanaryAnalysisFunc adapts a function to CanaryAnalysisHandler, in the style of
-// http.HandlerFunc.
-type CanaryAnalysisFunc func(ctx context.Context, inv CanaryAnalysisInvocation) (*CanaryAnalysis, error)
-
-func (f CanaryAnalysisFunc) Run(ctx context.Context, inv CanaryAnalysisInvocation) (*CanaryAnalysis, error) {
-	return f(ctx, inv)
-}
-
-// ShiftTrafficInvocation is passed to ShiftTrafficHandler methods.
-type ShiftTrafficInvocation struct {
-	core durable.Invocation
-}
-
-// NewShiftTrafficInvocation wraps core for calling a ShiftTrafficHandler directly, outside
-// an engine: hand it durabletest.NewInvocation to unit-test the handler.
-// The engine wraps its own invocations; application code never needs
-// this at runtime.
-func NewShiftTrafficInvocation(core durable.Invocation) ShiftTrafficInvocation {
-	return ShiftTrafficInvocation{core: core}
-}
-
-func (inv ShiftTrafficInvocation) PipelineID() durable.PipelineID { return inv.core.PipelineID() }
-func (inv ShiftTrafficInvocation) ResourceID() durable.ResourceID { return inv.core.ResourceID() }
-func (inv ShiftTrafficInvocation) RunID() durable.RunID           { return inv.core.RunID() }
-func (inv ShiftTrafficInvocation) StepID() durable.StepID         { return inv.core.StepID() }
-func (inv ShiftTrafficInvocation) Attempt() uint64                { return inv.core.Attempt() }
-func (inv ShiftTrafficInvocation) Phase() durable.Phase           { return inv.core.Phase() }
-
-// AwaitedRunID reports the run an earlier attempt of this operation parked
-// on via durable.AwaitRun, once that park resolved. Multi-target parks
-// are read through Awaited.
-func (inv ShiftTrafficInvocation) AwaitedRunID() (durable.RunID, bool) {
-	return inv.core.AwaitedRunID()
-}
-
-// Awaited reports the park an earlier attempt of this operation made, once
-// it resolved; ok is false on a first execution.
-func (inv ShiftTrafficInvocation) Awaited() (durable.Wake, bool) { return inv.core.Awaited() }
-
-// Annotations returns a caller-owned copy of the run's immutable
-// acceptance-time annotations (trace contexts, tenant tags).
-func (inv ShiftTrafficInvocation) Annotations() map[string]string { return inv.core.Annotations() }
-
-// Failure is the failure this run is unwinding: non-nil exactly in
-// durable.PhaseUnwind, nil during forward attempts.
-func (inv ShiftTrafficInvocation) Failure() *durable.Failure { return inv.core.Failure() }
-
-// Logger returns a logger scoped to this invocation, with the canonical
-// pipeline, resource, run, step, phase, and attempt keys attached.
-func (inv ShiftTrafficInvocation) Logger() *slog.Logger { return inv.core.Logger() }
-
-// Input returns a defensive caller-owned copy of the immutable pipeline input.
-func (inv ShiftTrafficInvocation) Input() *DeployServiceInput {
-	msg, _ := inv.core.InputMessage().(*DeployServiceInput)
-	return msg
-}
-
-// State returns the committed state of the referenced step for this run.
-// ok is false when no committed state exists.
-func (inv ShiftTrafficInvocation) State[T proto.Message](step durable.StateStepRef[T]) (T, bool) {
-	return durable.LookupState(inv.core, step)
-}
-
-// ShiftTrafficHandler implements step "shift-traffic/v1".
-type ShiftTrafficHandler interface {
-	Run(context.Context, ShiftTrafficInvocation) (*ShiftTraffic, error)
-}
-
-// ShiftTrafficFunc adapts a function to ShiftTrafficHandler, in the style of
-// http.HandlerFunc.
-type ShiftTrafficFunc func(ctx context.Context, inv ShiftTrafficInvocation) (*ShiftTraffic, error)
-
-func (f ShiftTrafficFunc) Run(ctx context.Context, inv ShiftTrafficInvocation) (*ShiftTraffic, error) {
-	return f(ctx, inv)
-}
-
-// DeployServiceReducer produces the pipeline output from the immutable input and committed step states on success.
-// It must be pure: deterministic, side-effect free, synchronous, and
-// non-failing.
-type DeployServiceReducer func(*DeployService) *DeployServiceOutput
-
-// Reduce folds view through r: the marker the reducer receives reads
-// its Input, States, and failures from view for the duration of the
-// call. The engine reduces through it; a unit test hands it
-// durabletest.NewInvocation (which is also a durable.ReduceView) to
-// exercise the reducer alone.
-func (r DeployServiceReducer) Reduce(view durable.ReduceView) *DeployServiceOutput {
+// ReduceDeployService folds view through h.Reduce: the marker the reducer
+// receives reads its Input, States, and failures from view for the
+// duration of the call.
+func ReduceDeployService(h DeployServiceHandlers, view durable.ReduceView) *DeployServiceOutput {
 	x := &DeployService{}
 	deployServiceViews.Store(x, view)
 	defer deployServiceViews.Delete(x)
-	return r(x)
+	return h.Reduce(x)
 }
 
 var deployServiceViews sync.Map
@@ -373,19 +114,13 @@ type DeployServiceDefinition struct {
 }
 
 // NewDeployService assembles the "deploy-service" pipeline definition
-// from its step handlers and reducer.
-func NewDeployService(
-	provisionEnv ProvisionEnvHandler,
-	runMigrations RunMigrationsHandler,
-	canaryAnalysis CanaryAnalysisHandler,
-	shiftTraffic ShiftTrafficHandler,
-	reduce DeployServiceReducer,
-) *DeployServiceDefinition {
+// from its handlers.
+func NewDeployService(h DeployServiceHandlers) *DeployServiceDefinition {
 	return &DeployServiceDefinition{def: pipelinedef.New(pipelinedef.Config{
 		ID:       "deploy-service",
 		NewInput: func() proto.Message { return &DeployServiceInput{} },
 		Reduce: func(view durable.ReduceView) proto.Message {
-			return reduce.Reduce(view)
+			return ReduceDeployService(h, view)
 		},
 		Steps: []pipelinedef.Step{
 			{
@@ -393,14 +128,14 @@ func NewDeployService(
 				Unwind:   true,
 				HasState: true,
 				Run: func(ctx context.Context, core durable.Invocation) (proto.Message, error) {
-					state, err := provisionEnv.Run(ctx, ProvisionEnvInvocation{core: core})
+					state, err := h.ProvisionEnv(ctx, durable.Typed[*DeployServiceInput](core))
 					if state == nil {
 						return nil, err
 					}
 					return state, err
 				},
 				UnwindFunc: func(ctx context.Context, core durable.Invocation) error {
-					return provisionEnv.Unwind(ctx, ProvisionEnvInvocation{core: core})
+					return h.UnwindProvisionEnv(ctx, durable.Typed[*DeployServiceInput](core))
 				},
 			},
 			{
@@ -408,21 +143,21 @@ func NewDeployService(
 				Unwind:   true,
 				HasState: true,
 				Run: func(ctx context.Context, core durable.Invocation) (proto.Message, error) {
-					state, err := runMigrations.Run(ctx, RunMigrationsInvocation{core: core})
+					state, err := h.RunMigrations(ctx, durable.Typed[*DeployServiceInput](core))
 					if state == nil {
 						return nil, err
 					}
 					return state, err
 				},
 				UnwindFunc: func(ctx context.Context, core durable.Invocation) error {
-					return runMigrations.Unwind(ctx, RunMigrationsInvocation{core: core})
+					return h.UnwindRunMigrations(ctx, durable.Typed[*DeployServiceInput](core))
 				},
 			},
 			{
 				ID:       "canary-analysis/v1",
 				HasState: true,
 				Run: func(ctx context.Context, core durable.Invocation) (proto.Message, error) {
-					state, err := canaryAnalysis.Run(ctx, CanaryAnalysisInvocation{core: core})
+					state, err := h.CanaryAnalysis(ctx, durable.Typed[*DeployServiceInput](core))
 					if state == nil {
 						return nil, err
 					}
@@ -433,7 +168,7 @@ func NewDeployService(
 				ID:       "shift-traffic/v1",
 				HasState: true,
 				Run: func(ctx context.Context, core durable.Invocation) (proto.Message, error) {
-					state, err := shiftTraffic.Run(ctx, ShiftTrafficInvocation{core: core})
+					state, err := h.ShiftTraffic(ctx, durable.Typed[*DeployServiceInput](core))
 					if state == nil {
 						return nil, err
 					}
@@ -568,264 +303,31 @@ var ShipApiStep = pipelinedef.StepRef("ship-api/v1")
 // AnnounceStep is the typed reference to the state-producing step "announce/v1".
 var AnnounceStep = pipelinedef.StateStepRef("announce/v1", func() *Announce { return &Announce{} })
 
-// PlanReleaseInvocation is passed to PlanReleaseHandler methods.
-type PlanReleaseInvocation struct {
-	core durable.Invocation
+// ReleaseTrainInvocation is the invocation every ReleaseTrainHandlers method receives:
+// durable.Invocation with the pipeline's Input typed.
+type ReleaseTrainInvocation = durable.TypedInvocation[*ReleaseTrainInput]
+
+// NewReleaseTrainInvocation wraps core for calling a ReleaseTrainHandlers method directly,
+// outside an engine: hand it durabletest.NewInvocation to unit-test a
+// handler. The engine wraps its own invocations; application code never
+// needs this at runtime.
+func NewReleaseTrainInvocation(core durable.Invocation) ReleaseTrainInvocation {
+	return durable.Typed[*ReleaseTrainInput](core)
 }
 
-// NewPlanReleaseInvocation wraps core for calling a PlanReleaseHandler directly, outside
-// an engine: hand it durabletest.NewInvocation to unit-test the handler.
-// The engine wraps its own invocations; application code never needs
-// this at runtime.
-func NewPlanReleaseInvocation(core durable.Invocation) PlanReleaseInvocation {
-	return PlanReleaseInvocation{core: core}
-}
-
-func (inv PlanReleaseInvocation) PipelineID() durable.PipelineID { return inv.core.PipelineID() }
-func (inv PlanReleaseInvocation) ResourceID() durable.ResourceID { return inv.core.ResourceID() }
-func (inv PlanReleaseInvocation) RunID() durable.RunID           { return inv.core.RunID() }
-func (inv PlanReleaseInvocation) StepID() durable.StepID         { return inv.core.StepID() }
-func (inv PlanReleaseInvocation) Attempt() uint64                { return inv.core.Attempt() }
-func (inv PlanReleaseInvocation) Phase() durable.Phase           { return inv.core.Phase() }
-
-// AwaitedRunID reports the run an earlier attempt of this operation parked
-// on via durable.AwaitRun, once that park resolved. Multi-target parks
-// are read through Awaited.
-func (inv PlanReleaseInvocation) AwaitedRunID() (durable.RunID, bool) { return inv.core.AwaitedRunID() }
-
-// Awaited reports the park an earlier attempt of this operation made, once
-// it resolved; ok is false on a first execution.
-func (inv PlanReleaseInvocation) Awaited() (durable.Wake, bool) { return inv.core.Awaited() }
-
-// Annotations returns a caller-owned copy of the run's immutable
-// acceptance-time annotations (trace contexts, tenant tags).
-func (inv PlanReleaseInvocation) Annotations() map[string]string { return inv.core.Annotations() }
-
-// Failure is the failure this run is unwinding: non-nil exactly in
-// durable.PhaseUnwind, nil during forward attempts.
-func (inv PlanReleaseInvocation) Failure() *durable.Failure { return inv.core.Failure() }
-
-// Logger returns a logger scoped to this invocation, with the canonical
-// pipeline, resource, run, step, phase, and attempt keys attached.
-func (inv PlanReleaseInvocation) Logger() *slog.Logger { return inv.core.Logger() }
-
-// Input returns a defensive caller-owned copy of the immutable pipeline input.
-func (inv PlanReleaseInvocation) Input() *ReleaseTrainInput {
-	msg, _ := inv.core.InputMessage().(*ReleaseTrainInput)
-	return msg
-}
-
-// State returns the committed state of the referenced step for this run.
-// ok is false when no committed state exists.
-func (inv PlanReleaseInvocation) State[T proto.Message](step durable.StateStepRef[T]) (T, bool) {
-	return durable.LookupState(inv.core, step)
-}
-
-// PlanReleaseHandler implements step "plan/v1".
-type PlanReleaseHandler interface {
-	Run(context.Context, PlanReleaseInvocation) error
-}
-
-// PlanReleaseFunc adapts a function to PlanReleaseHandler, in the style of
-// http.HandlerFunc.
-type PlanReleaseFunc func(ctx context.Context, inv PlanReleaseInvocation) error
-
-func (f PlanReleaseFunc) Run(ctx context.Context, inv PlanReleaseInvocation) error {
-	return f(ctx, inv)
-}
-
-// ShipWebInvocation is passed to ShipWebHandler methods.
-type ShipWebInvocation struct {
-	core durable.Invocation
-}
-
-// NewShipWebInvocation wraps core for calling a ShipWebHandler directly, outside
-// an engine: hand it durabletest.NewInvocation to unit-test the handler.
-// The engine wraps its own invocations; application code never needs
-// this at runtime.
-func NewShipWebInvocation(core durable.Invocation) ShipWebInvocation {
-	return ShipWebInvocation{core: core}
-}
-
-func (inv ShipWebInvocation) PipelineID() durable.PipelineID { return inv.core.PipelineID() }
-func (inv ShipWebInvocation) ResourceID() durable.ResourceID { return inv.core.ResourceID() }
-func (inv ShipWebInvocation) RunID() durable.RunID           { return inv.core.RunID() }
-func (inv ShipWebInvocation) StepID() durable.StepID         { return inv.core.StepID() }
-func (inv ShipWebInvocation) Attempt() uint64                { return inv.core.Attempt() }
-func (inv ShipWebInvocation) Phase() durable.Phase           { return inv.core.Phase() }
-
-// AwaitedRunID reports the run an earlier attempt of this operation parked
-// on via durable.AwaitRun, once that park resolved. Multi-target parks
-// are read through Awaited.
-func (inv ShipWebInvocation) AwaitedRunID() (durable.RunID, bool) { return inv.core.AwaitedRunID() }
-
-// Awaited reports the park an earlier attempt of this operation made, once
-// it resolved; ok is false on a first execution.
-func (inv ShipWebInvocation) Awaited() (durable.Wake, bool) { return inv.core.Awaited() }
-
-// Annotations returns a caller-owned copy of the run's immutable
-// acceptance-time annotations (trace contexts, tenant tags).
-func (inv ShipWebInvocation) Annotations() map[string]string { return inv.core.Annotations() }
-
-// Failure is the failure this run is unwinding: non-nil exactly in
-// durable.PhaseUnwind, nil during forward attempts.
-func (inv ShipWebInvocation) Failure() *durable.Failure { return inv.core.Failure() }
-
-// Logger returns a logger scoped to this invocation, with the canonical
-// pipeline, resource, run, step, phase, and attempt keys attached.
-func (inv ShipWebInvocation) Logger() *slog.Logger { return inv.core.Logger() }
-
-// Input returns a defensive caller-owned copy of the immutable pipeline input.
-func (inv ShipWebInvocation) Input() *ReleaseTrainInput {
-	msg, _ := inv.core.InputMessage().(*ReleaseTrainInput)
-	return msg
-}
-
-// State returns the committed state of the referenced step for this run.
-// ok is false when no committed state exists.
-func (inv ShipWebInvocation) State[T proto.Message](step durable.StateStepRef[T]) (T, bool) {
-	return durable.LookupState(inv.core, step)
-}
-
-// ShipWebHandler implements step "ship-web/v1".
-type ShipWebHandler interface {
-	Run(context.Context, ShipWebInvocation) error
-}
-
-// ShipWebFunc adapts a function to ShipWebHandler, in the style of
-// http.HandlerFunc.
-type ShipWebFunc func(ctx context.Context, inv ShipWebInvocation) error
-
-func (f ShipWebFunc) Run(ctx context.Context, inv ShipWebInvocation) error { return f(ctx, inv) }
-
-// ShipApiInvocation is passed to ShipApiHandler methods.
-type ShipApiInvocation struct {
-	core durable.Invocation
-}
-
-// NewShipApiInvocation wraps core for calling a ShipApiHandler directly, outside
-// an engine: hand it durabletest.NewInvocation to unit-test the handler.
-// The engine wraps its own invocations; application code never needs
-// this at runtime.
-func NewShipApiInvocation(core durable.Invocation) ShipApiInvocation {
-	return ShipApiInvocation{core: core}
-}
-
-func (inv ShipApiInvocation) PipelineID() durable.PipelineID { return inv.core.PipelineID() }
-func (inv ShipApiInvocation) ResourceID() durable.ResourceID { return inv.core.ResourceID() }
-func (inv ShipApiInvocation) RunID() durable.RunID           { return inv.core.RunID() }
-func (inv ShipApiInvocation) StepID() durable.StepID         { return inv.core.StepID() }
-func (inv ShipApiInvocation) Attempt() uint64                { return inv.core.Attempt() }
-func (inv ShipApiInvocation) Phase() durable.Phase           { return inv.core.Phase() }
-
-// AwaitedRunID reports the run an earlier attempt of this operation parked
-// on via durable.AwaitRun, once that park resolved. Multi-target parks
-// are read through Awaited.
-func (inv ShipApiInvocation) AwaitedRunID() (durable.RunID, bool) { return inv.core.AwaitedRunID() }
-
-// Awaited reports the park an earlier attempt of this operation made, once
-// it resolved; ok is false on a first execution.
-func (inv ShipApiInvocation) Awaited() (durable.Wake, bool) { return inv.core.Awaited() }
-
-// Annotations returns a caller-owned copy of the run's immutable
-// acceptance-time annotations (trace contexts, tenant tags).
-func (inv ShipApiInvocation) Annotations() map[string]string { return inv.core.Annotations() }
-
-// Failure is the failure this run is unwinding: non-nil exactly in
-// durable.PhaseUnwind, nil during forward attempts.
-func (inv ShipApiInvocation) Failure() *durable.Failure { return inv.core.Failure() }
-
-// Logger returns a logger scoped to this invocation, with the canonical
-// pipeline, resource, run, step, phase, and attempt keys attached.
-func (inv ShipApiInvocation) Logger() *slog.Logger { return inv.core.Logger() }
-
-// Input returns a defensive caller-owned copy of the immutable pipeline input.
-func (inv ShipApiInvocation) Input() *ReleaseTrainInput {
-	msg, _ := inv.core.InputMessage().(*ReleaseTrainInput)
-	return msg
-}
-
-// State returns the committed state of the referenced step for this run.
-// ok is false when no committed state exists.
-func (inv ShipApiInvocation) State[T proto.Message](step durable.StateStepRef[T]) (T, bool) {
-	return durable.LookupState(inv.core, step)
-}
-
-// ShipApiHandler implements step "ship-api/v1".
-type ShipApiHandler interface {
-	Run(context.Context, ShipApiInvocation) error
-}
-
-// ShipApiFunc adapts a function to ShipApiHandler, in the style of
-// http.HandlerFunc.
-type ShipApiFunc func(ctx context.Context, inv ShipApiInvocation) error
-
-func (f ShipApiFunc) Run(ctx context.Context, inv ShipApiInvocation) error { return f(ctx, inv) }
-
-// AnnounceInvocation is passed to AnnounceHandler methods.
-type AnnounceInvocation struct {
-	core durable.Invocation
-}
-
-// NewAnnounceInvocation wraps core for calling a AnnounceHandler directly, outside
-// an engine: hand it durabletest.NewInvocation to unit-test the handler.
-// The engine wraps its own invocations; application code never needs
-// this at runtime.
-func NewAnnounceInvocation(core durable.Invocation) AnnounceInvocation {
-	return AnnounceInvocation{core: core}
-}
-
-func (inv AnnounceInvocation) PipelineID() durable.PipelineID { return inv.core.PipelineID() }
-func (inv AnnounceInvocation) ResourceID() durable.ResourceID { return inv.core.ResourceID() }
-func (inv AnnounceInvocation) RunID() durable.RunID           { return inv.core.RunID() }
-func (inv AnnounceInvocation) StepID() durable.StepID         { return inv.core.StepID() }
-func (inv AnnounceInvocation) Attempt() uint64                { return inv.core.Attempt() }
-func (inv AnnounceInvocation) Phase() durable.Phase           { return inv.core.Phase() }
-
-// AwaitedRunID reports the run an earlier attempt of this operation parked
-// on via durable.AwaitRun, once that park resolved. Multi-target parks
-// are read through Awaited.
-func (inv AnnounceInvocation) AwaitedRunID() (durable.RunID, bool) { return inv.core.AwaitedRunID() }
-
-// Awaited reports the park an earlier attempt of this operation made, once
-// it resolved; ok is false on a first execution.
-func (inv AnnounceInvocation) Awaited() (durable.Wake, bool) { return inv.core.Awaited() }
-
-// Annotations returns a caller-owned copy of the run's immutable
-// acceptance-time annotations (trace contexts, tenant tags).
-func (inv AnnounceInvocation) Annotations() map[string]string { return inv.core.Annotations() }
-
-// Failure is the failure this run is unwinding: non-nil exactly in
-// durable.PhaseUnwind, nil during forward attempts.
-func (inv AnnounceInvocation) Failure() *durable.Failure { return inv.core.Failure() }
-
-// Logger returns a logger scoped to this invocation, with the canonical
-// pipeline, resource, run, step, phase, and attempt keys attached.
-func (inv AnnounceInvocation) Logger() *slog.Logger { return inv.core.Logger() }
-
-// Input returns a defensive caller-owned copy of the immutable pipeline input.
-func (inv AnnounceInvocation) Input() *ReleaseTrainInput {
-	msg, _ := inv.core.InputMessage().(*ReleaseTrainInput)
-	return msg
-}
-
-// State returns the committed state of the referenced step for this run.
-// ok is false when no committed state exists.
-func (inv AnnounceInvocation) State[T proto.Message](step durable.StateStepRef[T]) (T, bool) {
-	return durable.LookupState(inv.core, step)
-}
-
-// AnnounceHandler implements step "announce/v1".
-type AnnounceHandler interface {
-	Run(context.Context, AnnounceInvocation) (*Announce, error)
-}
-
-// AnnounceFunc adapts a function to AnnounceHandler, in the style of
-// http.HandlerFunc.
-type AnnounceFunc func(ctx context.Context, inv AnnounceInvocation) (*Announce, error)
-
-func (f AnnounceFunc) Run(ctx context.Context, inv AnnounceInvocation) (*Announce, error) {
-	return f(ctx, inv)
+// ReleaseTrainHandlers implements the "release-train" pipeline: one method per
+// step, named after the step, plus Unwind<Step> for each step that
+// unwinds. A type implements every step or does not compile; a step
+// added to the pipeline is a method the next build demands.
+type ReleaseTrainHandlers interface {
+	// PlanRelease runs step "plan/v1".
+	PlanRelease(ctx context.Context, inv ReleaseTrainInvocation) error
+	// ShipWeb runs step "ship-web/v1".
+	ShipWeb(ctx context.Context, inv ReleaseTrainInvocation) error
+	// ShipApi runs step "ship-api/v1".
+	ShipApi(ctx context.Context, inv ReleaseTrainInvocation) error
+	// Announce runs step "announce/v1".
+	Announce(ctx context.Context, inv ReleaseTrainInvocation) (*Announce, error)
 }
 
 var releaseTrainViews sync.Map
@@ -868,13 +370,8 @@ type ReleaseTrainDefinition struct {
 }
 
 // NewReleaseTrain assembles the "release-train" pipeline definition
-// from its step handlers.
-func NewReleaseTrain(
-	planRelease PlanReleaseHandler,
-	shipWeb ShipWebHandler,
-	shipApi ShipApiHandler,
-	announce AnnounceHandler,
-) *ReleaseTrainDefinition {
+// from its handlers.
+func NewReleaseTrain(h ReleaseTrainHandlers) *ReleaseTrainDefinition {
 	return &ReleaseTrainDefinition{def: pipelinedef.New(pipelinedef.Config{
 		ID:       "release-train",
 		NewInput: func() proto.Message { return &ReleaseTrainInput{} },
@@ -882,26 +379,26 @@ func NewReleaseTrain(
 			{
 				ID: "plan/v1",
 				Run: func(ctx context.Context, core durable.Invocation) (proto.Message, error) {
-					return nil, planRelease.Run(ctx, PlanReleaseInvocation{core: core})
+					return nil, h.PlanRelease(ctx, durable.Typed[*ReleaseTrainInput](core))
 				},
 			},
 			{
 				ID: "ship-web/v1",
 				Run: func(ctx context.Context, core durable.Invocation) (proto.Message, error) {
-					return nil, shipWeb.Run(ctx, ShipWebInvocation{core: core})
+					return nil, h.ShipWeb(ctx, durable.Typed[*ReleaseTrainInput](core))
 				},
 			},
 			{
 				ID: "ship-api/v1",
 				Run: func(ctx context.Context, core durable.Invocation) (proto.Message, error) {
-					return nil, shipApi.Run(ctx, ShipApiInvocation{core: core})
+					return nil, h.ShipApi(ctx, durable.Typed[*ReleaseTrainInput](core))
 				},
 			},
 			{
 				ID:       "announce/v1",
 				HasState: true,
 				Run: func(ctx context.Context, core durable.Invocation) (proto.Message, error) {
-					state, err := announce.Run(ctx, AnnounceInvocation{core: core})
+					state, err := h.Announce(ctx, durable.Typed[*ReleaseTrainInput](core))
 					if state == nil {
 						return nil, err
 					}

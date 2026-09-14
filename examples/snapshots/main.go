@@ -102,92 +102,82 @@ func (w *world) register(key string) (string, error) {
 	return id, nil
 }
 
-// freezeVolume returns the freeze step as a pair of closures. Returning
-// the adapter from a function keeps each step's forward and unwind
-// halves next to each other and lets tests build a step on its own.
-func freezeVolume(w *world) snapshotspb.FreezeVolumeFuncs {
-	return snapshotspb.FreezeVolumeFuncs{
-		RunFunc: func(ctx context.Context, inv snapshotspb.FreezeVolumeInvocation) (*snapshotspb.FreezeVolume, error) {
-			return &snapshotspb.FreezeVolume{FreezeToken: w.freeze(string(inv.ResourceID()))}, nil
-		},
-		// Thaw on unwind so a failed run never leaves the volume frozen.
-		// After a successful ThawVolume step this is a no-op.
-		UnwindFunc: func(ctx context.Context, inv snapshotspb.FreezeVolumeInvocation) error {
-			w.thaw(string(inv.ResourceID()))
-			return nil
-		},
-	}
+// snapshotter implements snapshotspb.CreateSnapshotHandlers: one method
+// per step, an Unwind method for each step that compensates, and both
+// reducers.
+type snapshotter struct{ w *world }
+
+func (h *snapshotter) FreezeVolume(ctx context.Context, inv snapshotspb.CreateSnapshotInvocation) (*snapshotspb.FreezeVolume, error) {
+	return &snapshotspb.FreezeVolume{FreezeToken: h.w.freeze(string(inv.ResourceID()))}, nil
 }
 
-func uploadSnapshot(w *world) snapshotspb.UploadSnapshotFuncs {
-	return snapshotspb.UploadSnapshotFuncs{
-		RunFunc: func(ctx context.Context, inv snapshotspb.UploadSnapshotInvocation) (*snapshotspb.UploadSnapshot, error) {
-			if _, ok := inv.State(snapshotspb.FreezeVolumeStep); !ok {
-				return nil, durable.Fail(errors.New("volume is not frozen"))
-			}
-			// The run id in the key makes the upload idempotent per run.
-			key := path.Join(inv.Input().GetBucket(), string(inv.ResourceID()), string(inv.RunID())+".img")
-			return &snapshotspb.UploadSnapshot{ObjectKey: key, Bytes: w.upload(key)}, nil
-		},
-		UnwindFunc: func(ctx context.Context, inv snapshotspb.UploadSnapshotInvocation) error {
-			up, ok := inv.State(snapshotspb.UploadSnapshotStep)
-			if !ok {
-				return nil
-			}
-			// The run's failure is on the invocation.
-			inv.Logger().Info("deleting orphaned snapshot object",
-				"key", up.GetObjectKey(), "failed_step", inv.Failure().StepID)
-			if err := w.delete(up.GetObjectKey()); errors.Is(err, errStorageStuck) {
-				// A permanent unwind failure: the object leaks, the rest
-				// of the unwind continues, and the failure reducer
-				// reports the leak.
-				return durable.Fail(err, durable.WithReason("storage-stuck"))
-			} else if err != nil {
-				return err
-			}
-			return nil
-		},
-	}
+// UnwindFreezeVolume thaws on unwind so a failed run never leaves the
+// volume frozen. After a successful ThawVolume step this is a no-op.
+func (h *snapshotter) UnwindFreezeVolume(ctx context.Context, inv snapshotspb.CreateSnapshotInvocation) error {
+	h.w.thaw(string(inv.ResourceID()))
+	return nil
 }
 
-// A forward-only step is a single function.
-func thawVolume(w *world) snapshotspb.ThawVolumeFunc {
-	return func(ctx context.Context, inv snapshotspb.ThawVolumeInvocation) error {
-		w.thaw(string(inv.ResourceID()))
+func (h *snapshotter) UploadSnapshot(ctx context.Context, inv snapshotspb.CreateSnapshotInvocation) (*snapshotspb.UploadSnapshot, error) {
+	if _, ok := inv.State(snapshotspb.FreezeVolumeStep); !ok {
+		return nil, durable.Fail(errors.New("volume is not frozen"))
+	}
+	// The run id in the key makes the upload idempotent per run.
+	key := path.Join(inv.Input().GetBucket(), string(inv.ResourceID()), string(inv.RunID())+".img")
+	return &snapshotspb.UploadSnapshot{ObjectKey: key, Bytes: h.w.upload(key)}, nil
+}
+
+func (h *snapshotter) UnwindUploadSnapshot(ctx context.Context, inv snapshotspb.CreateSnapshotInvocation) error {
+	up, ok := inv.State(snapshotspb.UploadSnapshotStep)
+	if !ok {
 		return nil
 	}
-}
-
-func registerSnapshot(w *world) snapshotspb.RegisterSnapshotFunc {
-	return func(ctx context.Context, inv snapshotspb.RegisterSnapshotInvocation) (*snapshotspb.RegisterSnapshot, error) {
-		up, ok := inv.State(snapshotspb.UploadSnapshotStep)
-		if !ok {
-			return nil, durable.Fail(errors.New("upload state unavailable"))
-		}
-		id, err := w.register(up.GetObjectKey())
-		if errors.Is(err, errCatalogFull) {
-			// A permanent decision: start the unwind, attributed to the
-			// request rather than to the system.
-			return nil, durable.Fail(err, durable.WithUserKind(), durable.WithReason("catalog-full"))
-		}
-		if err != nil {
-			return nil, err // retried
-		}
-		return &snapshotspb.RegisterSnapshot{SnapshotId: id}, nil
+	// The run's failure is on the invocation.
+	inv.Logger().Info("deleting orphaned snapshot object",
+		"key", up.GetObjectKey(), "failed_step", inv.Failure().StepID)
+	if err := h.w.delete(up.GetObjectKey()); errors.Is(err, errStorageStuck) {
+		// A permanent unwind failure: the object leaks, the rest of the
+		// unwind continues, and the failure reducer reports the leak.
+		return durable.Fail(err, durable.WithReason("storage-stuck"))
+	} else if err != nil {
+		return err
 	}
+	return nil
 }
 
-func reduceCreateSnapshot(p *snapshotspb.CreateSnapshot) *snapshotspb.CreateSnapshotOutput {
+func (h *snapshotter) ThawVolume(ctx context.Context, inv snapshotspb.CreateSnapshotInvocation) error {
+	h.w.thaw(string(inv.ResourceID()))
+	return nil
+}
+
+func (h *snapshotter) RegisterSnapshot(ctx context.Context, inv snapshotspb.CreateSnapshotInvocation) (*snapshotspb.RegisterSnapshot, error) {
+	up, ok := inv.State(snapshotspb.UploadSnapshotStep)
+	if !ok {
+		return nil, durable.Fail(errors.New("upload state unavailable"))
+	}
+	id, err := h.w.register(up.GetObjectKey())
+	if errors.Is(err, errCatalogFull) {
+		// A permanent decision: start the unwind, attributed to the
+		// request rather than to the system.
+		return nil, durable.Fail(err, durable.WithUserKind(), durable.WithReason("catalog-full"))
+	}
+	if err != nil {
+		return nil, err // retried
+	}
+	return &snapshotspb.RegisterSnapshot{SnapshotId: id}, nil
+}
+
+func (h *snapshotter) Reduce(p *snapshotspb.CreateSnapshot) *snapshotspb.CreateSnapshotOutput {
 	reg, _ := p.State(snapshotspb.RegisterSnapshotStep)
 	up, _ := p.State(snapshotspb.UploadSnapshotStep)
 	return &snapshotspb.CreateSnapshotOutput{SnapshotId: reg.GetSnapshotId(), ObjectKey: up.GetObjectKey()}
 }
 
-// reduceCreateSnapshotFailure is the failure reducer: the failure output
-// relates to the failure and the step states the way the output relates
-// to the states. It names where the run failed and joins each failed
+// ReduceFailure is the failure reducer: the failure output relates to
+// the failure and the step states the way the output relates to the
+// states. It names where the run failed and joins each failed
 // compensation with the state it could not undo.
-func reduceCreateSnapshotFailure(p *snapshotspb.CreateSnapshot) *snapshotspb.CreateSnapshotFailure {
+func (h *snapshotter) ReduceFailure(p *snapshotspb.CreateSnapshot) *snapshotspb.CreateSnapshotFailure {
 	out := &snapshotspb.CreateSnapshotFailure{
 		FailedStep: string(p.Failure().StepID),
 		Reason:     p.Failure().Reason,
@@ -202,14 +192,7 @@ func reduceCreateSnapshotFailure(p *snapshotspb.CreateSnapshot) *snapshotspb.Cre
 }
 
 func newCreateSnapshot(w *world) *snapshotspb.CreateSnapshotDefinition {
-	return snapshotspb.NewCreateSnapshot(
-		freezeVolume(w),
-		uploadSnapshot(w),
-		thawVolume(w),
-		registerSnapshot(w),
-		reduceCreateSnapshot,
-		reduceCreateSnapshotFailure,
-	)
+	return snapshotspb.NewCreateSnapshot(&snapshotter{w})
 }
 
 func main() {

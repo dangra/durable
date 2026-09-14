@@ -12,7 +12,6 @@ import (
 	engine "github.com/dangra/durable/engine"
 	pipelinedef "github.com/dangra/durable/pipelinedef"
 	proto "google.golang.org/protobuf/proto"
-	slog "log/slog"
 	sync "sync"
 )
 
@@ -29,295 +28,48 @@ var ReserveCapacityStep = pipelinedef.StateStepRef("reserve-capacity/v1", func()
 // CreateMachineStep is the typed reference to the state-producing step "create-machine/v1".
 var CreateMachineStep = pipelinedef.StateStepRef("create-machine/v1", func() *CreateMachine { return &CreateMachine{} })
 
-// ValidateInvocation is passed to ValidateHandler methods.
-type ValidateInvocation struct {
-	core durable.Invocation
+// ProvisionMachineInvocation is the invocation every ProvisionMachineHandlers method receives:
+// durable.Invocation with the pipeline's Input typed.
+type ProvisionMachineInvocation = durable.TypedInvocation[*ProvisionMachineInput]
+
+// NewProvisionMachineInvocation wraps core for calling a ProvisionMachineHandlers method directly,
+// outside an engine: hand it durabletest.NewInvocation to unit-test a
+// handler. The engine wraps its own invocations; application code never
+// needs this at runtime.
+func NewProvisionMachineInvocation(core durable.Invocation) ProvisionMachineInvocation {
+	return durable.Typed[*ProvisionMachineInput](core)
 }
 
-// NewValidateInvocation wraps core for calling a ValidateHandler directly, outside
-// an engine: hand it durabletest.NewInvocation to unit-test the handler.
-// The engine wraps its own invocations; application code never needs
-// this at runtime.
-func NewValidateInvocation(core durable.Invocation) ValidateInvocation {
-	return ValidateInvocation{core: core}
+// ProvisionMachineHandlers implements the "provision-machine" pipeline: one method per
+// step, named after the step, plus Unwind<Step> for each step that
+// unwinds. A type implements every step or does not compile; a step
+// added to the pipeline is a method the next build demands.
+type ProvisionMachineHandlers interface {
+	// Validate runs step "validate/v1".
+	Validate(ctx context.Context, inv ProvisionMachineInvocation) error
+	// SelectHost runs step "select-host/v1".
+	SelectHost(ctx context.Context, inv ProvisionMachineInvocation) (*SelectHost, error)
+	// ReserveCapacity runs step "reserve-capacity/v1".
+	ReserveCapacity(ctx context.Context, inv ProvisionMachineInvocation) (*ReserveCapacity, error)
+	// UnwindReserveCapacity compensates step "reserve-capacity/v1" once it
+	// succeeded and the run unwinds.
+	UnwindReserveCapacity(ctx context.Context, inv ProvisionMachineInvocation) error
+	// CreateMachine runs step "create-machine/v1".
+	CreateMachine(ctx context.Context, inv ProvisionMachineInvocation) (*CreateMachine, error)
+	// Reduce produces the pipeline output from the immutable input and
+	// committed step states on success. It must be pure: deterministic,
+	// side-effect free, synchronous, and non-failing.
+	Reduce(*ProvisionMachine) *ProvisionMachineOutput
 }
 
-func (inv ValidateInvocation) PipelineID() durable.PipelineID { return inv.core.PipelineID() }
-func (inv ValidateInvocation) ResourceID() durable.ResourceID { return inv.core.ResourceID() }
-func (inv ValidateInvocation) RunID() durable.RunID           { return inv.core.RunID() }
-func (inv ValidateInvocation) StepID() durable.StepID         { return inv.core.StepID() }
-func (inv ValidateInvocation) Attempt() uint64                { return inv.core.Attempt() }
-func (inv ValidateInvocation) Phase() durable.Phase           { return inv.core.Phase() }
-
-// AwaitedRunID reports the run an earlier attempt of this operation parked
-// on via durable.AwaitRun, once that park resolved. Multi-target parks
-// are read through Awaited.
-func (inv ValidateInvocation) AwaitedRunID() (durable.RunID, bool) { return inv.core.AwaitedRunID() }
-
-// Awaited reports the park an earlier attempt of this operation made, once
-// it resolved; ok is false on a first execution.
-func (inv ValidateInvocation) Awaited() (durable.Wake, bool) { return inv.core.Awaited() }
-
-// Annotations returns a caller-owned copy of the run's immutable
-// acceptance-time annotations (trace contexts, tenant tags).
-func (inv ValidateInvocation) Annotations() map[string]string { return inv.core.Annotations() }
-
-// Failure is the failure this run is unwinding: non-nil exactly in
-// durable.PhaseUnwind, nil during forward attempts.
-func (inv ValidateInvocation) Failure() *durable.Failure { return inv.core.Failure() }
-
-// Logger returns a logger scoped to this invocation, with the canonical
-// pipeline, resource, run, step, phase, and attempt keys attached.
-func (inv ValidateInvocation) Logger() *slog.Logger { return inv.core.Logger() }
-
-// Input returns a defensive caller-owned copy of the immutable pipeline input.
-func (inv ValidateInvocation) Input() *ProvisionMachineInput {
-	msg, _ := inv.core.InputMessage().(*ProvisionMachineInput)
-	return msg
-}
-
-// State returns the committed state of the referenced step for this run.
-// ok is false when no committed state exists.
-func (inv ValidateInvocation) State[T proto.Message](step durable.StateStepRef[T]) (T, bool) {
-	return durable.LookupState(inv.core, step)
-}
-
-// ValidateHandler implements step "validate/v1".
-type ValidateHandler interface {
-	Run(context.Context, ValidateInvocation) error
-}
-
-// ValidateFunc adapts a function to ValidateHandler, in the style of
-// http.HandlerFunc.
-type ValidateFunc func(ctx context.Context, inv ValidateInvocation) error
-
-func (f ValidateFunc) Run(ctx context.Context, inv ValidateInvocation) error { return f(ctx, inv) }
-
-// SelectHostInvocation is passed to SelectHostHandler methods.
-type SelectHostInvocation struct {
-	core durable.Invocation
-}
-
-// NewSelectHostInvocation wraps core for calling a SelectHostHandler directly, outside
-// an engine: hand it durabletest.NewInvocation to unit-test the handler.
-// The engine wraps its own invocations; application code never needs
-// this at runtime.
-func NewSelectHostInvocation(core durable.Invocation) SelectHostInvocation {
-	return SelectHostInvocation{core: core}
-}
-
-func (inv SelectHostInvocation) PipelineID() durable.PipelineID { return inv.core.PipelineID() }
-func (inv SelectHostInvocation) ResourceID() durable.ResourceID { return inv.core.ResourceID() }
-func (inv SelectHostInvocation) RunID() durable.RunID           { return inv.core.RunID() }
-func (inv SelectHostInvocation) StepID() durable.StepID         { return inv.core.StepID() }
-func (inv SelectHostInvocation) Attempt() uint64                { return inv.core.Attempt() }
-func (inv SelectHostInvocation) Phase() durable.Phase           { return inv.core.Phase() }
-
-// AwaitedRunID reports the run an earlier attempt of this operation parked
-// on via durable.AwaitRun, once that park resolved. Multi-target parks
-// are read through Awaited.
-func (inv SelectHostInvocation) AwaitedRunID() (durable.RunID, bool) { return inv.core.AwaitedRunID() }
-
-// Awaited reports the park an earlier attempt of this operation made, once
-// it resolved; ok is false on a first execution.
-func (inv SelectHostInvocation) Awaited() (durable.Wake, bool) { return inv.core.Awaited() }
-
-// Annotations returns a caller-owned copy of the run's immutable
-// acceptance-time annotations (trace contexts, tenant tags).
-func (inv SelectHostInvocation) Annotations() map[string]string { return inv.core.Annotations() }
-
-// Failure is the failure this run is unwinding: non-nil exactly in
-// durable.PhaseUnwind, nil during forward attempts.
-func (inv SelectHostInvocation) Failure() *durable.Failure { return inv.core.Failure() }
-
-// Logger returns a logger scoped to this invocation, with the canonical
-// pipeline, resource, run, step, phase, and attempt keys attached.
-func (inv SelectHostInvocation) Logger() *slog.Logger { return inv.core.Logger() }
-
-// Input returns a defensive caller-owned copy of the immutable pipeline input.
-func (inv SelectHostInvocation) Input() *ProvisionMachineInput {
-	msg, _ := inv.core.InputMessage().(*ProvisionMachineInput)
-	return msg
-}
-
-// State returns the committed state of the referenced step for this run.
-// ok is false when no committed state exists.
-func (inv SelectHostInvocation) State[T proto.Message](step durable.StateStepRef[T]) (T, bool) {
-	return durable.LookupState(inv.core, step)
-}
-
-// SelectHostHandler implements step "select-host/v1".
-type SelectHostHandler interface {
-	Run(context.Context, SelectHostInvocation) (*SelectHost, error)
-}
-
-// SelectHostFunc adapts a function to SelectHostHandler, in the style of
-// http.HandlerFunc.
-type SelectHostFunc func(ctx context.Context, inv SelectHostInvocation) (*SelectHost, error)
-
-func (f SelectHostFunc) Run(ctx context.Context, inv SelectHostInvocation) (*SelectHost, error) {
-	return f(ctx, inv)
-}
-
-// ReserveCapacityInvocation is passed to ReserveCapacityHandler methods.
-type ReserveCapacityInvocation struct {
-	core durable.Invocation
-}
-
-// NewReserveCapacityInvocation wraps core for calling a ReserveCapacityHandler directly, outside
-// an engine: hand it durabletest.NewInvocation to unit-test the handler.
-// The engine wraps its own invocations; application code never needs
-// this at runtime.
-func NewReserveCapacityInvocation(core durable.Invocation) ReserveCapacityInvocation {
-	return ReserveCapacityInvocation{core: core}
-}
-
-func (inv ReserveCapacityInvocation) PipelineID() durable.PipelineID { return inv.core.PipelineID() }
-func (inv ReserveCapacityInvocation) ResourceID() durable.ResourceID { return inv.core.ResourceID() }
-func (inv ReserveCapacityInvocation) RunID() durable.RunID           { return inv.core.RunID() }
-func (inv ReserveCapacityInvocation) StepID() durable.StepID         { return inv.core.StepID() }
-func (inv ReserveCapacityInvocation) Attempt() uint64                { return inv.core.Attempt() }
-func (inv ReserveCapacityInvocation) Phase() durable.Phase           { return inv.core.Phase() }
-
-// AwaitedRunID reports the run an earlier attempt of this operation parked
-// on via durable.AwaitRun, once that park resolved. Multi-target parks
-// are read through Awaited.
-func (inv ReserveCapacityInvocation) AwaitedRunID() (durable.RunID, bool) {
-	return inv.core.AwaitedRunID()
-}
-
-// Awaited reports the park an earlier attempt of this operation made, once
-// it resolved; ok is false on a first execution.
-func (inv ReserveCapacityInvocation) Awaited() (durable.Wake, bool) { return inv.core.Awaited() }
-
-// Annotations returns a caller-owned copy of the run's immutable
-// acceptance-time annotations (trace contexts, tenant tags).
-func (inv ReserveCapacityInvocation) Annotations() map[string]string { return inv.core.Annotations() }
-
-// Failure is the failure this run is unwinding: non-nil exactly in
-// durable.PhaseUnwind, nil during forward attempts.
-func (inv ReserveCapacityInvocation) Failure() *durable.Failure { return inv.core.Failure() }
-
-// Logger returns a logger scoped to this invocation, with the canonical
-// pipeline, resource, run, step, phase, and attempt keys attached.
-func (inv ReserveCapacityInvocation) Logger() *slog.Logger { return inv.core.Logger() }
-
-// Input returns a defensive caller-owned copy of the immutable pipeline input.
-func (inv ReserveCapacityInvocation) Input() *ProvisionMachineInput {
-	msg, _ := inv.core.InputMessage().(*ProvisionMachineInput)
-	return msg
-}
-
-// State returns the committed state of the referenced step for this run.
-// ok is false when no committed state exists.
-func (inv ReserveCapacityInvocation) State[T proto.Message](step durable.StateStepRef[T]) (T, bool) {
-	return durable.LookupState(inv.core, step)
-}
-
-// ReserveCapacityHandler implements step "reserve-capacity/v1".
-type ReserveCapacityHandler interface {
-	Run(context.Context, ReserveCapacityInvocation) (*ReserveCapacity, error)
-
-	Unwind(context.Context, ReserveCapacityInvocation) error
-}
-
-// ReserveCapacityFuncs adapts a pair of functions to ReserveCapacityHandler.
-type ReserveCapacityFuncs struct {
-	RunFunc    func(ctx context.Context, inv ReserveCapacityInvocation) (*ReserveCapacity, error)
-	UnwindFunc func(ctx context.Context, inv ReserveCapacityInvocation) error
-}
-
-func (f ReserveCapacityFuncs) Run(ctx context.Context, inv ReserveCapacityInvocation) (*ReserveCapacity, error) {
-	return f.RunFunc(ctx, inv)
-}
-
-func (f ReserveCapacityFuncs) Unwind(ctx context.Context, inv ReserveCapacityInvocation) error {
-	return f.UnwindFunc(ctx, inv)
-}
-
-// CreateMachineInvocation is passed to CreateMachineHandler methods.
-type CreateMachineInvocation struct {
-	core durable.Invocation
-}
-
-// NewCreateMachineInvocation wraps core for calling a CreateMachineHandler directly, outside
-// an engine: hand it durabletest.NewInvocation to unit-test the handler.
-// The engine wraps its own invocations; application code never needs
-// this at runtime.
-func NewCreateMachineInvocation(core durable.Invocation) CreateMachineInvocation {
-	return CreateMachineInvocation{core: core}
-}
-
-func (inv CreateMachineInvocation) PipelineID() durable.PipelineID { return inv.core.PipelineID() }
-func (inv CreateMachineInvocation) ResourceID() durable.ResourceID { return inv.core.ResourceID() }
-func (inv CreateMachineInvocation) RunID() durable.RunID           { return inv.core.RunID() }
-func (inv CreateMachineInvocation) StepID() durable.StepID         { return inv.core.StepID() }
-func (inv CreateMachineInvocation) Attempt() uint64                { return inv.core.Attempt() }
-func (inv CreateMachineInvocation) Phase() durable.Phase           { return inv.core.Phase() }
-
-// AwaitedRunID reports the run an earlier attempt of this operation parked
-// on via durable.AwaitRun, once that park resolved. Multi-target parks
-// are read through Awaited.
-func (inv CreateMachineInvocation) AwaitedRunID() (durable.RunID, bool) {
-	return inv.core.AwaitedRunID()
-}
-
-// Awaited reports the park an earlier attempt of this operation made, once
-// it resolved; ok is false on a first execution.
-func (inv CreateMachineInvocation) Awaited() (durable.Wake, bool) { return inv.core.Awaited() }
-
-// Annotations returns a caller-owned copy of the run's immutable
-// acceptance-time annotations (trace contexts, tenant tags).
-func (inv CreateMachineInvocation) Annotations() map[string]string { return inv.core.Annotations() }
-
-// Failure is the failure this run is unwinding: non-nil exactly in
-// durable.PhaseUnwind, nil during forward attempts.
-func (inv CreateMachineInvocation) Failure() *durable.Failure { return inv.core.Failure() }
-
-// Logger returns a logger scoped to this invocation, with the canonical
-// pipeline, resource, run, step, phase, and attempt keys attached.
-func (inv CreateMachineInvocation) Logger() *slog.Logger { return inv.core.Logger() }
-
-// Input returns a defensive caller-owned copy of the immutable pipeline input.
-func (inv CreateMachineInvocation) Input() *ProvisionMachineInput {
-	msg, _ := inv.core.InputMessage().(*ProvisionMachineInput)
-	return msg
-}
-
-// State returns the committed state of the referenced step for this run.
-// ok is false when no committed state exists.
-func (inv CreateMachineInvocation) State[T proto.Message](step durable.StateStepRef[T]) (T, bool) {
-	return durable.LookupState(inv.core, step)
-}
-
-// CreateMachineHandler implements step "create-machine/v1".
-type CreateMachineHandler interface {
-	Run(context.Context, CreateMachineInvocation) (*CreateMachine, error)
-}
-
-// CreateMachineFunc adapts a function to CreateMachineHandler, in the style of
-// http.HandlerFunc.
-type CreateMachineFunc func(ctx context.Context, inv CreateMachineInvocation) (*CreateMachine, error)
-
-func (f CreateMachineFunc) Run(ctx context.Context, inv CreateMachineInvocation) (*CreateMachine, error) {
-	return f(ctx, inv)
-}
-
-// ProvisionMachineReducer produces the pipeline output from the immutable input and committed step states on success.
-// It must be pure: deterministic, side-effect free, synchronous, and
-// non-failing.
-type ProvisionMachineReducer func(*ProvisionMachine) *ProvisionMachineOutput
-
-// Reduce folds view through r: the marker the reducer receives reads
-// its Input, States, and failures from view for the duration of the
-// call. The engine reduces through it; a unit test hands it
-// durabletest.NewInvocation (which is also a durable.ReduceView) to
-// exercise the reducer alone.
-func (r ProvisionMachineReducer) Reduce(view durable.ReduceView) *ProvisionMachineOutput {
+// ReduceProvisionMachine folds view through h.Reduce: the marker the reducer
+// receives reads its Input, States, and failures from view for the
+// duration of the call.
+func ReduceProvisionMachine(h ProvisionMachineHandlers, view durable.ReduceView) *ProvisionMachineOutput {
 	x := &ProvisionMachine{}
 	provisionMachineViews.Store(x, view)
 	defer provisionMachineViews.Delete(x)
-	return r(x)
+	return h.Reduce(x)
 }
 
 var provisionMachineViews sync.Map
@@ -360,33 +112,27 @@ type ProvisionMachineDefinition struct {
 }
 
 // NewProvisionMachine assembles the "provision-machine" pipeline definition
-// from its step handlers and reducer.
-func NewProvisionMachine(
-	validate ValidateHandler,
-	selectHost SelectHostHandler,
-	reserveCapacity ReserveCapacityHandler,
-	createMachine CreateMachineHandler,
-	reduce ProvisionMachineReducer,
-) *ProvisionMachineDefinition {
+// from its handlers.
+func NewProvisionMachine(h ProvisionMachineHandlers) *ProvisionMachineDefinition {
 	return &ProvisionMachineDefinition{def: pipelinedef.New(pipelinedef.Config{
 		ID:       "provision-machine",
 		Mutexes:  []string{"machine-lifecycle"},
 		NewInput: func() proto.Message { return &ProvisionMachineInput{} },
 		Reduce: func(view durable.ReduceView) proto.Message {
-			return reduce.Reduce(view)
+			return ReduceProvisionMachine(h, view)
 		},
 		Steps: []pipelinedef.Step{
 			{
 				ID: "validate/v1",
 				Run: func(ctx context.Context, core durable.Invocation) (proto.Message, error) {
-					return nil, validate.Run(ctx, ValidateInvocation{core: core})
+					return nil, h.Validate(ctx, durable.Typed[*ProvisionMachineInput](core))
 				},
 			},
 			{
 				ID:       "select-host/v1",
 				HasState: true,
 				Run: func(ctx context.Context, core durable.Invocation) (proto.Message, error) {
-					state, err := selectHost.Run(ctx, SelectHostInvocation{core: core})
+					state, err := h.SelectHost(ctx, durable.Typed[*ProvisionMachineInput](core))
 					if state == nil {
 						return nil, err
 					}
@@ -399,21 +145,21 @@ func NewProvisionMachine(
 				ConcurrencyClass: "host-capacity-api",
 				HasState:         true,
 				Run: func(ctx context.Context, core durable.Invocation) (proto.Message, error) {
-					state, err := reserveCapacity.Run(ctx, ReserveCapacityInvocation{core: core})
+					state, err := h.ReserveCapacity(ctx, durable.Typed[*ProvisionMachineInput](core))
 					if state == nil {
 						return nil, err
 					}
 					return state, err
 				},
 				UnwindFunc: func(ctx context.Context, core durable.Invocation) error {
-					return reserveCapacity.Unwind(ctx, ReserveCapacityInvocation{core: core})
+					return h.UnwindReserveCapacity(ctx, durable.Typed[*ProvisionMachineInput](core))
 				},
 			},
 			{
 				ID:       "create-machine/v1",
 				HasState: true,
 				Run: func(ctx context.Context, core durable.Invocation) (proto.Message, error) {
-					state, err := createMachine.Run(ctx, CreateMachineInvocation{core: core})
+					state, err := h.CreateMachine(ctx, durable.Typed[*ProvisionMachineInput](core))
 					if state == nil {
 						return nil, err
 					}
@@ -537,66 +283,25 @@ func (r ProvisionMachineResult) Output() *ProvisionMachineOutput { return r.outp
 // It is not accepted by State lookup.
 var ReleaseMachineStep = pipelinedef.StepRef("release-machine/v1")
 
-// ReleaseMachineInvocation is passed to ReleaseMachineHandler methods.
-type ReleaseMachineInvocation struct {
-	core durable.Invocation
+// DecommissionMachineInvocation is the invocation every DecommissionMachineHandlers method receives:
+// durable.Invocation with the pipeline's Input typed.
+type DecommissionMachineInvocation = durable.TypedInvocation[durable.NoInput]
+
+// NewDecommissionMachineInvocation wraps core for calling a DecommissionMachineHandlers method directly,
+// outside an engine: hand it durabletest.NewInvocation to unit-test a
+// handler. The engine wraps its own invocations; application code never
+// needs this at runtime.
+func NewDecommissionMachineInvocation(core durable.Invocation) DecommissionMachineInvocation {
+	return durable.Typed[durable.NoInput](core)
 }
 
-// NewReleaseMachineInvocation wraps core for calling a ReleaseMachineHandler directly, outside
-// an engine: hand it durabletest.NewInvocation to unit-test the handler.
-// The engine wraps its own invocations; application code never needs
-// this at runtime.
-func NewReleaseMachineInvocation(core durable.Invocation) ReleaseMachineInvocation {
-	return ReleaseMachineInvocation{core: core}
-}
-
-func (inv ReleaseMachineInvocation) PipelineID() durable.PipelineID { return inv.core.PipelineID() }
-func (inv ReleaseMachineInvocation) ResourceID() durable.ResourceID { return inv.core.ResourceID() }
-func (inv ReleaseMachineInvocation) RunID() durable.RunID           { return inv.core.RunID() }
-func (inv ReleaseMachineInvocation) StepID() durable.StepID         { return inv.core.StepID() }
-func (inv ReleaseMachineInvocation) Attempt() uint64                { return inv.core.Attempt() }
-func (inv ReleaseMachineInvocation) Phase() durable.Phase           { return inv.core.Phase() }
-
-// AwaitedRunID reports the run an earlier attempt of this operation parked
-// on via durable.AwaitRun, once that park resolved. Multi-target parks
-// are read through Awaited.
-func (inv ReleaseMachineInvocation) AwaitedRunID() (durable.RunID, bool) {
-	return inv.core.AwaitedRunID()
-}
-
-// Awaited reports the park an earlier attempt of this operation made, once
-// it resolved; ok is false on a first execution.
-func (inv ReleaseMachineInvocation) Awaited() (durable.Wake, bool) { return inv.core.Awaited() }
-
-// Annotations returns a caller-owned copy of the run's immutable
-// acceptance-time annotations (trace contexts, tenant tags).
-func (inv ReleaseMachineInvocation) Annotations() map[string]string { return inv.core.Annotations() }
-
-// Failure is the failure this run is unwinding: non-nil exactly in
-// durable.PhaseUnwind, nil during forward attempts.
-func (inv ReleaseMachineInvocation) Failure() *durable.Failure { return inv.core.Failure() }
-
-// Logger returns a logger scoped to this invocation, with the canonical
-// pipeline, resource, run, step, phase, and attempt keys attached.
-func (inv ReleaseMachineInvocation) Logger() *slog.Logger { return inv.core.Logger() }
-
-// State returns the committed state of the referenced step for this run.
-// ok is false when no committed state exists.
-func (inv ReleaseMachineInvocation) State[T proto.Message](step durable.StateStepRef[T]) (T, bool) {
-	return durable.LookupState(inv.core, step)
-}
-
-// ReleaseMachineHandler implements step "release-machine/v1".
-type ReleaseMachineHandler interface {
-	Run(context.Context, ReleaseMachineInvocation) error
-}
-
-// ReleaseMachineFunc adapts a function to ReleaseMachineHandler, in the style of
-// http.HandlerFunc.
-type ReleaseMachineFunc func(ctx context.Context, inv ReleaseMachineInvocation) error
-
-func (f ReleaseMachineFunc) Run(ctx context.Context, inv ReleaseMachineInvocation) error {
-	return f(ctx, inv)
+// DecommissionMachineHandlers implements the "decommission-machine" pipeline: one method per
+// step, named after the step, plus Unwind<Step> for each step that
+// unwinds. A type implements every step or does not compile; a step
+// added to the pipeline is a method the next build demands.
+type DecommissionMachineHandlers interface {
+	// ReleaseMachine runs step "release-machine/v1".
+	ReleaseMachine(ctx context.Context, inv DecommissionMachineInvocation) error
 }
 
 var decommissionMachineViews sync.Map
@@ -633,10 +338,8 @@ type DecommissionMachineDefinition struct {
 }
 
 // NewDecommissionMachine assembles the "decommission-machine" pipeline definition
-// from its step handlers.
-func NewDecommissionMachine(
-	releaseMachine ReleaseMachineHandler,
-) *DecommissionMachineDefinition {
+// from its handlers.
+func NewDecommissionMachine(h DecommissionMachineHandlers) *DecommissionMachineDefinition {
 	return &DecommissionMachineDefinition{def: pipelinedef.New(pipelinedef.Config{
 		ID:      "decommission-machine",
 		Mutexes: []string{"machine-lifecycle"},
@@ -644,7 +347,7 @@ func NewDecommissionMachine(
 			{
 				ID: "release-machine/v1",
 				Run: func(ctx context.Context, core durable.Invocation) (proto.Message, error) {
-					return nil, releaseMachine.Run(ctx, ReleaseMachineInvocation{core: core})
+					return nil, h.ReleaseMachine(ctx, durable.Typed[durable.NoInput](core))
 				},
 			},
 		},

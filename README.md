@@ -58,12 +58,12 @@ message ProvisionMachine {
 }
 ```
 
-Implement the generated handler interfaces:
+Implement the generated pipeline interface, one method per step:
 
 ```go
-func (h *createMachine) Run(
+func (h *handlers) CreateMachine(
     ctx context.Context,
-    inv machinespb.CreateMachineInvocation,
+    inv machinespb.ProvisionMachineInvocation,
 ) (*machinespb.CreateMachine, error) {
     reservation, ok := inv.State(machinespb.ReserveCapacityStep)
     if !ok {
@@ -80,9 +80,7 @@ Wire it up — this side of an application imports `engine`, handler files never
 st, _ := store.Open("bbolt:///var/lib/app/machines.db") // import _ ".../store/bbolt"
 eng := engine.New(st)
 
-provision, _ := machinespb.NewProvisionMachine(
-    validate{}, &selectHost{}, &reserveCapacity{}, &createMachine{},
-    reduceProvisionMachine,
+provision, _ := machinespb.NewProvisionMachine(&handlers{cloud: c})
 ).Bind(eng)
 
 eng.Start(ctx)

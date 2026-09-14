@@ -127,10 +127,13 @@ MUST fail to compile.
 Example:
 
 ```go
-func (inv CreateMachineInvocation) State[T proto.Message](
+func (inv durable.TypedInvocation[In]) State[T proto.Message](
     step durable.StateStepRef[T],
 ) (T, bool)
 ```
+
+(`machines.ProvisionMachineInvocation` is the generated alias of
+`durable.TypedInvocation[*machines.ProvisionMachineInput]`.)
 
 and:
 
@@ -224,61 +227,35 @@ Likewise, after a handler returns a State value, later mutation of the original 
 
 ---
 
-## Step handler capability matrix
+## The pipeline handler interface
 
-### No State, no Unwind
-
-```go
-type ValidateHandler interface {
-    Run(
-        context.Context,
-        ValidateInvocation,
-    ) error
-}
-```
-
-### State, no Unwind
+A pipeline's handlers are one interface: a method per Step, named after
+the Step message, plus `Unwind<Step>` for each Step that unwinds, plus
+the reducers the pipeline declares. Every method takes the pipeline's
+Invocation; a State-producing Step returns its State message.
 
 ```go
-type SelectHostHandler interface {
-    Run(
-        context.Context,
-        SelectHostInvocation,
-    ) (*SelectHost, error)
+type ProvisionMachineHandlers interface {
+    // no State, no Unwind
+    Validate(context.Context, ProvisionMachineInvocation) error
+    // State, no Unwind
+    SelectHost(context.Context, ProvisionMachineInvocation) (*SelectHost, error)
+    // no State, with Unwind
+    MarkProvisioning(context.Context, ProvisionMachineInvocation) error
+    UnwindMarkProvisioning(context.Context, ProvisionMachineInvocation) error
+    // State and Unwind
+    ReserveCapacity(context.Context, ProvisionMachineInvocation) (*ReserveCapacity, error)
+    UnwindReserveCapacity(context.Context, ProvisionMachineInvocation) error
+
+    Reduce(*ProvisionMachine) *ProvisionMachineOutput
 }
+
+func NewProvisionMachine(h ProvisionMachineHandlers) *ProvisionMachineDefinition
 ```
 
-### No State, with Unwind
-
-```go
-type MarkProvisioningHandler interface {
-    Run(
-        context.Context,
-        MarkProvisioningInvocation,
-    ) error
-
-    Unwind(
-        context.Context,
-        MarkProvisioningInvocation,
-    ) error
-}
-```
-
-### State and Unwind
-
-```go
-type ReserveCapacityHandler interface {
-    Run(
-        context.Context,
-        ReserveCapacityInvocation,
-    ) (*ReserveCapacity, error)
-
-    Unwind(
-        context.Context,
-        ReserveCapacityInvocation,
-    ) error
-}
-```
+One type implements the whole pipeline, so its dependencies are declared
+once; a Step the implementor lacks, a Step added to the proto included,
+is a compile error naming the method.
 
 An Unwind handler obtains its own State through:
 
@@ -299,39 +276,12 @@ middleware tells the two apart without a separate handler type.
 
 ---
 
-## Handler func adapters
-
-Each handler interface receives a generated adapter in the style of
-`http.HandlerFunc`.
-
-A single-method interface gets a func type:
-
-```go
-type ValidateFunc func(context.Context, ValidateInvocation) error
-
-func (f ValidateFunc) Run(ctx context.Context, inv ValidateInvocation) error
-```
-
-An unwind-bearing interface has two methods, which a func type cannot
-implement, so it gets a struct of funcs:
-
-```go
-type ReserveCapacityFuncs struct {
-    RunFunc    func(context.Context, ReserveCapacityInvocation) (*ReserveCapacity, error)
-    UnwindFunc func(context.Context, ReserveCapacityInvocation) error
-}
-```
-
-Adapters are conveniences for tests and small handlers; the interfaces
-remain the authoritative contract.
-
----
-
 ## Invocation accessors
 
-Every handler receives a typed Invocation wrapping `durable.Invocation`,
-an interface the Engine implements and application code never does.
-Beyond typed `Input()` and `State(...)`, it exposes:
+Every handler method receives the pipeline's Invocation,
+`durable.TypedInvocation[*Input]`: the core `durable.Invocation` — an
+interface the Engine implements and application code never does — with
+the Input typed. Beyond typed `Input()` and `State(...)`, it exposes:
 
 ```text
 PipelineID, ResourceID, RunID, StepID   identity
@@ -353,9 +303,9 @@ Engine or a Store: `durabletest.NewInvocation` builds a fake from an
 annotations, park memory) that satisfies both `durable.Invocation` and
 `durable.ReduceView`, and records the contract violations a real Engine
 would invalidate the Run for. Generated code wraps it the same way it
-wraps the Engine's: `NewReserveCapacityInvocation(fake)` is what a
-`ReserveCapacityHandler` method takes, and
-`ProvisionMachineReducer(reduce).Reduce(fake)` folds a reducer over it.
+wraps the Engine's: `NewProvisionMachineInvocation(fake)` is what a
+`ProvisionMachineHandlers` method takes, and
+`ReduceProvisionMachine(h, fake)` folds the reducer over it.
 
 ```go
 inv := durabletest.NewInvocation(durabletest.InvocationConfig{
@@ -365,7 +315,7 @@ inv := durabletest.NewInvocation(durabletest.InvocationConfig{
     },
     Failure: &durable.Failure{ /* ... */ },
 })
-err := handler.Unwind(ctx, machines.NewReserveCapacityInvocation(inv))
+err := h.UnwindReserveCapacity(ctx, machines.NewProvisionMachineInvocation(inv))
 ```
 
 ---
@@ -922,9 +872,9 @@ message ProvisionMachine {
 ## Example forward handler
 
 ```go
-func (h *createMachine) Run(
+func (h *handlers) CreateMachine(
     ctx context.Context,
-    inv machines.CreateMachineInvocation,
+    inv machines.ProvisionMachineInvocation,
 ) (*machines.CreateMachine, error) {
     host, ok := inv.State(machines.SelectHostStep)
     if !ok {

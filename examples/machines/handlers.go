@@ -35,9 +35,12 @@ func (c *cloud) id(prefix string) string {
 	return fmt.Sprintf("%s-%d", prefix, c.nextID)
 }
 
-type validate struct{}
+// handlers implements machinespb.ProvisionMachineHandlers: one method
+// per step, an Unwind method for the step that compensates, and the
+// reducer. Every step shares the fake cloud through it.
+type handlers struct{ cloud *cloud }
 
-func (validate) Run(ctx context.Context, inv machinespb.ValidateInvocation) error {
+func (h *handlers) Validate(ctx context.Context, inv machinespb.ProvisionMachineInvocation) error {
 	in := inv.Input()
 	if in.GetRegion() == "" {
 		return durable.Fail(errors.New("region is required"),
@@ -50,17 +53,13 @@ func (validate) Run(ctx context.Context, inv machinespb.ValidateInvocation) erro
 	return nil
 }
 
-type selectHost struct{ cloud *cloud }
-
-func (h *selectHost) Run(ctx context.Context, inv machinespb.SelectHostInvocation) (*machinespb.SelectHost, error) {
+func (h *handlers) SelectHost(ctx context.Context, inv machinespb.ProvisionMachineInvocation) (*machinespb.SelectHost, error) {
 	return &machinespb.SelectHost{
 		HostId: "host-" + inv.Input().GetRegion() + "-1",
 	}, nil
 }
 
-type reserveCapacity struct{ cloud *cloud }
-
-func (h *reserveCapacity) Run(ctx context.Context, inv machinespb.ReserveCapacityInvocation) (*machinespb.ReserveCapacity, error) {
+func (h *handlers) ReserveCapacity(ctx context.Context, inv machinespb.ProvisionMachineInvocation) (*machinespb.ReserveCapacity, error) {
 	host, ok := inv.State(machinespb.SelectHostStep)
 	if !ok {
 		return nil, durable.Fail(errors.New("select-host state unavailable"))
@@ -73,7 +72,7 @@ func (h *reserveCapacity) Run(ctx context.Context, inv machinespb.ReserveCapacit
 	return &machinespb.ReserveCapacity{ReservationId: id}, nil
 }
 
-func (h *reserveCapacity) Unwind(ctx context.Context, inv machinespb.ReserveCapacityInvocation) error {
+func (h *handlers) UnwindReserveCapacity(ctx context.Context, inv machinespb.ProvisionMachineInvocation) error {
 	reservation, ok := inv.State(machinespb.ReserveCapacityStep)
 	if !ok {
 		return nil
@@ -84,9 +83,7 @@ func (h *reserveCapacity) Unwind(ctx context.Context, inv machinespb.ReserveCapa
 	return nil
 }
 
-type createMachine struct{ cloud *cloud }
-
-func (h *createMachine) Run(ctx context.Context, inv machinespb.CreateMachineInvocation) (*machinespb.CreateMachine, error) {
+func (h *handlers) CreateMachine(ctx context.Context, inv machinespb.ProvisionMachineInvocation) (*machinespb.CreateMachine, error) {
 	reservation, ok := inv.State(machinespb.ReserveCapacityStep)
 	if !ok {
 		return nil, durable.Fail(errors.New("reservation state unavailable"))
@@ -113,7 +110,7 @@ func (h *createMachine) Run(ctx context.Context, inv machinespb.CreateMachineInv
 	return &machinespb.CreateMachine{MachineId: h.cloud.id("machine")}, nil
 }
 
-func reduceProvisionMachine(p *machinespb.ProvisionMachine) *machinespb.ProvisionMachineOutput {
+func (h *handlers) Reduce(p *machinespb.ProvisionMachine) *machinespb.ProvisionMachineOutput {
 	machine, ok := p.State(machinespb.CreateMachineStep)
 	if !ok {
 		panic("successful pipeline missing create-machine state")
@@ -125,9 +122,14 @@ func reduceProvisionMachine(p *machinespb.ProvisionMachine) *machinespb.Provisio
 	}
 }
 
-type releaseMachine struct{ cloud *cloud }
+func newProvisionMachine(c *cloud) *machinespb.ProvisionMachineDefinition {
+	return machinespb.NewProvisionMachine(&handlers{cloud: c})
+}
 
-func (h *releaseMachine) Run(ctx context.Context, inv machinespb.ReleaseMachineInvocation) error {
+// decommission implements machinespb.DecommissionMachineHandlers.
+type decommission struct{ cloud *cloud }
+
+func (h *decommission) ReleaseMachine(ctx context.Context, inv machinespb.DecommissionMachineInvocation) error {
 	h.cloud.mu.Lock()
 	defer h.cloud.mu.Unlock()
 	h.cloud.released = append(h.cloud.released, string(inv.ResourceID()))
@@ -135,15 +137,5 @@ func (h *releaseMachine) Run(ctx context.Context, inv machinespb.ReleaseMachineI
 }
 
 func newDecommissionMachine(c *cloud) *machinespb.DecommissionMachineDefinition {
-	return machinespb.NewDecommissionMachine(&releaseMachine{cloud: c})
-}
-
-func newProvisionMachine(c *cloud) *machinespb.ProvisionMachineDefinition {
-	return machinespb.NewProvisionMachine(
-		validate{},
-		&selectHost{cloud: c},
-		&reserveCapacity{cloud: c},
-		&createMachine{cloud: c},
-		reduceProvisionMachine,
-	)
+	return machinespb.NewDecommissionMachine(&decommission{cloud: c})
 }

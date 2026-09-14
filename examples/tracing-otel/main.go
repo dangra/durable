@@ -59,13 +59,17 @@ func (w *warehouse) id(prefix string) string {
 	return fmt.Sprintf("%s-%d", prefix, w.nextID)
 }
 
-type reserveStock struct{ w *warehouse }
+// fulfillment implements orderspb.FulfillOrderHandlers.
+type fulfillment struct {
+	w      *warehouse
+	tracer trace.Tracer
+}
 
-func (h *reserveStock) Run(ctx context.Context, inv orderspb.ReserveStockInvocation) (*orderspb.ReserveStock, error) {
+func (h *fulfillment) ReserveStock(ctx context.Context, inv orderspb.FulfillOrderInvocation) (*orderspb.ReserveStock, error) {
 	return &orderspb.ReserveStock{ReservationId: h.w.id("stock")}, nil
 }
 
-func (h *reserveStock) Unwind(ctx context.Context, inv orderspb.ReserveStockInvocation) error {
+func (h *fulfillment) UnwindReserveStock(ctx context.Context, inv orderspb.FulfillOrderInvocation) error {
 	if res, ok := inv.State(orderspb.ReserveStockStep); ok {
 		h.w.mu.Lock()
 		h.w.released = append(h.w.released, res.GetReservationId())
@@ -74,12 +78,7 @@ func (h *reserveStock) Unwind(ctx context.Context, inv orderspb.ReserveStockInvo
 	return nil
 }
 
-type chargePayment struct {
-	w      *warehouse
-	tracer trace.Tracer
-}
-
-func (h *chargePayment) Run(ctx context.Context, inv orderspb.ChargePaymentInvocation) (*orderspb.ChargePayment, error) {
+func (h *fulfillment) ChargePayment(ctx context.Context, inv orderspb.FulfillOrderInvocation) (*orderspb.ChargePayment, error) {
 	// The handler's ctx carries the attempt span the middleware
 	// started, so downstream instrumentation nests under it — this is
 	// what an otelhttp-instrumented gateway call would do implicitly.
@@ -92,7 +91,7 @@ func (h *chargePayment) Run(ctx context.Context, inv orderspb.ChargePaymentInvoc
 	return &orderspb.ChargePayment{ChargeId: h.w.id("charge")}, nil
 }
 
-func (h *chargePayment) Unwind(ctx context.Context, inv orderspb.ChargePaymentInvocation) error {
+func (h *fulfillment) UnwindChargePayment(ctx context.Context, inv orderspb.FulfillOrderInvocation) error {
 	if c, ok := inv.State(orderspb.ChargePaymentStep); ok {
 		h.w.mu.Lock()
 		h.w.refunded = append(h.w.refunded, c.GetChargeId())
@@ -101,11 +100,14 @@ func (h *chargePayment) Unwind(ctx context.Context, inv orderspb.ChargePaymentIn
 	return nil
 }
 
-type ship struct{}
-
-func (ship) Run(ctx context.Context, inv orderspb.ShipInvocation) (*orderspb.Ship, error) {
+func (h *fulfillment) Ship(ctx context.Context, inv orderspb.FulfillOrderInvocation) (*orderspb.Ship, error) {
 	return nil, durable.Fail(errors.New("carrier rejected the address"),
 		durable.WithUserKind(), durable.WithReason("invalid-address"))
+}
+
+func (h *fulfillment) Reduce(o *orderspb.FulfillOrder) *orderspb.FulfillOrderOutput {
+	s, _ := o.State(orderspb.ShipStep)
+	return &orderspb.FulfillOrderOutput{ShipmentId: s.GetShipmentId()}
 }
 
 func run(ctx context.Context) (*tracetest.SpanRecorder, trace.SpanContext, orderspb.FulfillOrderResult, error) {
@@ -123,13 +125,7 @@ func run(ctx context.Context) (*tracetest.SpanRecorder, trace.SpanContext, order
 		engine.WithMiddleware(durableotel.Middleware(durableotel.WithTracerProvider(tp))),
 		engine.WithScheduleAnnotator(durableotel.Annotator()))
 	w := &warehouse{}
-	pipe, err := orderspb.NewFulfillOrder(
-		&reserveStock{w}, &chargePayment{w: w, tracer: tracer}, ship{},
-		func(o *orderspb.FulfillOrder) *orderspb.FulfillOrderOutput {
-			s, _ := o.State(orderspb.ShipStep)
-			return &orderspb.FulfillOrderOutput{ShipmentId: s.GetShipmentId()}
-		},
-	).Bind(eng)
+	pipe, err := orderspb.NewFulfillOrder(&fulfillment{w: w, tracer: tracer}).Bind(eng)
 	if err != nil {
 		return nil, trace.SpanContext{}, orderspb.FulfillOrderResult{}, err
 	}

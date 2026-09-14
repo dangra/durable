@@ -11,7 +11,6 @@ import (
 	engine "github.com/dangra/durable/engine"
 	pipelinedef "github.com/dangra/durable/pipelinedef"
 	proto "google.golang.org/protobuf/proto"
-	slog "log/slog"
 	sync "sync"
 )
 
@@ -24,235 +23,49 @@ var ChargePaymentStep = pipelinedef.StateStepRef("charge-payment/v1", func() *Ch
 // ShipStep is the typed reference to the state-producing step "ship/v1".
 var ShipStep = pipelinedef.StateStepRef("ship/v1", func() *Ship { return &Ship{} })
 
-// ReserveStockInvocation is passed to ReserveStockHandler methods.
-type ReserveStockInvocation struct {
-	core durable.Invocation
+// FulfillOrderInvocation is the invocation every FulfillOrderHandlers method receives:
+// durable.Invocation with the pipeline's Input typed.
+type FulfillOrderInvocation = durable.TypedInvocation[*FulfillOrderInput]
+
+// NewFulfillOrderInvocation wraps core for calling a FulfillOrderHandlers method directly,
+// outside an engine: hand it durabletest.NewInvocation to unit-test a
+// handler. The engine wraps its own invocations; application code never
+// needs this at runtime.
+func NewFulfillOrderInvocation(core durable.Invocation) FulfillOrderInvocation {
+	return durable.Typed[*FulfillOrderInput](core)
 }
 
-// NewReserveStockInvocation wraps core for calling a ReserveStockHandler directly, outside
-// an engine: hand it durabletest.NewInvocation to unit-test the handler.
-// The engine wraps its own invocations; application code never needs
-// this at runtime.
-func NewReserveStockInvocation(core durable.Invocation) ReserveStockInvocation {
-	return ReserveStockInvocation{core: core}
+// FulfillOrderHandlers implements the "fulfill-order" pipeline: one method per
+// step, named after the step, plus Unwind<Step> for each step that
+// unwinds. A type implements every step or does not compile; a step
+// added to the pipeline is a method the next build demands.
+type FulfillOrderHandlers interface {
+	// ReserveStock runs step "reserve-stock/v1".
+	ReserveStock(ctx context.Context, inv FulfillOrderInvocation) (*ReserveStock, error)
+	// UnwindReserveStock compensates step "reserve-stock/v1" once it
+	// succeeded and the run unwinds.
+	UnwindReserveStock(ctx context.Context, inv FulfillOrderInvocation) error
+	// ChargePayment runs step "charge-payment/v1".
+	ChargePayment(ctx context.Context, inv FulfillOrderInvocation) (*ChargePayment, error)
+	// UnwindChargePayment compensates step "charge-payment/v1" once it
+	// succeeded and the run unwinds.
+	UnwindChargePayment(ctx context.Context, inv FulfillOrderInvocation) error
+	// Ship runs step "ship/v1".
+	Ship(ctx context.Context, inv FulfillOrderInvocation) (*Ship, error)
+	// Reduce produces the pipeline output from the immutable input and
+	// committed step states on success. It must be pure: deterministic,
+	// side-effect free, synchronous, and non-failing.
+	Reduce(*FulfillOrder) *FulfillOrderOutput
 }
 
-func (inv ReserveStockInvocation) PipelineID() durable.PipelineID { return inv.core.PipelineID() }
-func (inv ReserveStockInvocation) ResourceID() durable.ResourceID { return inv.core.ResourceID() }
-func (inv ReserveStockInvocation) RunID() durable.RunID           { return inv.core.RunID() }
-func (inv ReserveStockInvocation) StepID() durable.StepID         { return inv.core.StepID() }
-func (inv ReserveStockInvocation) Attempt() uint64                { return inv.core.Attempt() }
-func (inv ReserveStockInvocation) Phase() durable.Phase           { return inv.core.Phase() }
-
-// AwaitedRunID reports the run an earlier attempt of this operation parked
-// on via durable.AwaitRun, once that park resolved. Multi-target parks
-// are read through Awaited.
-func (inv ReserveStockInvocation) AwaitedRunID() (durable.RunID, bool) {
-	return inv.core.AwaitedRunID()
-}
-
-// Awaited reports the park an earlier attempt of this operation made, once
-// it resolved; ok is false on a first execution.
-func (inv ReserveStockInvocation) Awaited() (durable.Wake, bool) { return inv.core.Awaited() }
-
-// Annotations returns a caller-owned copy of the run's immutable
-// acceptance-time annotations (trace contexts, tenant tags).
-func (inv ReserveStockInvocation) Annotations() map[string]string { return inv.core.Annotations() }
-
-// Failure is the failure this run is unwinding: non-nil exactly in
-// durable.PhaseUnwind, nil during forward attempts.
-func (inv ReserveStockInvocation) Failure() *durable.Failure { return inv.core.Failure() }
-
-// Logger returns a logger scoped to this invocation, with the canonical
-// pipeline, resource, run, step, phase, and attempt keys attached.
-func (inv ReserveStockInvocation) Logger() *slog.Logger { return inv.core.Logger() }
-
-// Input returns a defensive caller-owned copy of the immutable pipeline input.
-func (inv ReserveStockInvocation) Input() *FulfillOrderInput {
-	msg, _ := inv.core.InputMessage().(*FulfillOrderInput)
-	return msg
-}
-
-// State returns the committed state of the referenced step for this run.
-// ok is false when no committed state exists.
-func (inv ReserveStockInvocation) State[T proto.Message](step durable.StateStepRef[T]) (T, bool) {
-	return durable.LookupState(inv.core, step)
-}
-
-// ReserveStockHandler implements step "reserve-stock/v1".
-type ReserveStockHandler interface {
-	Run(context.Context, ReserveStockInvocation) (*ReserveStock, error)
-
-	Unwind(context.Context, ReserveStockInvocation) error
-}
-
-// ReserveStockFuncs adapts a pair of functions to ReserveStockHandler.
-type ReserveStockFuncs struct {
-	RunFunc    func(ctx context.Context, inv ReserveStockInvocation) (*ReserveStock, error)
-	UnwindFunc func(ctx context.Context, inv ReserveStockInvocation) error
-}
-
-func (f ReserveStockFuncs) Run(ctx context.Context, inv ReserveStockInvocation) (*ReserveStock, error) {
-	return f.RunFunc(ctx, inv)
-}
-
-func (f ReserveStockFuncs) Unwind(ctx context.Context, inv ReserveStockInvocation) error {
-	return f.UnwindFunc(ctx, inv)
-}
-
-// ChargePaymentInvocation is passed to ChargePaymentHandler methods.
-type ChargePaymentInvocation struct {
-	core durable.Invocation
-}
-
-// NewChargePaymentInvocation wraps core for calling a ChargePaymentHandler directly, outside
-// an engine: hand it durabletest.NewInvocation to unit-test the handler.
-// The engine wraps its own invocations; application code never needs
-// this at runtime.
-func NewChargePaymentInvocation(core durable.Invocation) ChargePaymentInvocation {
-	return ChargePaymentInvocation{core: core}
-}
-
-func (inv ChargePaymentInvocation) PipelineID() durable.PipelineID { return inv.core.PipelineID() }
-func (inv ChargePaymentInvocation) ResourceID() durable.ResourceID { return inv.core.ResourceID() }
-func (inv ChargePaymentInvocation) RunID() durable.RunID           { return inv.core.RunID() }
-func (inv ChargePaymentInvocation) StepID() durable.StepID         { return inv.core.StepID() }
-func (inv ChargePaymentInvocation) Attempt() uint64                { return inv.core.Attempt() }
-func (inv ChargePaymentInvocation) Phase() durable.Phase           { return inv.core.Phase() }
-
-// AwaitedRunID reports the run an earlier attempt of this operation parked
-// on via durable.AwaitRun, once that park resolved. Multi-target parks
-// are read through Awaited.
-func (inv ChargePaymentInvocation) AwaitedRunID() (durable.RunID, bool) {
-	return inv.core.AwaitedRunID()
-}
-
-// Awaited reports the park an earlier attempt of this operation made, once
-// it resolved; ok is false on a first execution.
-func (inv ChargePaymentInvocation) Awaited() (durable.Wake, bool) { return inv.core.Awaited() }
-
-// Annotations returns a caller-owned copy of the run's immutable
-// acceptance-time annotations (trace contexts, tenant tags).
-func (inv ChargePaymentInvocation) Annotations() map[string]string { return inv.core.Annotations() }
-
-// Failure is the failure this run is unwinding: non-nil exactly in
-// durable.PhaseUnwind, nil during forward attempts.
-func (inv ChargePaymentInvocation) Failure() *durable.Failure { return inv.core.Failure() }
-
-// Logger returns a logger scoped to this invocation, with the canonical
-// pipeline, resource, run, step, phase, and attempt keys attached.
-func (inv ChargePaymentInvocation) Logger() *slog.Logger { return inv.core.Logger() }
-
-// Input returns a defensive caller-owned copy of the immutable pipeline input.
-func (inv ChargePaymentInvocation) Input() *FulfillOrderInput {
-	msg, _ := inv.core.InputMessage().(*FulfillOrderInput)
-	return msg
-}
-
-// State returns the committed state of the referenced step for this run.
-// ok is false when no committed state exists.
-func (inv ChargePaymentInvocation) State[T proto.Message](step durable.StateStepRef[T]) (T, bool) {
-	return durable.LookupState(inv.core, step)
-}
-
-// ChargePaymentHandler implements step "charge-payment/v1".
-type ChargePaymentHandler interface {
-	Run(context.Context, ChargePaymentInvocation) (*ChargePayment, error)
-
-	Unwind(context.Context, ChargePaymentInvocation) error
-}
-
-// ChargePaymentFuncs adapts a pair of functions to ChargePaymentHandler.
-type ChargePaymentFuncs struct {
-	RunFunc    func(ctx context.Context, inv ChargePaymentInvocation) (*ChargePayment, error)
-	UnwindFunc func(ctx context.Context, inv ChargePaymentInvocation) error
-}
-
-func (f ChargePaymentFuncs) Run(ctx context.Context, inv ChargePaymentInvocation) (*ChargePayment, error) {
-	return f.RunFunc(ctx, inv)
-}
-
-func (f ChargePaymentFuncs) Unwind(ctx context.Context, inv ChargePaymentInvocation) error {
-	return f.UnwindFunc(ctx, inv)
-}
-
-// ShipInvocation is passed to ShipHandler methods.
-type ShipInvocation struct {
-	core durable.Invocation
-}
-
-// NewShipInvocation wraps core for calling a ShipHandler directly, outside
-// an engine: hand it durabletest.NewInvocation to unit-test the handler.
-// The engine wraps its own invocations; application code never needs
-// this at runtime.
-func NewShipInvocation(core durable.Invocation) ShipInvocation { return ShipInvocation{core: core} }
-
-func (inv ShipInvocation) PipelineID() durable.PipelineID { return inv.core.PipelineID() }
-func (inv ShipInvocation) ResourceID() durable.ResourceID { return inv.core.ResourceID() }
-func (inv ShipInvocation) RunID() durable.RunID           { return inv.core.RunID() }
-func (inv ShipInvocation) StepID() durable.StepID         { return inv.core.StepID() }
-func (inv ShipInvocation) Attempt() uint64                { return inv.core.Attempt() }
-func (inv ShipInvocation) Phase() durable.Phase           { return inv.core.Phase() }
-
-// AwaitedRunID reports the run an earlier attempt of this operation parked
-// on via durable.AwaitRun, once that park resolved. Multi-target parks
-// are read through Awaited.
-func (inv ShipInvocation) AwaitedRunID() (durable.RunID, bool) { return inv.core.AwaitedRunID() }
-
-// Awaited reports the park an earlier attempt of this operation made, once
-// it resolved; ok is false on a first execution.
-func (inv ShipInvocation) Awaited() (durable.Wake, bool) { return inv.core.Awaited() }
-
-// Annotations returns a caller-owned copy of the run's immutable
-// acceptance-time annotations (trace contexts, tenant tags).
-func (inv ShipInvocation) Annotations() map[string]string { return inv.core.Annotations() }
-
-// Failure is the failure this run is unwinding: non-nil exactly in
-// durable.PhaseUnwind, nil during forward attempts.
-func (inv ShipInvocation) Failure() *durable.Failure { return inv.core.Failure() }
-
-// Logger returns a logger scoped to this invocation, with the canonical
-// pipeline, resource, run, step, phase, and attempt keys attached.
-func (inv ShipInvocation) Logger() *slog.Logger { return inv.core.Logger() }
-
-// Input returns a defensive caller-owned copy of the immutable pipeline input.
-func (inv ShipInvocation) Input() *FulfillOrderInput {
-	msg, _ := inv.core.InputMessage().(*FulfillOrderInput)
-	return msg
-}
-
-// State returns the committed state of the referenced step for this run.
-// ok is false when no committed state exists.
-func (inv ShipInvocation) State[T proto.Message](step durable.StateStepRef[T]) (T, bool) {
-	return durable.LookupState(inv.core, step)
-}
-
-// ShipHandler implements step "ship/v1".
-type ShipHandler interface {
-	Run(context.Context, ShipInvocation) (*Ship, error)
-}
-
-// ShipFunc adapts a function to ShipHandler, in the style of
-// http.HandlerFunc.
-type ShipFunc func(ctx context.Context, inv ShipInvocation) (*Ship, error)
-
-func (f ShipFunc) Run(ctx context.Context, inv ShipInvocation) (*Ship, error) { return f(ctx, inv) }
-
-// FulfillOrderReducer produces the pipeline output from the immutable input and committed step states on success.
-// It must be pure: deterministic, side-effect free, synchronous, and
-// non-failing.
-type FulfillOrderReducer func(*FulfillOrder) *FulfillOrderOutput
-
-// Reduce folds view through r: the marker the reducer receives reads
-// its Input, States, and failures from view for the duration of the
-// call. The engine reduces through it; a unit test hands it
-// durabletest.NewInvocation (which is also a durable.ReduceView) to
-// exercise the reducer alone.
-func (r FulfillOrderReducer) Reduce(view durable.ReduceView) *FulfillOrderOutput {
+// ReduceFulfillOrder folds view through h.Reduce: the marker the reducer
+// receives reads its Input, States, and failures from view for the
+// duration of the call.
+func ReduceFulfillOrder(h FulfillOrderHandlers, view durable.ReduceView) *FulfillOrderOutput {
 	x := &FulfillOrder{}
 	fulfillOrderViews.Store(x, view)
 	defer fulfillOrderViews.Delete(x)
-	return r(x)
+	return h.Reduce(x)
 }
 
 var fulfillOrderViews sync.Map
@@ -295,18 +108,13 @@ type FulfillOrderDefinition struct {
 }
 
 // NewFulfillOrder assembles the "fulfill-order" pipeline definition
-// from its step handlers and reducer.
-func NewFulfillOrder(
-	reserveStock ReserveStockHandler,
-	chargePayment ChargePaymentHandler,
-	ship ShipHandler,
-	reduce FulfillOrderReducer,
-) *FulfillOrderDefinition {
+// from its handlers.
+func NewFulfillOrder(h FulfillOrderHandlers) *FulfillOrderDefinition {
 	return &FulfillOrderDefinition{def: pipelinedef.New(pipelinedef.Config{
 		ID:       "fulfill-order",
 		NewInput: func() proto.Message { return &FulfillOrderInput{} },
 		Reduce: func(view durable.ReduceView) proto.Message {
-			return reduce.Reduce(view)
+			return ReduceFulfillOrder(h, view)
 		},
 		Steps: []pipelinedef.Step{
 			{
@@ -314,14 +122,14 @@ func NewFulfillOrder(
 				Unwind:   true,
 				HasState: true,
 				Run: func(ctx context.Context, core durable.Invocation) (proto.Message, error) {
-					state, err := reserveStock.Run(ctx, ReserveStockInvocation{core: core})
+					state, err := h.ReserveStock(ctx, durable.Typed[*FulfillOrderInput](core))
 					if state == nil {
 						return nil, err
 					}
 					return state, err
 				},
 				UnwindFunc: func(ctx context.Context, core durable.Invocation) error {
-					return reserveStock.Unwind(ctx, ReserveStockInvocation{core: core})
+					return h.UnwindReserveStock(ctx, durable.Typed[*FulfillOrderInput](core))
 				},
 			},
 			{
@@ -329,21 +137,21 @@ func NewFulfillOrder(
 				Unwind:   true,
 				HasState: true,
 				Run: func(ctx context.Context, core durable.Invocation) (proto.Message, error) {
-					state, err := chargePayment.Run(ctx, ChargePaymentInvocation{core: core})
+					state, err := h.ChargePayment(ctx, durable.Typed[*FulfillOrderInput](core))
 					if state == nil {
 						return nil, err
 					}
 					return state, err
 				},
 				UnwindFunc: func(ctx context.Context, core durable.Invocation) error {
-					return chargePayment.Unwind(ctx, ChargePaymentInvocation{core: core})
+					return h.UnwindChargePayment(ctx, durable.Typed[*FulfillOrderInput](core))
 				},
 			},
 			{
 				ID:       "ship/v1",
 				HasState: true,
 				Run: func(ctx context.Context, core durable.Invocation) (proto.Message, error) {
-					state, err := ship.Run(ctx, ShipInvocation{core: core})
+					state, err := h.Ship(ctx, durable.Typed[*FulfillOrderInput](core))
 					if state == nil {
 						return nil, err
 					}

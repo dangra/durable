@@ -8,23 +8,23 @@ import (
 	"github.com/dangra/durable/examples/release-train/legacypb"
 )
 
-type legacyProvisionEnv struct{ w *world }
+// legacyDeploy implements legacypb.DeployServiceHandlers.
+type legacyDeploy struct{ w *world }
 
-func (h *legacyProvisionEnv) Run(ctx context.Context, inv legacypb.ProvisionEnvInvocation) (*legacypb.ProvisionEnv, error) {
+func (h *legacyDeploy) ProvisionEnv(ctx context.Context, inv legacypb.DeployServiceInvocation) (*legacypb.ProvisionEnv, error) {
 	return &legacypb.ProvisionEnv{EnvId: h.w.provision(inv.Input().GetService())}, nil
 }
 
-func (h *legacyProvisionEnv) Unwind(ctx context.Context, inv legacypb.ProvisionEnvInvocation) error {
+func (h *legacyDeploy) UnwindProvisionEnv(ctx context.Context, inv legacypb.DeployServiceInvocation) error {
 	h.w.teardown(inv.Input().GetService())
 	return nil
 }
 
-type legacyRunMigrations struct{ w *world }
-
-// Run applies the migration for real, then "crashes" before durable can
-// commit the fact: the daemon dies mid-attempt. The restarted build
-// re-executes this operation and hits the idempotent skip.
-func (h *legacyRunMigrations) Run(ctx context.Context, inv legacypb.RunMigrationsInvocation) (*legacypb.RunMigrations, error) {
+// RunMigrations applies the migration for real, then "crashes" before
+// durable can commit the fact: the daemon dies mid-attempt. The
+// restarted build re-executes this operation and hits the idempotent
+// skip.
+func (h *legacyDeploy) RunMigrations(ctx context.Context, inv legacypb.DeployServiceInvocation) (*legacypb.RunMigrations, error) {
 	h.w.migrate(inv.Input().GetService(), inv.Input().GetImage())
 	close(h.w.webMigrating)
 	<-ctx.Done() // the daemon shuts down under us
@@ -32,14 +32,12 @@ func (h *legacyRunMigrations) Run(ctx context.Context, inv legacypb.RunMigration
 	return nil, ctx.Err()
 }
 
-func (h *legacyRunMigrations) Unwind(ctx context.Context, inv legacypb.RunMigrationsInvocation) error {
+func (h *legacyDeploy) UnwindRunMigrations(ctx context.Context, inv legacypb.DeployServiceInvocation) error {
 	h.w.rollback(inv.Input().GetService())
 	return nil
 }
 
-type legacyShiftTraffic struct{ w *world }
-
-func (h *legacyShiftTraffic) Run(ctx context.Context, inv legacypb.ShiftTrafficInvocation) (*legacypb.ShiftTraffic, error) {
+func (h *legacyDeploy) ShiftTraffic(ctx context.Context, inv legacypb.DeployServiceInvocation) (*legacypb.ShiftTraffic, error) {
 	// Never reached in this demo: the daemon dies before the web deploy
 	// gets here, and the next build routes through canary analysis first.
 	h.w.mu.Lock()
@@ -48,6 +46,6 @@ func (h *legacyShiftTraffic) Run(ctx context.Context, inv legacypb.ShiftTrafficI
 	return &legacypb.ShiftTraffic{LbGeneration: inv.Input().GetImage()}, nil
 }
 
-func reduceLegacyDeploy(d *legacypb.DeployService) *legacypb.DeployServiceOutput {
+func (h *legacyDeploy) Reduce(d *legacypb.DeployService) *legacypb.DeployServiceOutput {
 	return &legacypb.DeployServiceOutput{Url: "https://" + d.Input().GetService() + ".example.com"}
 }

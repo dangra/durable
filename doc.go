@@ -26,7 +26,9 @@
 // Writing handlers. Invocation carries input, prior state, and attempt
 // metadata; it is an interface the engine implements, and
 // durabletest.NewInvocation fakes it so handlers are unit-testable
-// without an engine. The ways out: success, an ordinary error (retried — a
+// without an engine. A generated pipeline's handler methods receive it
+// as TypedInvocation, the same interface with the Input typed, built by
+// Typed (NoInput stands in for a pipeline without one). The ways out: success, an ordinary error (retried — a
 // returned ctx.Err() included), Fail with FailOptions and
 // kind/reason attribution, or AwaitRun, AwaitAll, and AwaitAny to park on
 // other Runs, bounded by WithAwaitTimeout and claiming them with

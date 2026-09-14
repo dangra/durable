@@ -158,15 +158,15 @@ Part of the [`durable` specification](README.md). This list is append-only; inva
 
 78. Cancellation terminates a Run through normal unwind, never by abandoning work.
 
-79. Cancellation never abandons a started operation; it resolves first.
+79. Cancellation resolves the pending forward operation as canceled without executing it; only an attempt already executing runs to its own return.
 
 80. The first cancellation request wins and survives restart.
 
-81. A Run remains cancelable until terminal success is durably committed.
+81. A Run remains cancelable until its last forward operation succeeds; the reduction that follows is uncancellable, and a request arriving from then on has no effect.
 
 82. A canceled Run is a failed Run whose Failure carries FailureKindCanceled.
 
-83. An organic permanent failure under a pending cancellation becomes the Failure.
+83. Under a pending cancellation the Failure is the cancellation, whatever the executing attempt returned; only success commits the Step.
 
 84. Cancellation does not bypass Run invalidity.
 
@@ -198,9 +198,9 @@ Part of the [`durable` specification](README.md). This list is append-only; inva
 
 98. `Wait` called with an attempt context never blocks a worker: it returns a terminal Result or `ErrRunInProgress`.
 
-99. A cancellation bypassing a park still yields the park's memory to the attempt that resolves it.
+99. A cancellation resolves a park as canceled without waking the parked operation; no attempt observes it.
 
-100. A `Fail` wrapping a `*PreemptedError` is attributed as cancellation only on Engine-side evidence of the preemption.
+100. Cancellation is attributed only from the Engine's own record of the request; no value a handler returns declares one, and no handler is re-executed to observe one.
 
 101. Shutdown starts no new attempt; in-flight attempts drain for the configured timeout and are preempted only at its deadline.
 
@@ -231,3 +231,9 @@ Part of the [`durable` specification](README.md). This list is append-only; inva
 114. `RunClass.MaxQueued` bounds a class's accepted-but-unstarted Runs; the check and the count are one step at `Schedule`, so the cap is exact under one Engine, and a refused `Schedule` creates nothing.
 
 115. An attempt whose context shutdown killed and that returns an ordinary error is interrupted, not failed: no last error and no retry backoff are recorded, and the next Engine re-executes the operation subject only to recovery backoff.
+
+116. A Run scheduled from inside an attempt records that attempt's Run as its parent; canceling a Run cancels its nonterminal children with the same cause, recursively, at acceptance for a child accepted later, and at startup for one whose parent's request a crash left unapplied.
+
+117. The operation a cancellation resolves keeps the attempts it had reserved and carries the cancellation on its record; the Run's Failure names its Step.
+
+118. An unwind attempt's context is never canceled for a cancellation request; a request on a Run in unwind is recorded and changes nothing.

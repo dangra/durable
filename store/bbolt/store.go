@@ -131,6 +131,9 @@ var (
 	expiryBucket   = []byte("expiry")
 	stagedBucket   = []byte("staged")
 	slotsBucket    = []byte("slots")
+	// children indexes the nonterminal Runs by parent: one empty row
+	// per (parent, child), written at CreateRun, released at terminality.
+	childrenBucket = []byte("children")
 )
 
 // Row tags of the active bucket, in sort order.
@@ -251,7 +254,7 @@ func Open(path string, opts ...Option) (*Store, error) {
 		return nil, fmt.Errorf("bbolt: opening %s: %w", path, err)
 	}
 	err = db.Update(func(tx *bolt.Tx) error {
-		for _, name := range [][]byte{activeBucket, cursorBucket, terminalBucket, expiryBucket, stagedBucket, slotsBucket} {
+		for _, name := range [][]byte{activeBucket, cursorBucket, terminalBucket, expiryBucket, stagedBucket, slotsBucket, childrenBucket} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return err
 			}
@@ -466,6 +469,11 @@ func (s *Store) CreateRun(_ context.Context, rec *driver.RunRecord, excluding []
 		if err := slots.Put(slotKey(rec), []byte(rec.RunID)); err != nil {
 			return err
 		}
+		if rec.Parent != "" && rec.Outcome == nil {
+			if err := tx.Bucket(childrenBucket).Put(childKey(rec.Parent, rec.RunID), []byte{}); err != nil {
+				return err
+			}
+		}
 		created = true
 		return nil
 	})
@@ -611,6 +619,11 @@ func (s *Store) ApplyTransition(_ context.Context, id kernel.RunID, t driver.Tra
 			}
 			if err := tx.Bucket(stagedBucket).Put([]byte(id), []byte{}); err != nil {
 				return err
+			}
+			if rec.Parent != "" {
+				if err := tx.Bucket(childrenBucket).Delete(childKey(rec.Parent, id)); err != nil {
+					return err
+				}
 			}
 			key := slotKey(rec)
 			if active := tx.Bucket(slotsBucket).Get(key); active != nil && string(active) == string(id) {
@@ -1179,6 +1192,25 @@ func (s *Store) ListNonterminal(_ context.Context) ([]*driver.RunRecord, error) 
 			out = append(out, rec)
 			return nil
 		})
+	})
+	return out, err
+}
+
+// childKey is the children index row for (parent, child).
+func childKey(parent, child kernel.RunID) []byte {
+	return []byte(string(parent) + "\x00" + string(child))
+}
+
+// ListChildren walks the children index under parent's prefix.
+func (s *Store) ListChildren(_ context.Context, parent kernel.RunID) ([]kernel.RunID, error) {
+	prefix := []byte(string(parent) + "\x00")
+	var out []kernel.RunID
+	err := s.db.View(func(tx *bolt.Tx) error {
+		c := tx.Bucket(childrenBucket).Cursor()
+		for k, _ := c.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, _ = c.Next() {
+			out = append(out, kernel.RunID(k[len(prefix):]))
+		}
+		return nil
 	})
 	return out, err
 }

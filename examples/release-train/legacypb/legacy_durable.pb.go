@@ -44,10 +44,6 @@ func (inv ProvisionEnvInvocation) StepID() durable.StepID         { return inv.c
 func (inv ProvisionEnvInvocation) Attempt() uint64                { return inv.core.Attempt() }
 func (inv ProvisionEnvInvocation) Phase() durable.Phase           { return inv.core.Phase() }
 
-// CancelRequested reports whether a cancellation request was pending when
-// this attempt was reserved.
-func (inv ProvisionEnvInvocation) CancelRequested() bool { return inv.core.CancelRequested() }
-
 // AwaitedRunID reports the run an earlier attempt of this operation parked
 // on via durable.AwaitRun, once that park resolved. Multi-target parks
 // are read through Awaited.
@@ -124,10 +120,6 @@ func (inv RunMigrationsInvocation) StepID() durable.StepID         { return inv.
 func (inv RunMigrationsInvocation) Attempt() uint64                { return inv.core.Attempt() }
 func (inv RunMigrationsInvocation) Phase() durable.Phase           { return inv.core.Phase() }
 
-// CancelRequested reports whether a cancellation request was pending when
-// this attempt was reserved.
-func (inv RunMigrationsInvocation) CancelRequested() bool { return inv.core.CancelRequested() }
-
 // AwaitedRunID reports the run an earlier attempt of this operation parked
 // on via durable.AwaitRun, once that park resolved. Multi-target parks
 // are read through Awaited.
@@ -203,10 +195,6 @@ func (inv ShiftTrafficInvocation) RunID() durable.RunID           { return inv.c
 func (inv ShiftTrafficInvocation) StepID() durable.StepID         { return inv.core.StepID() }
 func (inv ShiftTrafficInvocation) Attempt() uint64                { return inv.core.Attempt() }
 func (inv ShiftTrafficInvocation) Phase() durable.Phase           { return inv.core.Phase() }
-
-// CancelRequested reports whether a cancellation request was pending when
-// this attempt was reserved.
-func (inv ShiftTrafficInvocation) CancelRequested() bool { return inv.core.CancelRequested() }
 
 // AwaitedRunID reports the run an earlier attempt of this operation parked
 // on via durable.AwaitRun, once that park resolved. Multi-target parks

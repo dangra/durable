@@ -189,6 +189,13 @@ func (s *observedStore) ListNonterminal(ctx context.Context) ([]*driver.RunRecor
 	return recs, err
 }
 
+func (s *observedStore) ListChildren(ctx context.Context, parent durable.RunID) ([]durable.RunID, error) {
+	start := s.engine.clock.Now()
+	ids, err := s.inner.ListChildren(ctx, parent)
+	s.op("ListChildren", false, start, err)
+	return ids, err
+}
+
 func (s *observedStore) GetActiveRunID(ctx context.Context, pipeline durable.PipelineID, resource durable.ResourceID) (durable.RunID, bool, error) {
 	start := s.engine.clock.Now()
 	id, ok, err := s.inner.GetActiveRunID(ctx, pipeline, resource)

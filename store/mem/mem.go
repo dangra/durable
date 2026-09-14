@@ -30,6 +30,9 @@ type Store struct {
 	// the last transition's Cursor named — so a head can be projected
 	// without guessing which unresolved operation is the Cursor's.
 	inflight map[kernel.RunID]kernel.StepID
+	// children indexes the nonterminal Runs by parent, as CreateRun
+	// records them and terminality releases them.
+	children map[kernel.RunID]map[kernel.RunID]struct{}
 }
 
 // New constructs an empty Store.
@@ -38,6 +41,7 @@ func New() *Store {
 		runs:     make(map[kernel.RunID]*driver.RunRecord),
 		slots:    make(map[string]kernel.RunID),
 		inflight: make(map[kernel.RunID]kernel.StepID),
+		children: make(map[kernel.RunID]map[kernel.RunID]struct{}),
 	}
 }
 
@@ -63,7 +67,23 @@ func (s *Store) CreateRun(_ context.Context, rec *driver.RunRecord, excluding []
 	}
 	s.runs[rec.RunID] = c
 	s.slots[slotKey(rec.PipelineID, rec.ResourceID)] = rec.RunID
+	if rec.Parent != "" && !c.Terminal() {
+		if s.children[rec.Parent] == nil {
+			s.children[rec.Parent] = map[kernel.RunID]struct{}{}
+		}
+		s.children[rec.Parent][rec.RunID] = struct{}{}
+	}
 	return nil, true, nil
+}
+
+func (s *Store) ListChildren(_ context.Context, parent kernel.RunID) ([]kernel.RunID, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []kernel.RunID
+	for id := range s.children[parent] {
+		out = append(out, id)
+	}
+	return out, nil
 }
 
 func (s *Store) GetActiveRunID(_ context.Context, pipeline kernel.PipelineID, resource kernel.ResourceID) (kernel.RunID, bool, error) {
@@ -166,6 +186,12 @@ func (s *Store) ApplyTransition(_ context.Context, id kernel.RunID, t driver.Tra
 		// stage.
 		if key := slotKey(rec.PipelineID, rec.ResourceID); s.slots[key] == id {
 			delete(s.slots, key)
+		}
+		if rec.Parent != "" {
+			delete(s.children[rec.Parent], id)
+			if len(s.children[rec.Parent]) == 0 {
+				delete(s.children, rec.Parent)
+			}
 		}
 		delete(s.inflight, id)
 		rec.CompactTerminal()

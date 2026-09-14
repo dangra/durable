@@ -84,6 +84,11 @@ func (p *Pipeline) Schedule(ctx context.Context, resource durable.ResourceID, in
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
+	// Scheduled from inside a forward attempt: the Run is that attempt's
+	// child, canceled with its parent.
+	if parent, ok := forwardAttemptOf(ctx); ok {
+		rec.Parent = parent
+	}
 	switch {
 	case !so.StartAt.IsZero():
 		rec.NextAttemptAt = so.StartAt
@@ -135,6 +140,11 @@ func (p *Pipeline) Schedule(ctx context.Context, resource durable.ResourceID, in
 			RunID: rec.RunID, StartAt: rec.NextAttemptAt,
 			Annotations: copyAnnotations(rec.Annotations)})
 		e.disp.Dispatch(rec.RunID, 0)
+		// A child accepted after its parent's cancellation missed the
+		// cascade; it is canceled here.
+		if rec.Parent != "" {
+			e.cancelIfParentCanceled(ctx, rec.RunID, rec.Parent)
+		}
 		return Run{id: rec.RunID, engine: e}, true, nil
 	}
 

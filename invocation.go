@@ -43,12 +43,6 @@ type Invocation interface {
 	// linked to the originating trace.
 	Annotations() map[string]string
 
-	// CancelRequested reports whether a cancellation request was pending
-	// when this attempt was reserved. A handler retrying a doomed
-	// operation can reconcile its partial effects and return Fail to
-	// resolve quickly instead of retrying toward a success nobody wants.
-	CancelRequested() bool
-
 	// Awaited reports the park an earlier attempt of this operation made,
 	// once it resolved: what was parked on, which of those were done at
 	// wake time, and whether the deadline fired first. ok is false on a
@@ -62,10 +56,9 @@ type Invocation interface {
 	Awaited() (w Wake, ok bool)
 
 	// AwaitedRunID is Awaited for the single-target park made by AwaitRun:
-	// the Run reached terminality, turned out to be missing, or a
-	// cancellation request bypassed the park (CancelRequested is then also
-	// set). A multi-target park (AwaitAll, AwaitAny) yields ("", false)
-	// here and is read through Awaited.
+	// the Run reached terminality or turned out to be missing. A
+	// multi-target park (AwaitAll, AwaitAny) yields ("", false) here and
+	// is read through Awaited.
 	AwaitedRunID() (RunID, bool)
 
 	// Failure is the Run's failure: the permanent forward failure, or the

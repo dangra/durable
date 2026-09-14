@@ -8,6 +8,7 @@ import (
 	"github.com/dangra/durable/store/driver"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"testing"
 	"time"
@@ -379,6 +380,13 @@ func FuzzStoreContract(f *testing.F) {
 					mustEqual("GetActiveRunID ok", bok, mok)
 					mustEqual("GetActiveRunID id", bid, mid)
 				}
+			case 6: // ListChildren: the index agrees with the reference
+				for _, pid := range runIDs {
+					bc, berr := bs.ListChildren(ctx, pid)
+					mc, merr := ms.ListChildren(ctx, pid)
+					mustEqual("ListChildren error", berr, merr)
+					mustEqual("ListChildren", sortedIDs(bc), sortedIDs(mc))
+				}
 			case 5: // ReapTerminal with a limit covering everything
 				before := base.Add(time.Duration(int(arg)) * 10 * time.Millisecond)
 				bn, berr := bs.ReapTerminal(ctx, before, 1000)
@@ -394,4 +402,14 @@ func FuzzStoreContract(f *testing.F) {
 			compareRun(id)
 		}
 	})
+}
+
+// sortedIDs is the order-free view of a child list.
+func sortedIDs(ids []kernel.RunID) []string {
+	out := make([]string, len(ids))
+	for i, id := range ids {
+		out[i] = string(id)
+	}
+	slices.Sort(out)
+	return out
 }

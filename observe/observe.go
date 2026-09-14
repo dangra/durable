@@ -43,12 +43,13 @@ type Observer struct {
 	RunInvalid func(RunFailureEvent)
 	// WaiterWoken fires when a Run parked via AwaitRun resolves its park
 	// because the awaited Run reached terminality or was found missing;
-	// Duration spans first park to resolution. A cancellation bypass or
-	// a spurious poke (the target turning invalid) emits nothing.
+	// Duration spans first park to resolution. A park resolved by a
+	// cancellation, or a spurious poke (the target turning invalid),
+	// emits nothing.
 	WaiterWoken func(WakeEvent)
 	// ClassWait fires when a Run throttled on a concurrency class is
-	// granted a token, reporting how long it waited for it. A canceled
-	// Run that bypasses the gate without a token emits nothing.
+	// granted a token, reporting how long it waited for it. A Run
+	// canceled while waiting emits nothing.
 	ClassWait func(ClassWaitEvent)
 	// RunsReaped fires after each retention sweep that deleted anything.
 	RunsReaped func(count int)
@@ -85,6 +86,9 @@ const (
 	// ordinary error: the operation stays unresolved with no error
 	// recorded and no backoff; the next Engine re-executes it.
 	AttemptInterrupted
+	// AttemptCanceled was cut by a cancellation of its Run and returned
+	// something other than success: the operation resolved as canceled.
+	AttemptCanceled
 )
 
 func (r AttemptResult) String() string {
@@ -99,6 +103,8 @@ func (r AttemptResult) String() string {
 		return "awaiting"
 	case AttemptInterrupted:
 		return "interrupted"
+	case AttemptCanceled:
+		return "canceled"
 	default:
 		return "unknown"
 	}
@@ -115,8 +121,8 @@ type AttemptEvent struct {
 	// Duration is the handler execution time of this attempt.
 	Duration time.Duration
 	Result   AttemptResult
-	// Err is the handler error for AttemptRetrying, AttemptFailed, and
-	// AttemptInterrupted.
+	// Err is the handler error for AttemptRetrying, AttemptFailed,
+	// AttemptInterrupted, and AttemptCanceled.
 	Err error
 	// RetryIn is the scheduled backoff delay for AttemptRetrying.
 	RetryIn time.Duration

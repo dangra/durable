@@ -391,67 +391,79 @@ Cancellation reuses unwind rather than abandoning work:
 ```text
 Cancel(runID, cause)
     -> durably record the request (first cancel wins)
-    -> stop selecting new forward work
-    -> Failure{Kind: FailureKindCanceled, Message: cause}
+    -> the pending forward operation resolves as canceled
+    -> Failure{Kind: FailureKindCanceled, StepID: <that Step>, Message: cause}
     -> normal unwind of successfully executed Steps
     -> OutcomeFailure, terminal
 ```
 
-The cancellation Failure has no StepID: it is not a Step failure. The
-Outcome model stays binary; `Result.Canceled()` reports a failure whose
-root carries `FailureKindCanceled`.
+The Outcome model stays binary; `Result.Canceled()` reports a failure
+whose Kind is `FailureKindCanceled`.
 
-**Started operations are never abandoned.** An unresolved operation pins
-the Run as usual and continues retrying until it succeeds or returns
-`Fail` — its partial effects demand resolution before unwind can be
-computed correctly. Two accelerants bound the wait:
+**What the request does depends only on whether a handler is executing.**
 
-1. The in-flight attempt's context is preempted once when the request
-   arrives; the interrupted attempt resolves through normal handler result
-   semantics.
-2. Subsequent attempts observe `Invocation.CancelRequested()` and may
-   reconcile partial effects and return `Fail` fast instead of retrying
-   toward an unwanted success.
+No attempt is executing — the Run is scheduled for later, in line for a
+run class or a concurrency class, waiting out a retry backoff, or parked
+awaiting other Runs: the operation the Run would run next resolves as
+canceled at once. No handler and no middleware runs for it: not the
+attempt it was waiting to make, not a wake for the park. Its operation
+record carries the cancellation with the attempts it had reserved (zero
+for a Step never attempted), and the Run's Failure names the Step.
 
-The preemption arrives as the attempt context's cancellation cause:
-`context.Cause(ctx)` is a `*PreemptedError` carrying the request's cause.
-(An Engine shutdown kills the context with `ErrEngineStopping` instead —
-operational, never semantic.) Returning `ctx.Err()` keeps the cooperative
-default: the attempt is retried and the next one observes
-`CancelRequested`. A handler or middleware may instead **yield**: return
-`Fail` wrapping the `*PreemptedError`. The Engine attributes the resulting
-Failure `FailureKindCanceled` with the cancellation's cause only when
-its own evidence confirms the preemption — it preempted this attempt, or
-the request is already durable — never on the error value alone, which a
-handler could fabricate with no cancel pending. `FailFastOnCancel` is the
-middleware form of that yield, for pipelines whose forward handlers are
-preemption-safe; `FailFastExcept` keeps named Steps cooperative. Unwind
-operations are never yielded: during a cancellation the unwind is the
-work.
+An attempt is executing: its context is canceled, with `context.Cause`
+a `*PreemptedError` carrying the request's cause — informational, for
+middleware that labels spans; a handler needs only `ctx.Done()`. What
+the attempt returns decides the Step, never the Run:
 
-If the pinned operation succeeds, the Step is recorded and participates in
-unwind like any other. If it permanently fails on its own, that organic
-failure becomes the Failure — the Run terminates with unwind either
-way, but `Canceled()` is false.
+- success commits the Step's State as usual, and the Step unwinds with
+  the others;
+- anything else — an ordinary error, `ctx.Err()` included, a `Fail`, an
+  await, a panic — resolves the operation as canceled. The cancellation
+  is the Failure whatever the handler said; a `Fail`'s reason is kept on
+  the operation record for attribution.
+
+A handler is never re-executed under a pending cancellation, and never
+has to ask whether one is pending.
+
+**Partial effects are forfeited.** A Step whose attempt failed with an
+ordinary error and is waiting to retry has made effects it has not
+reconciled; cancellation gives it no further attempt. What compensates
+them is the unwind of the Steps that did succeed, and idempotent
+handlers on a later Run — the same at-least-once discipline every
+handler already owes.
+
+**Cancellation cascades to children.** A Run scheduled from inside an
+attempt — `Schedule` called with the attempt's context — records the
+scheduling Run as its parent. Canceling a Run cancels every nonterminal
+child with the same cause, and their children in turn; a child accepted
+after its parent's cancellation is canceled at acceptance. A parked
+parent does not wake to do this itself: its park resolves as canceled,
+and the Engine cancels the children.
+
+**The reduction is uncancellable.** Once the last forward operation has
+succeeded, the Run reduces and commits its success; a request arriving
+from then on is recorded and has no effect.
 
 A never-started Run (including a delayed one) has no eligible unwind work
 and terminates immediately, freeing its slot.
 
 Additional semantics:
 
-- The request survives restart.
-- A Run remains cancelable until terminal success commits; cancellation
-  arriving after forward completion but before Output commit still unwinds.
+- The request survives restart, and so does the cascade: a child found
+  at startup whose parent carries a request is canceled.
 - Canceling a Run already in unwind is recorded but changes nothing:
-  unwind always runs to completion.
+  unwind always runs to completion, and an unwind attempt's context is
+  never canceled for a cancellation request.
 - Canceling a terminal Run returns `ErrRunTerminal`; an unknown RunID
   returns `ErrRunNotFound`.
 - Canceling an invalid Run records the request; it takes effect when a
   corrected deployment makes the Run reconcilable again. Cancellation does
   not bypass invalidity, because unwind itself requires a reconcilable
   topology.
-- Cancellation is semantic and terminal; Engine shutdown remains
-  operational and non-semantic — stopped Runs resume under a later Engine.
+- Cancellation is semantic and terminal; Engine shutdown is operational
+  and non-semantic: an attempt shutdown kills is interrupted, not
+  canceled, and its Run resumes under a later Engine (see
+  [Graceful shutdown](04-engine.md#graceful-shutdown)).
 
 ---
 
@@ -531,10 +543,10 @@ Detection is conservative: a cycle through any edge is refused in every
 mode, including `AwaitModeAny`, where another target might have let the
 park escape — a park that can deadlock is refused, not gambled on.
 
-A pending cancellation bypasses the park: the operation re-executes,
-observes `CancelRequested`, and its `Awaited` memory reports the targets
-with `Done` reflecting their state at that moment, so the handler can
-cancel what it spawned before resolving. The park survives restart.
+A pending cancellation resolves the park as canceled: the operation is
+not woken and no attempt observes it; children the operation scheduled
+are canceled by the Engine (see [Cancellation](#cancellation)). The
+park survives restart.
 
 Canonical shapes:
 

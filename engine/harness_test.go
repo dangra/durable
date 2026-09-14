@@ -143,9 +143,6 @@ func gatedChild(id durable.PipelineID, g *gates) *pipelinedef.Definition {
 		ID: id,
 		Steps: []pipelinedef.Step{
 			stateless("c/v1", func(ctx context.Context, inv durable.Invocation) error {
-				if inv.CancelRequested() {
-					return nil
-				}
 				select {
 				case <-g.get(inv.ResourceID()):
 					return nil

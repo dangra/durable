@@ -337,7 +337,6 @@ Beyond typed `Input()` and `State(...)`, it exposes:
 PipelineID, ResourceID, RunID, StepID   identity
 Phase                                   forward or unwind
 Attempt                                 the durable reservation number
-CancelRequested                         a cancel was pending at reservation
 Awaited, AwaitedRunID                   the resolved park, if this attempt
                                         follows one (see 01-model)
 Annotations                             the Run's acceptance-time metadata

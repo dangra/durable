@@ -146,12 +146,11 @@ The three ways out of a handler:
   (crash between effect and commit), so make it idempotent: check
   whether the migration is already applied before applying it.
   `ctx.Err()` is an ordinary error too: `context.Canceled` says the
-  ctx died, not *why*, so the engine never infers durable intent from
-  the error value — it classifies only await/permanent/nil/other. When
-  your ctx dies, return `ctx.Err()` as-is; whatever killed it is already
-  tracked on its own channel (a pending cancel gates the next dispatch,
-  a shutdown resumes via recovery), so don't wrap it in `Fail` — a
-  preempted attempt is not necessarily a permanent failure.
+  ctx died, not *why*, and the engine already knows why it killed it.
+  When your ctx dies, return `ctx.Err()` as-is: under a cancel of the
+  run that resolves the step as canceled, under a shutdown the attempt
+  is interrupted and the next engine re-executes it. Don't wrap it in
+  `Fail`.
 - **Permanent failure** — declare it explicitly:
 
 ```go
@@ -234,102 +233,90 @@ result, _ := run.Wait(ctx)
 result.Canceled() // true: failed with FailureKindCanceled
 ```
 
-The first request wins, it is durable (survives restart), and it stops
-the run from *selecting new forward work*. A **started** operation is
-never abandoned: its in-flight attempt context is preempted once, and
-the re-executed attempt is expected to observe
-`inv.CancelRequested()` and resolve promptly — the run stays cancelable
-until terminal success commits, so the engine takes over and unwinds as
-soon as the operation resolves:
+The first request wins and it is durable: it survives restart. What
+happens next depends on one thing, whether a handler is executing at
+that moment.
+
+- **No handler executing** — the run is waiting out a retry backoff,
+  scheduled for later, in line for a class, or parked on other runs:
+  the step it would run next is resolved as canceled on the spot. No
+  handler runs, no middleware runs, a park is not woken. The step's
+  operation record carries the cancellation and the run's failure
+  names the step.
+- **A handler executing** — its `ctx` is canceled. If it still returns
+  success, the step commits and unwinds with the rest. Anything else it
+  returns, `ctx.Err()` included, resolves the step as canceled. The
+  handler is never re-executed, and it never has to ask whether a
+  cancel is pending: it just honours its context.
 
 ```go
 func (h *shiftTraffic) Run(ctx context.Context, inv deploypb.ShiftTrafficInvocation) (*deploypb.ShiftTraffic, error) {
-    if inv.CancelRequested() {
-        return nil, durable.Fail(errors.New("deploy canceled"))
-        // or resolve successfully; either way, the engine unwinds next
+    gen, err := h.lb.Shift(ctx, inv.Input().GetImage()) // ctx dies on cancel
+    if err != nil {
+        return nil, err // under a cancel this is the cancellation; otherwise a retry
     }
-    // ...
+    return &deploypb.ShiftTraffic{LbGeneration: gen}, nil
 }
 ```
+
+Then the successful steps unwind in reverse and the run ends
+`Canceled()`. Two more rules complete the picture:
+
+- **Children are canceled with their parent.** A run scheduled from
+  inside a handler records the scheduling run as its parent; canceling
+  the parent cancels every nonterminal child, and their children in
+  turn. A parent parked on its children does not wake to do this — the
+  engine does.
+- **The reduction is uncancellable.** Once the last forward step has
+  succeeded, the run reduces and succeeds; a request arriving then is
+  recorded and has no effect.
+
+The trade this buys its simplicity with: a step whose attempt failed
+and is waiting to retry has made partial effects, and cancellation gives
+it no further attempt to reconcile them. The unwind of the steps that
+did succeed, and idempotent handlers on the next run, are what clean up
+— the same at-least-once discipline every handler already owes.
 
 Runnable: [`ExampleRun_Cancel`](https://pkg.go.dev/github.com/dangra/durable/engine#example-Run_Cancel).
 
 ### What about context.Context?
 
-Context is a delivery mechanism here, never the source of truth. Four
+Context is a delivery mechanism here, never the source of truth. Three
 contexts are in play, deliberately unrelated:
 
 1. **`Schedule`'s ctx** governs only the store write that accepts the
-   Run. It never reaches handlers — the Run outlives the request — and
-   no values flow from it; annotations are the only bridge.
+   run. It never reaches handlers — the run outlives the request — and
+   no values flow from it. Called with an attempt's ctx from inside a
+   handler, it also records the parent for the cancel cascade.
 2. **The attempt ctx** a handler receives is derived fresh per attempt
    from the *engine's* context. It dies for exactly two reasons, and
    `context.Cause(ctx)` names which: engine shutdown
-   (`durable.ErrEngineStopping`) or the one-time preemption after
-   `Cancel` (`*durable.PreemptedError`, carrying the cancel's cause).
+   (`durable.ErrEngineStopping`) or a cancel of the run
+   (`*durable.PreemptedError`, carrying the cancel's cause). A handler
+   needs neither: it returns on `ctx.Done()` and the engine, which knows
+   why it killed the ctx, resolves the attempt accordingly. The causes
+   are for middleware that labels spans.
 3. **`Cancel`'s own ctx** governs only the store write recording the
-   request. The durable record is the real signal; the preemption is a
-   courtesy wake-up for a blocked handler.
-4. **Post-cancel attempts get a fresh, live ctx.** Cancellation is not
-   delivered as a permanently dead context: the re-executed attempt
-   sees `inv.CancelRequested()` on a working ctx, and unwind handlers
-   run under live contexts too — compensation must be able to do real
-   work, and a poisoned ctx would make rollback impossible. The actual
-   stop is enforced by the engine (a pending cancel gates dispatch
-   from selecting new forward work), not by handlers honoring a dead
-   ctx.
+   request. The durable record is the real signal; killing the running
+   attempt's ctx is the courtesy wake-up.
+
+Unwind handlers always run under live contexts, whatever canceled the
+run: compensation must be able to do real work, and a poisoned ctx
+would make rollback impossible.
 
 Engine **shutdown is not cancellation**: `Stop` kills every in-flight
-attempt ctx but leaves unresolved Runs nonterminal, with no failure
+attempt ctx but leaves unresolved runs nonterminal, with no failure
 recorded — the next `Start` resumes them (that is the
 [durability chapter](#durability-crash-restart-continue)). A killed
 attempt that returns `ctx.Err()` is *interrupted*, not failed: no last
 error, no retry backoff, just the reservation the next engine
-re-executes. Shutdown is
-ephemeral and process-scoped; `Cancel` is durable intent that survives
-restart and drives the Run to a terminal `Canceled()` outcome via
-unwind. By default `Stop` preempts in-flight attempts immediately;
-`WithDrainTimeout` makes it graceful — no new attempts start while
-in-flight ones finish with live contexts and commit their results,
-with preemption only for stragglers at the deadline.
-
-### Opting out of the cooperative loop
-
-When every forward handler is **preemption-safe** — idempotent, no
-partial external effects, or cleanup keyed off the input rather than
-committed state — the per-handler `CancelRequested` check can be
-replaced by one middleware:
-
-```go
-eng := engine.New(store,
-    engine.WithMiddleware(durable.FailFastOnCancel()))
-```
-
-A canceled Run's forward operations are then resolved by the
-middleware: the preempted attempt converts its ctx death into a yield
-in the same attempt (the `*PreemptedError` cause proves it was the
-cancel, so shutdowns and unrelated wrapped `context.Canceled` errors
-pass through), a cancel landing between retries short-circuits before
-the handler runs, and the engine — after verifying the preemption with
-its own evidence — attributes the outcome `FailureKindCanceled`, so
-`Result.Canceled()` still reports true. Unwind operations are never
-touched: during a cancellation, the unwind *is* the work.
-
-Understand the trade before opting in: an abandoned attempt commits no
-state, and a step that never commits state is invisible to unwind —
-partial external effects (a charge that landed, a half-created
-resource) get no compensation hook. The cooperative default lets each
-handler finish or clean up first; `FailFastOnCancel` trades that
-safety for immediacy. For a mixed pipeline, `FailFastExcept` keeps the
-steps that can't make the preemption-safety claim on the cooperative
-path:
-
-```go
-durable.FailFastOnCancel(durable.FailFastExcept(deploypb.RunMigrationsStep))
-```
-
-Steps are named by the references generated code exports (or a bare
-`durable.StepID`), so the exception list is typo-proof at compile time.
+re-executes. Shutdown is ephemeral and process-scoped; `Cancel` is
+durable intent that survives restart and drives the run to a terminal
+`Canceled()` outcome via unwind. By default `Stop` preempts in-flight
+attempts immediately; `WithDrainTimeout` makes it graceful — no new
+attempts start while in-flight ones finish with live contexts and
+commit their results, with preemption only for stragglers at the
+deadline.
 
 ## Composing runs: AwaitRun
 
@@ -414,10 +401,10 @@ N children in one attempt is safe against a crash halfway only because
 `Schedule` is idempotent on (pipeline, resource, input) *while the child
 is nonterminal*; a child that finishes before the retry is terminal, and
 the retry creates a fresh one, so keep child resource IDs deterministic
-and don't let a scheduling attempt do slow work after scheduling. And
-a cancel that bypasses a park still produces a `Wake`, with `Done`
-reflecting the children's state at that moment, so "on freeze, cancel my
-pending children" is the same loop under every mode. Cycle detection is
+and don't let a scheduling attempt do slow work after scheduling. "On
+freeze, cancel my pending children" is not the handler's job: a cancel
+resolves the park without a wake and the engine cancels the children
+it scheduled, under every mode. Cycle detection is
 conservative: a cycle through any edge invalidates the run, even under
 `AwaitAny` where another target might have let it escape.
 

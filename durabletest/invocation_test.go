@@ -25,8 +25,8 @@ func TestFakeInvocationDefaults(t *testing.T) {
 	if inv.Phase() != durable.PhaseForward || inv.Attempt() != 1 {
 		t.Fatalf("defaults: phase=%v attempt=%d", inv.Phase(), inv.Attempt())
 	}
-	if inv.InputMessage() != nil || inv.Annotations() != nil || inv.CancelRequested() {
-		t.Fatal("zero config must present an input-less, unannotated, uncanceled attempt")
+	if inv.InputMessage() != nil || inv.Annotations() != nil {
+		t.Fatal("zero config must present an input-less, unannotated attempt")
 	}
 	if _, ok := inv.Awaited(); ok {
 		t.Fatal("zero config must be a first execution")

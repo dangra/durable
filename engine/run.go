@@ -72,14 +72,16 @@ func (r Run) Wait(ctx context.Context) (Result, error) {
 // Cancel durably requests cancellation of the Run. The first request wins;
 // canceling an already-canceling Run is a no-op returning nil.
 //
-// Cancellation reuses unwind: the Run stops selecting new forward work, a
-// Failure with FailureKindCanceled is established, successfully
-// executed Steps unwind normally, and the Run terminates with
-// OutcomeFailure. A started operation is never abandoned: its in-flight
-// attempt context is preempted once — carrying a *PreemptedError with
-// this cause as its context.Cause — and it continues (observing
-// Invocation.CancelRequested) until it resolves. FailFastOnCancel opts
-// preemption-safe handlers out of that cooperative loop.
+// Cancellation reuses unwind. The pending forward operation resolves as
+// canceled at once — no handler runs for it, a park is not woken — and
+// a Failure with FailureKindCanceled naming its Step is established; if
+// an attempt is executing, its context is canceled (context.Cause is a
+// *PreemptedError carrying cause) and whatever it returns except success
+// resolves it as canceled. Successfully executed Steps unwind normally
+// and the Run terminates with OutcomeFailure. Nonterminal children —
+// Runs scheduled from inside this Run's attempts — are canceled with it.
+// Once the last forward operation has succeeded the Run is reducing and
+// no longer cancelable: the request is recorded and has no effect.
 //
 // A terminal Run returns durable.ErrRunTerminal; a missing Run durable.ErrRunNotFound. The
 // request survives restart, and on an invalid Run it takes effect when a

@@ -55,9 +55,7 @@ type Await = kernel.Await
 // Wake is the resolved memory of a park, handed to the attempt that runs
 // after it: Targets is what the operation parked on, Done the Targets that
 // were terminal or missing at wake time, and Expired reports that the
-// park's deadline passed first. A cancellation request bypassing the park
-// also produces a Wake, with Done reflecting the targets' state at that
-// moment and Invocation.CancelRequested set.
+// park's deadline passed first.
 type Wake = kernel.Wake
 
 // FailureKind attributes a permanent failure. It is purely informational:

@@ -46,8 +46,7 @@
 // engine.WithMiddleware). AwaitRequest, AwaitTimeout, FailureInfo,
 // FailureCause, and FailureReason classify a handler's return the way
 // the engine will; PreemptedError and ErrEngineStopping name why an
-// attempt ctx died; FailFastOnCancel with FailFastExcept opts
-// preemption-safe pipelines out of cooperative cancellation.
+// attempt ctx died, for middleware that labels spans.
 //
 // Vocabulary. StepRef and StateStepRef are the step references generated
 // packages export, built by pipelinedef (StepIdentifier is the interface

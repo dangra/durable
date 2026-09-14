@@ -73,11 +73,9 @@ func ExampleFail() {
 // ExampleRun_Cancel aborts a deployment mid-flight. Cancellation reuses
 // unwind: the environment that step one provisioned is torn down by its
 // unwind handler, and the Run terminates as a failure attributed to
-// cancellation. A started operation is never abandoned — its in-flight
-// attempt is preempted once through its ctx, and the re-executed
-// attempt observes CancelRequested and resolves; the Run stays
-// cancelable until terminal success commits, so the engine then takes
-// over and unwinds.
+// cancellation. The running attempt's ctx dies; it returns ctx.Err()
+// and the step resolves as canceled on that attempt — no re-execution,
+// no question to ask — and the engine unwinds from there.
 func ExampleRun_Cancel() {
 	verifying := make(chan struct{})
 	def := pipelinedef.New(pipelinedef.Config{
@@ -98,13 +96,10 @@ func ExampleRun_Cancel() {
 			{
 				ID: "verify/v1",
 				Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
-					if inv.CancelRequested() {
-						fmt.Println("verify: cancel requested; yielding")
-						return nil, nil // resolve, the engine unwinds from here
-					}
 					close(verifying)
-					<-ctx.Done() // preempted by the cancel request
-					return nil, ctx.Err()
+					<-ctx.Done() // the cancel kills the ctx
+					fmt.Println("verify: interrupted by cancel")
+					return nil, ctx.Err() // resolves the step as canceled
 				},
 			},
 		},
@@ -137,7 +132,7 @@ func ExampleRun_Cancel() {
 	fmt.Println("canceled:", result.Canceled())
 	// Output:
 	// provisioned staging env
-	// verify: cancel requested; yielding
+	// verify: interrupted by cancel
 	// tearing down staging env
 	// canceled: true
 }

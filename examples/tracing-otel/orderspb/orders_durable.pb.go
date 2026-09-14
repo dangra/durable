@@ -44,10 +44,6 @@ func (inv ReserveStockInvocation) StepID() durable.StepID         { return inv.c
 func (inv ReserveStockInvocation) Attempt() uint64                { return inv.core.Attempt() }
 func (inv ReserveStockInvocation) Phase() durable.Phase           { return inv.core.Phase() }
 
-// CancelRequested reports whether a cancellation request was pending when
-// this attempt was reserved.
-func (inv ReserveStockInvocation) CancelRequested() bool { return inv.core.CancelRequested() }
-
 // AwaitedRunID reports the run an earlier attempt of this operation parked
 // on via durable.AwaitRun, once that park resolved. Multi-target parks
 // are read through Awaited.
@@ -124,10 +120,6 @@ func (inv ChargePaymentInvocation) StepID() durable.StepID         { return inv.
 func (inv ChargePaymentInvocation) Attempt() uint64                { return inv.core.Attempt() }
 func (inv ChargePaymentInvocation) Phase() durable.Phase           { return inv.core.Phase() }
 
-// CancelRequested reports whether a cancellation request was pending when
-// this attempt was reserved.
-func (inv ChargePaymentInvocation) CancelRequested() bool { return inv.core.CancelRequested() }
-
 // AwaitedRunID reports the run an earlier attempt of this operation parked
 // on via durable.AwaitRun, once that park resolved. Multi-target parks
 // are read through Awaited.
@@ -201,10 +193,6 @@ func (inv ShipInvocation) RunID() durable.RunID           { return inv.core.RunI
 func (inv ShipInvocation) StepID() durable.StepID         { return inv.core.StepID() }
 func (inv ShipInvocation) Attempt() uint64                { return inv.core.Attempt() }
 func (inv ShipInvocation) Phase() durable.Phase           { return inv.core.Phase() }
-
-// CancelRequested reports whether a cancellation request was pending when
-// this attempt was reserved.
-func (inv ShipInvocation) CancelRequested() bool { return inv.core.CancelRequested() }
 
 // AwaitedRunID reports the run an earlier attempt of this operation parked
 // on via durable.AwaitRun, once that park resolved. Multi-target parks

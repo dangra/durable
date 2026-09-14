@@ -29,8 +29,7 @@ type InvocationConfig struct {
 	// generated step reference's ID().
 	State map[durable.StepID]proto.Message
 
-	Annotations     map[string]string
-	CancelRequested bool
+	Annotations map[string]string
 
 	// Awaited is the resolved memory of an earlier park; nil for a first
 	// execution.
@@ -113,7 +112,6 @@ func (inv *Invocation) RunID() durable.RunID           { return inv.cfg.RunID }
 func (inv *Invocation) StepID() durable.StepID         { return inv.cfg.StepID }
 func (inv *Invocation) Attempt() uint64                { return inv.cfg.Attempt }
 func (inv *Invocation) Phase() durable.Phase           { return inv.cfg.Phase }
-func (inv *Invocation) CancelRequested() bool          { return inv.cfg.CancelRequested }
 
 // InputMessage returns a copy of the configured Input, or nil.
 func (inv *Invocation) InputMessage() proto.Message {

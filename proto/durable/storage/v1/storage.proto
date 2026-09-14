@@ -67,6 +67,9 @@ message RunMeta {
   // Caller-supplied propagation metadata, immutable after acceptance:
   // trace contexts, tenant tags. Never part of dedup identity.
   map<string, string> annotations = 7;
+  // The run whose attempt scheduled this one, when scheduled from inside
+  // a handler; empty otherwise. Canceling the parent cancels the child.
+  string parent_run_id = 8;
 }
 
 enum AwaitMode {

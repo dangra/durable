@@ -160,6 +160,11 @@ type RunRecord struct {
 	// identity: the active Run's annotations win on a dedup hit.
 	Annotations map[string]string
 
+	// Parent is the Run whose attempt scheduled this one — Schedule
+	// called with an attempt context — or empty. Set once at acceptance;
+	// canceling the parent cancels the child. Released at terminality.
+	Parent kernel.RunID
+
 	// Input is the serialized Pipeline Input, immutable for the life of
 	// the Run and shareable (see Store). Released at terminality.
 	Input []byte
@@ -233,6 +238,7 @@ func (r *RunRecord) CompactTerminal() {
 	r.NextAttemptAt, r.LastErrorAt = time.Time{}, time.Time{}
 	r.LastError, r.LastReason = "", ""
 	r.Awaiting, r.Awaited = nil, nil
+	r.Parent = ""
 	var kept map[kernel.StepID]*StepRecord
 	for id, sr := range r.Steps {
 		if sr.Unwind.Status != OpFailed {
@@ -417,6 +423,11 @@ type Store interface {
 	// implementations answer it from the structure CreateRun consults to
 	// enforce the slot, never by scanning.
 	GetActiveRunID(ctx context.Context, pipeline kernel.PipelineID, resource kernel.ResourceID) (kernel.RunID, bool, error)
+
+	// ListChildren returns the ids of the nonterminal Runs whose Parent is
+	// parent, in no particular order. It is an indexed read maintained by
+	// CreateRun and released at terminality, never a scan.
+	ListChildren(ctx context.Context, parent kernel.RunID) ([]kernel.RunID, error)
 
 	Close() error
 }

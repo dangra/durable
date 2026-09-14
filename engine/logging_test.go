@@ -173,7 +173,7 @@ func TestLoggingCancel(t *testing.T) {
 	mustLog(t, buf,
 		`level=DEBUG msg="durable: run scheduled" pipeline=logging-cancel resource=res-1 run=`+id+` start_at=`,
 		`level=DEBUG msg="durable: cancel requested" run=`+id+` cause="operator request"`,
-		`level=INFO msg="durable: cancellation accepted; unwinding" pipeline=logging-cancel resource=res-1 run=`+id+` cause="operator request"`,
+		`level=INFO msg="durable: cancellation accepted; unwinding" pipeline=logging-cancel resource=res-1 run=`+id+` step=never-runs/v1 cause="operator request"`,
 		`level=INFO msg="durable: run complete" pipeline=logging-cancel resource=res-1 run=`+id+` outcome=failure`,
 	)
 }

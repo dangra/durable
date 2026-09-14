@@ -360,9 +360,6 @@ func TestCancelCutsThroughAwait(t *testing.T) {
 		ID: "cancel-await-waiter",
 		Steps: []pipelinedef.Step{
 			stateless("w/v1", func(ctx context.Context, inv durable.Invocation) error {
-				if inv.CancelRequested() {
-					return nil
-				}
 				run, ok, err := targetPipe.GetActiveRun(ctx, "res")
 				if err != nil {
 					return err

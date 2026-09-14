@@ -45,6 +45,7 @@ func MarshalRunMeta(rec *driver.RunRecord) ([]byte, error) {
 		ResourceId:  string(rec.ResourceID),
 		CreatedAt:   ts(rec.CreatedAt),
 		Annotations: rec.Annotations,
+		ParentRunId: string(rec.Parent),
 	})
 }
 
@@ -62,6 +63,7 @@ func UnmarshalRunMetaInto(b []byte, rec *driver.RunRecord) error {
 	if len(pb.GetAnnotations()) > 0 {
 		rec.Annotations = pb.GetAnnotations()
 	}
+	rec.Parent = kernel.RunID(pb.GetParentRunId())
 	return nil
 }
 

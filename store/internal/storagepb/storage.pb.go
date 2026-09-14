@@ -312,7 +312,10 @@ type RunMeta struct {
 	CreatedAt  *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	// Caller-supplied propagation metadata, immutable after acceptance:
 	// trace contexts, tenant tags. Never part of dedup identity.
-	Annotations   map[string]string `protobuf:"bytes,7,rep,name=annotations,proto3" json:"annotations,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	Annotations map[string]string `protobuf:"bytes,7,rep,name=annotations,proto3" json:"annotations,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// The run whose attempt scheduled this one, when scheduled from inside
+	// a handler; empty otherwise. Canceling the parent cancels the child.
+	ParentRunId   string `protobuf:"bytes,8,opt,name=parent_run_id,json=parentRunId,proto3" json:"parent_run_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -380,6 +383,13 @@ func (x *RunMeta) GetAnnotations() map[string]string {
 		return x.Annotations
 	}
 	return nil
+}
+
+func (x *RunMeta) GetParentRunId() string {
+	if x != nil {
+		return x.ParentRunId
+	}
+	return ""
 }
 
 // Await is a park of the in-flight operation on other runs.
@@ -1038,7 +1048,7 @@ var File_durable_storage_v1_storage_proto protoreflect.FileDescriptor
 
 const file_durable_storage_v1_storage_proto_rawDesc = "" +
 	"\n" +
-	" durable/storage/v1/storage.proto\x12\x12durable.storage.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xad\x02\n" +
+	" durable/storage/v1/storage.proto\x12\x12durable.storage.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xd1\x02\n" +
 	"\aRunMeta\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12\x1f\n" +
 	"\vpipeline_id\x18\x02 \x01(\tR\n" +
@@ -1047,7 +1057,8 @@ const file_durable_storage_v1_storage_proto_rawDesc = "" +
 	"resourceId\x129\n" +
 	"\n" +
 	"created_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12N\n" +
-	"\vannotations\x18\a \x03(\v2,.durable.storage.v1.RunMeta.AnnotationsEntryR\vannotations\x1a>\n" +
+	"\vannotations\x18\a \x03(\v2,.durable.storage.v1.RunMeta.AnnotationsEntryR\vannotations\x12\"\n" +
+	"\rparent_run_id\x18\b \x01(\tR\vparentRunId\x1a>\n" +
 	"\x10AnnotationsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x8b\x01\n" +

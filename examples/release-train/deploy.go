@@ -35,18 +35,13 @@ type canaryAnalysis struct{ w *world }
 
 func (h *canaryAnalysis) Run(ctx context.Context, inv releasepb.CanaryAnalysisInvocation) (*releasepb.CanaryAnalysis, error) {
 	service := inv.Input().GetService()
-	if inv.CancelRequested() {
-		// The cooperative cancellation contract: a started operation is
-		// preempted once, then resolves promptly; the engine unwinds.
-		h.w.logf("[%s] canary interrupted — yielding to cancellation", service)
-		return &releasepb.CanaryAnalysis{}, nil
-	}
 	if service == "api" {
 		// Hold the api canary open so the incident can strike mid-run.
 		close(h.w.apiCanaryRunning)
 		h.w.logf("[api] canary analysis running...")
-		<-ctx.Done() // preempted by the cascading cancel
-		return nil, ctx.Err()
+		<-ctx.Done() // the cascading cancel kills the ctx
+		h.w.logf("[api] canary interrupted by cancellation")
+		return nil, ctx.Err() // under a cancel: the step resolves as canceled
 	}
 	h.w.mu.Lock()
 	h.w.canaried[service] = 98

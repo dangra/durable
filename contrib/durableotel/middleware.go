@@ -70,9 +70,9 @@ func inject(ctx context.Context, cfg config) propagation.MapCarrier {
 //  1. The attempt ctx handed to the middleware descends from the
 //     ENGINE's context, not from the ctx that called Schedule — the Run
 //     outlives that request, and the engine never carries its values
-//     forward. At this point the ctx holds cancellation and preemption
-//     semantics but NO ambient trace: the annotations are the only
-//     bridge back to the scheduling trace.
+//     forward. At this point the ctx carries the engine's cancellation
+//     causes but NO ambient trace: the annotations are the only bridge
+//     back to the scheduling trace.
 //  2. Extract installs the carrier's span context into the returned ctx
 //     as the ambient parent — which is precisely what must NOT reach
 //     tracer.Start unmodified: OTel would parent every attempt under a

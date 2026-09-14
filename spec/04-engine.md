@@ -502,8 +502,9 @@ Class semantics:
 - Acquisition never blocks a worker. A Run whose next operation finds
   its class full parks (`RunStateThrottled`, exposing the class) and is
   woken FIFO when a token releases.
-- A pending cancellation bypasses the gate so the Run can resolve and
-  unwind.
+- A pending cancellation never reaches the gate: it resolves the
+  operation as canceled before it (see
+  [Cancellation](01-model.md#cancellation)).
 
 This is the durable form of the in-transition semaphores flyd hand-rolls
 (e.g. bounding concurrent VM snapshot writes), which would starve a

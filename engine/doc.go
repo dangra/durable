@@ -36,8 +36,8 @@
 // PipelineMismatchError, and InvalidRunError. What a handler may meet
 // when scheduling or looking up a child — ScheduleConflictError,
 // ErrRunNotFound, ErrRunTerminal — and the causes an attempt context
-// carries — ErrEngineStopping and PreemptedError — are the durable
-// package's.
+// carries for middleware's benefit — ErrEngineStopping and
+// PreemptedError — are the durable package's.
 //
 // Exported signatures use the durable package's aliases for the kernel
 // vocabulary (durable.RunID, durable.Phase, ...), so wiring code and

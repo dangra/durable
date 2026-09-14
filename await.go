@@ -23,6 +23,23 @@ func WithAwaitTimeout(d time.Duration) AwaitOption {
 	}
 }
 
+// WithCancelCascade makes a cancellation of the parking Run cascade to
+// the park's targets: when the cancellation resolves the park, the
+// targets are canceled with the same cause, and their own cascading
+// parks cascade on. Without it a park never cancels its targets, because
+// a Run parked on a peer's work must not destroy it. Use it where the
+// handler scheduled the targets:
+//
+//	return durable.AwaitAll(ids, durable.WithCancelCascade())
+//
+// Schedule, then park: a cancel that lands between the two kills the
+// attempt's context, which is the attempt's cue to stop scheduling.
+func WithCancelCascade() AwaitOption {
+	return func(ar *awaitResolution) {
+		ar.park.CancelCascade = true
+	}
+}
+
 // AwaitRun parks the current operation until the referenced Run reaches a
 // terminal outcome. Like Fail, it is a resolution returned from a handler —
 // not an error condition:

@@ -196,11 +196,8 @@ func TestSupersedeReconcile(t *testing.T) {
 				Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
 					in := inv.InputMessage().(*wrapperspb.StringValue)
 					if in.GetValue() == "v1" {
-						// The stale run holds the slot until preempted,
-						// then resolves fast so cancellation can proceed.
-						if inv.CancelRequested() {
-							return nil, nil
-						}
+						// The stale run holds the slot until the cancel
+						// kills its ctx.
 						startedOnce.Do(func() { close(started) })
 						<-ctx.Done()
 						return nil, ctx.Err()
@@ -251,7 +248,8 @@ func TestSupersedeReconcile(t *testing.T) {
 		t.Fatalf("blocker input = %q, want v1", blockerInput.GetValue())
 	}
 
-	// Stale: cancel it, let unwind clean up, then reschedule.
+	// Stale: cancel it, then reschedule. The stale attempt was cut
+	// before it completed, so there is nothing of it to unwind.
 	if err := blocker.Cancel(context.Background(), "superseded by v2"); err != nil {
 		t.Fatalf("Cancel: %v", err)
 	}
@@ -268,8 +266,8 @@ func TestSupersedeReconcile(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	if len(unwound) != 1 || unwound[0] != "v1" {
-		t.Fatalf("unwound = %v, want the stale v1 work", unwound)
+	if len(unwound) != 0 {
+		t.Fatalf("unwound = %v, want nothing: the stale step never completed", unwound)
 	}
 }
 
@@ -423,9 +421,6 @@ func TestCancelBypassesThrottle(t *testing.T) {
 		ConcurrencyClass: "narrow",
 		Steps: []pipelinedef.Step{
 			stateless("s/v1", func(ctx context.Context, inv durable.Invocation) error {
-				if inv.CancelRequested() {
-					return nil
-				}
 				if inv.ResourceID() == "holder" {
 					enteredOnce.Do(func() { close(holderEntered) })
 				}

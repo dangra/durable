@@ -76,9 +76,9 @@ sequenceDiagram
         A->>A: provision-env ✓, run-migrations ✓
         A->>A: canary-analysis running...
         Op->>T: Cancel("incident declared")
-        note over T: awaiting op woken with CancelRequested
-        T->>A: cancels child (cascade), resolves
-        A->>A: canary preempted, yields
+        note over T: park resolves as canceled, no wake
+        Op->>A: engine cancels the child (cascade)
+        A->>A: canary's ctx dies, step canceled
         A->>A: unwind: migrations rolled back, env torn down
         note over T,A: both terminal: Canceled() = true — web stays shipped
     end
@@ -92,7 +92,7 @@ sequenceDiagram
 | at-least-once | `[web] migrations already applied — idempotent re-execution` |
 | evolution | `[web] canary analysis: score 98 — a step added while this run was in flight` |
 | composition | `[train] web deploy scheduled; parking until it lands` |
-| cancellation | `[train] release frozen — canceling api deploy` → `[api] migrations rolled back (unwind)` |
+| cancellation | `[api] canary interrupted by cancellation` → `[api] migrations rolled back (unwind)` |
 | cancellation stops forward work | `announced=false` in the outcome — the frozen train never reaches `announce/v1` |
 
 ## The cast
@@ -103,7 +103,7 @@ sequenceDiagram
 | `world.go` | the fake platform backend — what "survives" the crash |
 | `deploy.go` | today's `deploy-service` handlers (`releasepb`) |
 | `legacy.go` | yesterday's handlers (`legacypb`), including the crash-mid-migration one |
-| `train.go` | the parent orchestration: schedule child, `AwaitRun`, cascade cancel |
+| `train.go` | the parent orchestration: schedule child, `AwaitRun` with `CancelCascade` |
 | `builds.go` | the two daemon generations wired to their pipelines |
 | `main_test.go` | asserts the durable facts, not print interleaving |
 

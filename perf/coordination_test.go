@@ -67,9 +67,6 @@ func BenchmarkSupersedeCycle(b *testing.B) {
 			ID:     "supersede-apply/v1",
 			Unwind: true,
 			Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
-				if inv.CancelRequested() {
-					return nil, nil // resolve so cancellation can proceed
-				}
 				in := inv.InputMessage().(*wrapperspb.BytesValue)
 				if v := in.GetValue(); len(v) > 0 && v[0] == 1 { // stale generation: hold the slot
 					enteredSig(inv.ResourceID()).signal()

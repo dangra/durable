@@ -48,10 +48,6 @@ func (inv FreezeVolumeInvocation) StepID() durable.StepID         { return inv.c
 func (inv FreezeVolumeInvocation) Attempt() uint64                { return inv.core.Attempt() }
 func (inv FreezeVolumeInvocation) Phase() durable.Phase           { return inv.core.Phase() }
 
-// CancelRequested reports whether a cancellation request was pending when
-// this attempt was reserved.
-func (inv FreezeVolumeInvocation) CancelRequested() bool { return inv.core.CancelRequested() }
-
 // AwaitedRunID reports the run an earlier attempt of this operation parked
 // on via durable.AwaitRun, once that park resolved. Multi-target parks
 // are read through Awaited.
@@ -127,10 +123,6 @@ func (inv UploadSnapshotInvocation) RunID() durable.RunID           { return inv
 func (inv UploadSnapshotInvocation) StepID() durable.StepID         { return inv.core.StepID() }
 func (inv UploadSnapshotInvocation) Attempt() uint64                { return inv.core.Attempt() }
 func (inv UploadSnapshotInvocation) Phase() durable.Phase           { return inv.core.Phase() }
-
-// CancelRequested reports whether a cancellation request was pending when
-// this attempt was reserved.
-func (inv UploadSnapshotInvocation) CancelRequested() bool { return inv.core.CancelRequested() }
 
 // AwaitedRunID reports the run an earlier attempt of this operation parked
 // on via durable.AwaitRun, once that park resolved. Multi-target parks
@@ -208,10 +200,6 @@ func (inv ThawVolumeInvocation) StepID() durable.StepID         { return inv.cor
 func (inv ThawVolumeInvocation) Attempt() uint64                { return inv.core.Attempt() }
 func (inv ThawVolumeInvocation) Phase() durable.Phase           { return inv.core.Phase() }
 
-// CancelRequested reports whether a cancellation request was pending when
-// this attempt was reserved.
-func (inv ThawVolumeInvocation) CancelRequested() bool { return inv.core.CancelRequested() }
-
 // AwaitedRunID reports the run an earlier attempt of this operation parked
 // on via durable.AwaitRun, once that park resolved. Multi-target parks
 // are read through Awaited.
@@ -275,10 +263,6 @@ func (inv RegisterSnapshotInvocation) RunID() durable.RunID           { return i
 func (inv RegisterSnapshotInvocation) StepID() durable.StepID         { return inv.core.StepID() }
 func (inv RegisterSnapshotInvocation) Attempt() uint64                { return inv.core.Attempt() }
 func (inv RegisterSnapshotInvocation) Phase() durable.Phase           { return inv.core.Phase() }
-
-// CancelRequested reports whether a cancellation request was pending when
-// this attempt was reserved.
-func (inv RegisterSnapshotInvocation) CancelRequested() bool { return inv.core.CancelRequested() }
 
 // AwaitedRunID reports the run an earlier attempt of this operation parked
 // on via durable.AwaitRun, once that park resolved. Multi-target parks

@@ -320,12 +320,10 @@ func TestAwaitUnwindParkThenTransientError(t *testing.T) {
 	}
 }
 
-// Edge case 6: cancel while parked. The cancel bypasses the park while the
-// target is still running; the bypass attempt sees both CancelRequested
-// and the park target through AwaitedRunID, so it can act on the child it
-// spawned (cancel it, say) instead of mistaking itself for a first
-// execution.
-func TestAwaitCancelBypassReportsTargetAndCancel(t *testing.T) {
+// Edge case 6: cancel while parked. The park resolves as canceled on
+// the spot: the waiter's handler does not run again, and a target that
+// is not the waiter's child keeps running.
+func TestAwaitCancelResolvesParkWithoutWake(t *testing.T) {
 	release := make(chan struct{})
 	defer close(release)
 	target := pipelinedef.New(pipelinedef.Config{
@@ -342,17 +340,12 @@ func TestAwaitCancelBypassReportsTargetAndCancel(t *testing.T) {
 		},
 	})
 	var targetPipe *engine.Pipeline
-	var log awaitedLog
-	var cancelSeen atomic.Bool
+	var attempts atomic.Int32
 	waiter := pipelinedef.New(pipelinedef.Config{
 		ID: "edge-cancel-waiter",
 		Steps: []pipelinedef.Step{
 			stateless("w/v1", func(ctx context.Context, inv durable.Invocation) error {
-				log.record(inv)
-				if inv.CancelRequested() {
-					cancelSeen.Store(true)
-					return nil
-				}
+				attempts.Add(1)
 				run, _, err := targetPipe.GetActiveRun(ctx, "res")
 				if err != nil {
 					return err
@@ -379,15 +372,14 @@ func TestAwaitCancelBypassReportsTargetAndCancel(t *testing.T) {
 	if err != nil || !res.Canceled() {
 		t.Fatalf("Wait = %+v, %v; want canceled", res, err)
 	}
+	if res.Failure.StepID != "w/v1" || res.Failure.Attempt != 1 || res.Failure.Message != "bye" {
+		t.Fatalf("Failure = %+v; want the parked step, attempt 1, the cancel's cause", res.Failure)
+	}
+	if n := attempts.Load(); n != 1 {
+		t.Errorf("waiter attempts = %d; want 1: a canceled park is not woken", n)
+	}
 	if st, _ := tRun.Status(context.Background()); st.State == engine.RunStateDone {
-		t.Fatal("target finished; the test did not exercise a bypass")
-	}
-	if !cancelSeen.Load() {
-		t.Error("bypass attempt did not see CancelRequested")
-	}
-	entries := log.all()
-	if last := entries[len(entries)-1]; !last.woken || last.awaited != tRun.ID() {
-		t.Errorf("bypass attempt = %+v; want AwaitedRunID %s", last, tRun.ID())
+		t.Fatal("target finished; the test did not exercise a park")
 	}
 }
 
@@ -706,30 +698,27 @@ func TestAwaitAnyRaceCancelsLosers(t *testing.T) {
 	}
 }
 
-// A cancel bypassing an all-of park reports which targets had finished.
-func TestAwaitAllCancelBypassReportsDone(t *testing.T) {
+// Canceling a parent parked with CancelCascade cancels the children
+// with it: the unfinished child is cut, the finished one stays
+// finished, and the parent never runs again to do any of it.
+func TestAwaitAllCancelCancelsChildren(t *testing.T) {
 	var g gates
 	var childPipe *engine.Pipeline
-	var bypass atomic.Pointer[durable.Wake]
+	var attempts atomic.Int32
 	parent := pipelinedef.New(pipelinedef.Config{
-		ID: "bypass-parent",
+		ID: "cascade-parent",
 		Steps: []pipelinedef.Step{
 			stateless("p/v1", func(ctx context.Context, inv durable.Invocation) error {
-				if inv.CancelRequested() {
-					if w, ok := inv.Awaited(); ok {
-						bypass.Store(&w)
-					}
-					return nil
-				}
+				attempts.Add(1)
 				ids, err := scheduleChildren(ctx, childPipe, 2)
 				if err != nil {
 					return err
 				}
-				return durable.AwaitAll(ids)
+				return durable.AwaitAll(ids, durable.WithCancelCascade())
 			}),
 		},
 	})
-	_, pipes := startEngine(t, mem.New(), gatedChild("bypass-child", &g), parent)
+	_, pipes := startEngine(t, mem.New(), gatedChild("cascade-child", &g), parent)
 	childPipe = pipes[0]
 
 	pRun, _, err := pipes[1].Schedule(context.Background(), "parent-res", nil)
@@ -739,21 +728,23 @@ func TestAwaitAllCancelBypassReportsDone(t *testing.T) {
 	ids := waitForState(t, pRun, engine.RunStateAwaiting).AwaitingRunIDs
 	g.open("child-0")
 	first, _ := childPipe.GetRun(context.Background(), ids[0])
-	waitForState(t, first, engine.RunStateDone)
+	if res, err := first.Wait(context.Background()); err != nil || !res.Succeeded() {
+		t.Fatalf("first child Wait = %+v, %v; want success", res, err)
+	}
 	if err := pRun.Cancel(context.Background(), "abandon"); err != nil {
 		t.Fatalf("Cancel: %v", err)
 	}
 	if res, err := pRun.Wait(context.Background()); err != nil || !res.Canceled() {
 		t.Fatalf("parent Wait = %+v, %v; want canceled", res, err)
 	}
-	w := bypass.Load()
-	if w == nil {
-		t.Fatal("bypass attempt saw no Wake")
+	second, _ := childPipe.GetRun(context.Background(), ids[1])
+	res, err := second.Wait(context.Background())
+	if err != nil || !res.Canceled() || res.Failure.Message != "abandon" {
+		t.Fatalf("second child Wait = %+v, %v; want canceled with the parent's cause", res, err)
 	}
-	if !slices.Equal(w.Targets, ids) || !slices.Equal(w.Done, ids[:1]) || !slices.Equal(w.Pending(), ids[1:]) {
-		t.Fatalf("bypass Wake = %+v; want Done %v Pending %v", w, ids[:1], ids[1:])
+	if n := attempts.Load(); n != 1 {
+		t.Errorf("parent attempts = %d; want 1", n)
 	}
-	g.open("child-1")
 }
 
 // A cycle through an any-of edge is refused like any other: A awaits any

@@ -274,12 +274,7 @@ type Engine struct {
 	mu            sync.Mutex
 	started       bool
 	invalid       map[durable.RunID]*InvalidRunError
-	attemptCancel map[durable.RunID]context.CancelCauseFunc
-	// preempted records, per Run, the cause of a cancellation-driven
-	// preemption of its in-flight attempt — the engine-side evidence that
-	// lets a returned Fail wrapping *PreemptedError be attributed as
-	// FailureKindCanceled truthfully. Consumed by the next resolution.
-	preempted map[durable.RunID]string
+	attemptCancel map[durable.RunID]attemptHandle
 	// dirty marks the Runs whose store record changed under their
 	// worker's carried copy — today only by a cancel request, which goes
 	// through the engine. The worker takes the mark each iteration and
@@ -331,8 +326,7 @@ func New(store driver.Store, opts ...Option) *Engine {
 		retry:         defaultRetryPolicy,
 		textLimit:     DefaultTextLimit,
 		invalid:       make(map[durable.RunID]*InvalidRunError),
-		attemptCancel: make(map[durable.RunID]context.CancelCauseFunc),
-		preempted:     make(map[durable.RunID]string),
+		attemptCancel: make(map[durable.RunID]attemptHandle),
 		classCapacity: make(map[string]int),
 		awaitTimers:   make(map[durable.RunID]chan struct{}),
 
@@ -543,12 +537,13 @@ func eligibilityKey(rec *driver.RunRecord) string {
 
 // acquireClass gates an operation on its step's concurrency class via
 // the token pool. proceed=false parks the Run as throttled (woken FIFO
-// on release); a pending cancellation — or a classless step — bypasses
-// the gate so the Run can resolve, holding no token. waited is how long
+// on release); a classless step bypasses the gate, holding no token. A
+// pending cancellation never reaches it: the operation resolves as
+// canceled before. waited is how long
 // the Run had been parked before an actual token grant. Kicks owed by
 // the pool (declined or cascaded wakes) are dispatched here.
 func (e *Engine) acquireClass(rec *driver.RunRecord, class string) (proceed, held bool, waited time.Duration) {
-	bypass := class == "" || rec.Cancel != nil
+	bypass := class == ""
 	granted, held, waited, kicks := e.pool.Acquire(class, rec.RunID, bypass, e.clock.Now())
 	for _, id := range kicks {
 		e.disp.Dispatch(id, 0)
@@ -691,6 +686,14 @@ func hasUnresolvedOp(rec *driver.RunRecord) bool {
 // executing RunID. Run.Wait consults it to refuse blocking a worker.
 type attemptKey struct{}
 
+// attemptHandle is the registered cancel of an in-flight attempt and
+// the phase it runs in: a cancellation request preempts forward
+// attempts only.
+type attemptHandle struct {
+	cancel context.CancelCauseFunc
+	phase  durable.Phase
+}
+
 // inAttempt reports whether ctx is (derived from) a handler attempt context.
 func inAttempt(ctx context.Context) bool {
 	_, ok := ctx.Value(attemptKey{}).(durable.RunID)
@@ -699,10 +702,10 @@ func inAttempt(ctx context.Context) bool {
 
 // attemptContext derives the per-attempt handler context and registers its
 // cancel so a cancellation request can preempt the in-flight attempt.
-func (e *Engine) attemptContext(id durable.RunID) (context.Context, func()) {
+func (e *Engine) attemptContext(id durable.RunID, phase durable.Phase) (context.Context, func()) {
 	ctx, cancel := context.WithCancelCause(context.WithValue(e.baseCtx, attemptKey{}, id))
 	e.mu.Lock()
-	e.attemptCancel[id] = cancel
+	e.attemptCancel[id] = attemptHandle{cancel: cancel, phase: phase}
 	e.mu.Unlock()
 	return ctx, func() {
 		e.mu.Lock()
@@ -712,31 +715,26 @@ func (e *Engine) attemptContext(id durable.RunID) (context.Context, func()) {
 	}
 }
 
-// preemptAttempt cancels the Run's in-flight attempt context, if any,
-// attaching a *PreemptedError cause so the handler (via context.Cause)
-// can distinguish a Run cancellation from an engine shutdown. The
-// interrupted attempt resolves through normal handler result semantics.
-// The recorded cause is the engine-side evidence consumed by the next
-// resolution when attributing a preemption-yield (see runForward).
+// preemptAttempt cancels the Run's in-flight forward attempt context,
+// if any, with a *PreemptedError cause carrying the request's cause.
+// The attempt resolves as canceled unless it returns success (see
+// runForward). An unwind attempt is never preempted: during a
+// cancellation the unwind is the work.
 func (e *Engine) preemptAttempt(id durable.RunID, cause string) {
 	e.mu.Lock()
-	cancel := e.attemptCancel[id]
-	if cancel != nil {
-		e.preempted[id] = cause
-	}
+	h, ok := e.attemptCancel[id]
 	e.mu.Unlock()
-	if cancel != nil {
-		cancel(&durable.PreemptedError{Cause: cause})
+	if ok && h.phase == durable.PhaseForward {
+		h.cancel(&durable.PreemptedError{Cause: cause})
 	}
 }
 
-// takePreempted consumes the Run's recorded preemption evidence.
-func (e *Engine) takePreempted(id durable.RunID) (string, bool) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	cause, ok := e.preempted[id]
-	delete(e.preempted, id)
-	return cause, ok
+// preemptedBy reports the cancellation an attempt context was canceled
+// for, if any. A preemption cancels the attempt context itself, so its
+// cause wins over a shutdown of the base context.
+func preemptedBy(ctx context.Context) *durable.PreemptedError {
+	pe, _ := errors.AsType[*durable.PreemptedError](context.Cause(ctx))
+	return pe
 }
 
 // processRun advances one Run until it becomes terminal, invalid, must wait
@@ -810,11 +808,11 @@ func (e *Engine) processRun(id durable.RunID) (time.Duration, bool) {
 			if e.draining.Load() {
 				return 0, false
 			}
-			// A pending cancellation stops new forward work; a started
-			// operation is never abandoned and continues until it
-			// resolves.
-			if rec.Cancel != nil && !forwardStarted(rec, durable.StepID(dec.Step)) {
-				if !e.applyCancel(rec) {
+			// A pending cancellation resolves the operation the Run
+			// would run next as canceled, whether it never started, is
+			// waiting to retry, or is parked: no attempt runs for it.
+			if rec.Cancel != nil {
+				if !e.cancelOperation(rec, durable.StepID(dec.Step), nil, nil, 0) {
 					return time.Second, true
 				}
 				continue
@@ -852,13 +850,8 @@ func (e *Engine) processRun(id durable.RunID) (time.Duration, bool) {
 			}
 
 		case ledger.KindForwardComplete:
-			// A Run remains cancelable until terminal success commits.
-			if rec.Cancel != nil {
-				if !e.applyCancel(rec) {
-					return time.Second, true
-				}
-				continue
-			}
+			// Every forward operation succeeded: the Run reduces and
+			// commits, and a pending cancellation has no effect.
 			if !e.reduceAndComplete(rec, def) {
 				return 0, false
 			}
@@ -907,9 +900,11 @@ func (e *Engine) processRun(id durable.RunID) (time.Duration, bool) {
 
 // requestCancel is the one path a cancel request takes to the store.
 // Once accepted, the Run is marked dirty so its worker re-reads, the
-// in-flight attempt is preempted, and the Run is dispatched. A terminal
-// Run returns durable.ErrRunTerminal, a missing one durable.ErrRunNotFound;
-// a request after the first is a no-op, since the first did all of this.
+// in-flight forward attempt is preempted, and the Run is dispatched. A
+// terminal Run returns durable.ErrRunTerminal, a missing one
+// durable.ErrRunNotFound; a request after the first is a no-op, since
+// the first did all of this. A park flagged CancelCascade cascades when
+// the worker resolves it (see cancelOperation).
 func (e *Engine) requestCancel(ctx context.Context, id durable.RunID, cause string) error {
 	cause = e.boundText(cause)
 	accepted, err := e.store.RequestCancel(ctx, id, driver.CancelRequest{Cause: cause, At: e.clock.Now()})
@@ -930,40 +925,76 @@ func (e *Engine) requestCancel(ctx context.Context, id durable.RunID, cause stri
 	return nil
 }
 
-// forwardStarted reports whether the Step's forward operation has ever
-// reserved an attempt for this Run.
-func forwardStarted(rec *driver.RunRecord, stepID durable.StepID) bool {
-	sr, ok := rec.Steps[stepID]
-	return ok && sr.Forward.Attempts > 0
-}
-
-// applyCancel establishes the cancellation Failure and transitions the
-// Run to unwind.
-func (e *Engine) applyCancel(rec *driver.RunRecord) bool {
-	cause := e.boundText(rec.Cancel.Cause)
-	if cause == "" {
-		cause = "canceled"
+// cancelOperation resolves the Run's pending forward operation as
+// canceled and moves the Run to unwind. The operation record carries
+// the cancellation with the attempts it had reserved — zero for a Step
+// never attempted — and the Run's Failure names the Step. err is what
+// an executing attempt returned, nil when the operation was dormant or
+// parked; a park is dropped without a wake, and one flagged
+// CancelCascade cancels its targets with the same cause. The cause is
+// the request's, read from the record or from the preemption that cut
+// the attempt.
+func (e *Engine) cancelOperation(rec *driver.RunRecord, stepID durable.StepID, preempted *durable.PreemptedError, err error, elapsed time.Duration) bool {
+	sr := rec.Step(stepID)
+	now := e.clock.Now()
+	cause := "canceled"
+	switch {
+	case rec.Cancel != nil && rec.Cancel.Cause != "":
+		cause = rec.Cancel.Cause
+	case preempted != nil && preempted.Cause != "":
+		cause = preempted.Cause
 	}
+	reason := ""
+	if err != nil {
+		if _, r, ok := durable.FailureInfo(err); ok {
+			reason = r
+		} else {
+			reason = durable.FailureReason(err)
+		}
+	}
+	sr.Forward.Status = driver.OpFailed
 	rec.Failure = &durable.Failure{
+		StepID:  stepID,
 		Phase:   durable.PhaseForward,
-		Message: cause,
-		At:      e.clock.Now(),
-		Kind:    durable.FailureKindCanceled}
+		Attempt: sr.Forward.Attempts,
+		Message: e.boundText(cause),
+		At:      now,
+		Kind:    durable.FailureKindCanceled,
+		Reason:  e.boundText(reason)}
 	rec.Phase = durable.PhaseUnwind
 	rec.NextAttemptAt = time.Time{}
-	if !e.apply(rec, driver.Transition{Cursor: idleCursor(rec), Failure: rec.Failure}) {
+	park := rec.Awaiting
+	if park != nil {
+		e.unpark(rec.RunID)
+	}
+	rec.Awaiting, rec.Awaited = nil, nil
+	clearLastError(rec)
+	failed := *rec.Failure
+	sr.Forward.Failure = &failed
+	sr.Forward.Order = rec.NextOrder()
+	if !e.apply(rec, driver.Transition{Cursor: idleCursor(rec), Ops: []driver.OpWrite{{StepID: stepID, Phase: durable.PhaseForward, Record: sr.Forward}}, Failure: rec.Failure}) {
 		return false
+	}
+	if park != nil && park.CancelCascade {
+		for _, t := range park.Targets {
+			if err := e.requestCancel(e.baseCtx, t, cause); err != nil && !errors.Is(err, durable.ErrRunTerminal) && !errors.Is(err, durable.ErrRunNotFound) {
+				e.logger.Error("durable: canceling awaited run failed", "run", string(rec.RunID), "target", string(t), "error", err)
+			}
+		}
 	}
 	// A canceled Run may have been parked on a class without ever
 	// re-entering acquireClass; drop its park state so Stats stays
 	// accurate and no stale FIFO entry eats a future wake.
 	e.clearClassWait(rec.RunID)
+	if err != nil {
+		e.attemptResolved(rec, stepID, durable.PhaseForward, sr.Forward.Attempts, elapsed, observe.AttemptCanceled, err, 0, false)
+	}
 	e.logger.Info("durable: cancellation accepted; unwinding",
 		"pipeline", string(rec.PipelineID), "resource", string(rec.ResourceID),
-		"run", string(rec.RunID), "cause", cause)
+		"run", string(rec.RunID), "step", string(stepID), "cause", cause)
 	e.emitRunUnwinding(observe.RunFailureEvent{
 		PipelineID: rec.PipelineID, ResourceID: rec.ResourceID, RunID: rec.RunID,
-		Kind: durable.FailureKindCanceled, Message: cause})
+		StepID: stepID, Kind: durable.FailureKindCanceled, Reason: reason, Message: cause})
 	return true
 }
 
@@ -973,7 +1004,6 @@ func (e *Engine) applyCancel(rec *driver.RunRecord) bool {
 // seam; rec must already carry the committed outcome and final
 // UpdatedAt.
 func (e *Engine) completeRun(rec *driver.RunRecord) {
-	e.takePreempted(rec.RunID) // drop stale evidence from a cancel racing terminality
 	e.logger.Info("durable: run complete",
 		"pipeline", string(rec.PipelineID), "resource", string(rec.ResourceID),
 		"run", string(rec.RunID), "outcome", rec.Outcome.String(),
@@ -1006,6 +1036,11 @@ func (e *Engine) attemptResolved(rec *driver.RunRecord, stepID durable.StepID, p
 				"run", string(rec.RunID), "step", string(stepID), "phase", phase.String(),
 				"attempt", attempt, "error", err, "next_attempt_at", rec.NextAttemptAt)
 		}
+	case observe.AttemptCanceled:
+		e.logger.Info("durable: attempt canceled",
+			"pipeline", string(rec.PipelineID), "resource", string(rec.ResourceID),
+			"run", string(rec.RunID), "step", string(stepID), "attempt", attempt,
+			"error", err)
 	case observe.AttemptInterrupted:
 		if e.debugLog() {
 			e.logger.Debug("durable: operation interrupted by shutdown; the next engine re-executes it",
@@ -1055,10 +1090,11 @@ func clearLastError(rec *driver.RunRecord) {
 
 // awaitGate parks the Run when its in-flight operation awaits other Runs
 // that have not resolved per the park's mode, returning true (no
-// redispatch — a target's completion or the deadline pokes the Run). A
-// pending cancellation bypasses the park so the operation can resolve.
+// redispatch — a target's completion or the deadline pokes the Run).
 // Whenever the gate lets the Run through, the park is settled into the
 // operation's memory in place, for the attempt reservation to persist.
+// A pending cancellation never reaches the gate: it resolves the parked
+// operation as canceled before it.
 //
 // The park lives in e.joins: the gate registers the Run on its targets
 // first and reads each target once; from then on a target's terminal
@@ -1078,26 +1114,6 @@ func (e *Engine) awaitGate(rec *driver.RunRecord) bool {
 		return true
 	}
 	id := rec.RunID
-	if rec.Cancel != nil {
-		// A cancellation is bypassing the park: the Run proceeds now, so
-		// it is no longer awaiting. The memory records what the targets
-		// look like at this moment, best effort: what the join knows,
-		// plus a read of the rest.
-		known, _ := e.joins.Done(id)
-		e.unpark(id)
-		var done []durable.RunID
-		for _, t := range park.Targets {
-			if slices.Contains(known, t) {
-				done = append(done, t)
-				continue
-			}
-			if ok, err := e.targetDone(t); err == nil && ok {
-				done = append(done, t)
-			}
-		}
-		settleAwait(rec, done, false)
-		return false
-	}
 	// Register before reading: a target committing terminal from here on
 	// marks itself done through the join; one that did so earlier is
 	// caught by the first-run reads below.
@@ -1347,12 +1363,20 @@ func (e *Engine) runForward(rec *driver.RunRecord, def *boundDef, stepID durable
 	inv := e.invocation(rec, def, stepID, sr.Forward.Attempts, durable.PhaseForward)
 	inv.awaited = rec.Awaited.Clone()
 	opStart := e.clock.Now()
-	state, panicked, interrupted, err := e.invokeForward(sc, inv)
-	preemptCause, wasPreempted := e.takePreempted(rec.RunID)
+	state, panicked, interrupted, preempted, err := e.invokeForward(sc, inv)
 
 	if v := inv.takeViolation(); v != nil {
 		e.markInvalid(rec, stepID, v.Error())
 		return false, 0, false
+	}
+
+	// A cancellation cut this attempt. Success still commits below;
+	// anything else the attempt returned resolves it as canceled.
+	if err != nil && preempted != nil {
+		if !e.cancelOperation(rec, stepID, preempted, err, e.clock.Now().Sub(opStart)) {
+			return false, time.Second, true
+		}
+		return true, 0, false
 	}
 
 	if park, ok := durable.AwaitRequest(err); ok {
@@ -1399,25 +1423,6 @@ func (e *Engine) runForward(rec *driver.RunRecord, def *boundDef, stepID durable
 			At:      now,
 			Kind:    kind,
 			Reason:  e.boundText(reason)}
-		// A Fail that wraps *PreemptedError declares a preemption-yield.
-		// Attribute it as cancellation only on engine-side evidence — the
-		// engine preempted this attempt, or the cancel request is already
-		// visible — never on the error value alone, which a handler could
-		// fabricate without any cancel pending.
-		if yielded, ok := errors.AsType[*durable.PreemptedError](cause); ok && (wasPreempted || rec.Cancel != nil) {
-			cause := preemptCause
-			if cause == "" {
-				cause = yielded.Cause
-			}
-			if cause == "" && rec.Cancel != nil {
-				cause = rec.Cancel.Cause
-			}
-			if cause == "" {
-				cause = "canceled"
-			}
-			rec.Failure.Kind = durable.FailureKindCanceled
-			rec.Failure.Message = e.boundText(cause)
-		}
 		rec.Phase = durable.PhaseUnwind
 		rec.Awaited = nil
 		clearLastError(rec)
@@ -1478,7 +1483,6 @@ func (e *Engine) runUnwind(rec *driver.RunRecord, def *boundDef, stepID durable.
 	}
 	opStart := e.clock.Now()
 	panicked, interrupted, err := e.invokeUnwind(sc, inv)
-	e.takePreempted(rec.RunID) // clear evidence; yields attribute only forward
 
 	if v := inv.takeViolation(); v != nil {
 		e.markInvalid(rec, stepID, v.Error())
@@ -1628,18 +1632,17 @@ func unwindFailuresByStep(rec *driver.RunRecord) map[durable.StepID]durable.Fail
 
 func (e *Engine) invocation(rec *driver.RunRecord, def *boundDef, stepID durable.StepID, attempt uint64, phase durable.Phase) *attemptInvocation {
 	return &attemptInvocation{
-		pipelineID:      rec.PipelineID,
-		resourceID:      rec.ResourceID,
-		runID:           rec.RunID,
-		stepID:          stepID,
-		attempt:         attempt,
-		phase:           phase,
-		input:           rec.Input,
-		newInput:        def.cfg.NewInput,
-		states:          committedStates(rec),
-		annotations:     rec.Annotations,
-		cancelRequested: rec.Cancel != nil,
-		baseLogger:      e.logger,
+		pipelineID:  rec.PipelineID,
+		resourceID:  rec.ResourceID,
+		runID:       rec.RunID,
+		stepID:      stepID,
+		attempt:     attempt,
+		phase:       phase,
+		input:       rec.Input,
+		newInput:    def.cfg.NewInput,
+		states:      committedStates(rec),
+		annotations: rec.Annotations,
+		baseLogger:  e.logger,
 	}
 }
 
@@ -1663,7 +1666,7 @@ func committedStates(rec *driver.RunRecord) map[durable.StepID][]byte {
 // interrupted reports that shutdown killed that context before the
 // handler returned; the resolution treats an ordinary error from such an
 // attempt as an interruption, not a failure.
-func (e *Engine) invokeForward(sc *pipelinedef.Step, inv *attemptInvocation) (state proto.Message, panicked, interrupted bool, err error) {
+func (e *Engine) invokeForward(sc *pipelinedef.Step, inv *attemptInvocation) (state proto.Message, panicked, interrupted bool, preempted *durable.PreemptedError, err error) {
 	defer func() {
 		if p := recover(); p != nil {
 			panicked = true
@@ -1673,10 +1676,10 @@ func (e *Engine) invokeForward(sc *pipelinedef.Step, inv *attemptInvocation) (st
 				"panic", p, "stack", string(debug.Stack()))
 		}
 	}()
-	ctx, done := e.attemptContext(inv.runID)
+	ctx, done := e.attemptContext(inv.runID, durable.PhaseForward)
 	defer done()
 	state, err = e.wrap(durable.Handler(sc.Run))(ctx, inv)
-	return state, false, stoppedBy(ctx), err
+	return state, false, stoppedBy(ctx), preemptedBy(ctx), err
 }
 
 func (e *Engine) invokeUnwind(sc *pipelinedef.Step, inv *attemptInvocation) (panicked, interrupted bool, err error) {
@@ -1692,7 +1695,7 @@ func (e *Engine) invokeUnwind(sc *pipelinedef.Step, inv *attemptInvocation) (pan
 	h := e.wrap(func(ctx context.Context, in durable.Invocation) (proto.Message, error) {
 		return nil, sc.UnwindFunc(ctx, in)
 	})
-	ctx, done := e.attemptContext(inv.runID)
+	ctx, done := e.attemptContext(inv.runID, durable.PhaseUnwind)
 	defer done()
 	_, err = h(ctx, inv)
 	return false, stoppedBy(ctx), err

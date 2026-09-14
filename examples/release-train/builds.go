@@ -40,13 +40,6 @@ func yesterdaysBuild(ctx context.Context, store driver.Store, w *world) (*engine
 				&legacypb.DeployServiceInput{Service: service, Image: image})
 			return run.ID(), err
 		},
-		cancel: func(ctx context.Context, id durable.RunID, cause string) error {
-			run, err := deploy.GetRun(ctx, id)
-			if err != nil {
-				return err
-			}
-			return run.Cancel(ctx, cause)
-		},
 	}
 	train, err := releasepb.NewReleaseTrain(
 		releasepb.PlanReleaseFunc(s.plan), releasepb.ShipWebFunc(s.shipWeb), releasepb.ShipApiFunc(s.shipApi),
@@ -74,13 +67,6 @@ func todaysBuild(ctx context.Context, store driver.Store, w *world) (*engine.Eng
 			run, _, err := deploy.Schedule(ctx, durable.ResourceID(service),
 				&releasepb.DeployServiceInput{Service: service, Image: image})
 			return run.ID(), err
-		},
-		cancel: func(ctx context.Context, id durable.RunID, cause string) error {
-			run, err := deploy.GetRun(ctx, id)
-			if err != nil {
-				return err
-			}
-			return run.Cancel(ctx, cause)
 		},
 	}
 	train, err := releasepb.NewReleaseTrain(

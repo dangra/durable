@@ -65,9 +65,6 @@ func TestCanceledPassReadsNothing(t *testing.T) {
 		Steps: []pipelinedef.Step{
 			{ID: "a/v1", Unwind: true, Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) { return nil, nil }, UnwindFunc: noUnwind},
 			{ID: "b/v1", Unwind: true, Run: func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
-				if inv.CancelRequested() {
-					return nil, nil
-				}
 				close(blocked)
 				<-ctx.Done()
 				return nil, ctx.Err()

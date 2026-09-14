@@ -106,9 +106,10 @@ func awaitToProto(a *kernel.Await) *Await {
 		return nil
 	}
 	return &Await{
-		Mode:     awaitModeToProto(a.Mode),
-		RunIds:   runIDsToProto(a.Targets),
-		Deadline: ts(a.Deadline),
+		Mode:          awaitModeToProto(a.Mode),
+		RunIds:        runIDsToProto(a.Targets),
+		Deadline:      ts(a.Deadline),
+		CancelCascade: a.CancelCascade,
 	}
 }
 
@@ -117,9 +118,10 @@ func awaitFromProto(pb *Await) *kernel.Await {
 		return nil
 	}
 	return &kernel.Await{
-		Mode:     awaitModeFromProto(pb.GetMode()),
-		Targets:  runIDsFromProto(pb.GetRunIds()),
-		Deadline: fromTS(pb.GetDeadline()),
+		Mode:          awaitModeFromProto(pb.GetMode()),
+		Targets:       runIDsFromProto(pb.GetRunIds()),
+		Deadline:      fromTS(pb.GetDeadline()),
+		CancelCascade: pb.GetCancelCascade(),
 	}
 }
 

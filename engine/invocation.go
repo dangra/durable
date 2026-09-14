@@ -23,9 +23,8 @@ type attemptInvocation struct {
 	states      map[durable.StepID][]byte
 	annotations map[string]string
 
-	cancelRequested bool
-	awaited         *durable.Wake
-	failure         *durable.Failure
+	awaited *durable.Wake
+	failure *durable.Failure
 
 	baseLogger *slog.Logger
 
@@ -85,7 +84,6 @@ func (inv *attemptInvocation) Annotations() map[string]string {
 	return out
 }
 
-func (inv *attemptInvocation) CancelRequested() bool          { return inv.cancelRequested }
 func (inv *attemptInvocation) PipelineID() durable.PipelineID { return inv.pipelineID }
 func (inv *attemptInvocation) ResourceID() durable.ResourceID { return inv.resourceID }
 func (inv *attemptInvocation) RunID() durable.RunID           { return inv.runID }

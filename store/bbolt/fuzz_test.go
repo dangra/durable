@@ -50,9 +50,10 @@ type canonCancel struct {
 }
 
 type canonAwait struct {
-	Mode     kernel.AwaitMode
-	Targets  []durable.RunID
-	Deadline int64
+	Mode          kernel.AwaitMode
+	Targets       []durable.RunID
+	Deadline      int64
+	CancelCascade bool
 }
 
 func nanos(t time.Time) int64 {
@@ -91,7 +92,7 @@ func canonicalize(rec *driver.RunRecord) *canonRecord {
 		StartedAt: nanos(rec.StartedAt),
 	}
 	if a := rec.Awaiting; a != nil {
-		c.Awaiting = &canonAwait{Mode: a.Mode, Targets: append([]durable.RunID(nil), a.Targets...), Deadline: nanos(a.Deadline)}
+		c.Awaiting = &canonAwait{Mode: a.Mode, Targets: append([]durable.RunID(nil), a.Targets...), Deadline: nanos(a.Deadline), CancelCascade: a.CancelCascade}
 	}
 	if rec.Outcome != nil {
 		oc := *rec.Outcome

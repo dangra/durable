@@ -29,8 +29,8 @@
 // without an engine. The ways out: success, an ordinary error (retried — a
 // returned ctx.Err() included), Fail with FailOptions and
 // kind/reason attribution, or AwaitRun, AwaitAll, and AwaitAny to park on
-// other Runs, bounded by WithAwaitTimeout (the woken attempt reads the
-// park back through Awaited). An unwind handler is the same shape and
+// other Runs, bounded by WithAwaitTimeout and claiming them with
+// CancelCascade (the woken attempt reads the park back through Awaited). An unwind handler is the same shape and
 // reads the Failure it is unwinding through Invocation.Failure, non-nil
 // exactly in PhaseUnwind.
 //
@@ -46,8 +46,7 @@
 // engine.WithMiddleware). AwaitRequest, AwaitTimeout, FailureInfo,
 // FailureCause, and FailureReason classify a handler's return the way
 // the engine will; PreemptedError and ErrEngineStopping name why an
-// attempt ctx died; FailFastOnCancel with FailFastExcept opts
-// preemption-safe pipelines out of cooperative cancellation.
+// attempt ctx died, for middleware that labels spans.
 //
 // Vocabulary. StepRef and StateStepRef are the step references generated
 // packages export, built by pipelinedef (StepIdentifier is the interface

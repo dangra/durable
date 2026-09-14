@@ -14,15 +14,11 @@ import (
 var ErrEngineStopping = errors.New("durable: engine stopping")
 
 // PreemptedError is the context cancellation cause (context.Cause) an
-// attempt context carries when the engine preempts it for a Run
-// cancellation request; Cause is the cancellation request's cause.
-// Returning ctx.Err() remains the cooperative default (the re-executed
-// attempt observes Invocation.CancelRequested). A handler or middleware
-// that instead yields immediately returns a Fail wrapping this error;
-// when engine-side evidence confirms the preemption (or the cancel
-// request is already visible), the resulting Failure is attributed
-// FailureKindCanceled with the cancellation's cause — see
-// FailFastOnCancel.
+// attempt context carries when the engine cancels it for a Run
+// cancellation request; Cause is the request's cause. It is
+// informational, for middleware that labels spans: a handler needs only
+// ctx.Done(), and whatever it returns except success resolves the
+// operation as canceled.
 type PreemptedError struct {
 	Cause string
 }

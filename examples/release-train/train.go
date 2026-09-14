@@ -4,19 +4,17 @@ package main
 
 import (
 	"context"
-	"errors"
 
 	"github.com/dangra/durable"
 	"github.com/dangra/durable/examples/release-train/releasepb"
 )
 
 // shipper wires the train's steps to whichever deploy pipeline the
-// current build binds; scheduling and canceling child runs goes through
-// it so the train handlers stay build-agnostic.
+// current build binds; scheduling child runs goes through it so the
+// train handlers stay build-agnostic.
 type shipper struct {
 	w        *world
 	schedule func(ctx context.Context, service, image string) (durable.RunID, error)
-	cancel   func(ctx context.Context, id durable.RunID, cause string) error
 }
 
 func (s *shipper) plan(ctx context.Context, inv releasepb.PlanReleaseInvocation) error {
@@ -30,25 +28,13 @@ func (s *shipper) plan(ctx context.Context, inv releasepb.PlanReleaseInvocation)
 type shipInvocation interface {
 	Input() *releasepb.ReleaseTrainInput
 	AwaitedRunID() (durable.RunID, bool)
-	CancelRequested() bool
 }
 
+// ship schedules the service's deploy as a child run and parks until
+// it lands, with CancelCascade: if the train is canceled while parked,
+// the park resolves as canceled without this handler running again and
+// the engine cancels the child with it.
 func (s *shipper) ship(ctx context.Context, inv shipInvocation, service string, store *durable.RunID) error {
-	if inv.CancelRequested() {
-		s.w.logf("[train] release frozen — canceling %s deploy", service)
-		s.w.mu.Lock()
-		id := *store
-		s.w.mu.Unlock()
-		if id != "" {
-			// Best-effort: the child may have finished (or been reaped)
-			// between the freeze and this wake; that is not a failure.
-			err := s.cancel(ctx, id, "release frozen")
-			if err != nil && !errors.Is(err, durable.ErrRunTerminal) && !errors.Is(err, durable.ErrRunNotFound) {
-				return err
-			}
-		}
-		return nil // resolve; the engine applies the cancel and unwinds
-	}
 	if _, woken := inv.AwaitedRunID(); woken {
 		s.w.logf("[train] %s shipped", service)
 		return nil
@@ -61,7 +47,7 @@ func (s *shipper) ship(ctx context.Context, inv shipInvocation, service string, 
 	*store = id
 	s.w.mu.Unlock()
 	s.w.logf("[train] %s deploy scheduled; parking until it lands", service)
-	return durable.AwaitRun(id)
+	return durable.AwaitRun(id, durable.WithCancelCascade())
 }
 
 func (s *shipper) shipWeb(ctx context.Context, inv releasepb.ShipWebInvocation) error {

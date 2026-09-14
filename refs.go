@@ -4,8 +4,8 @@ import "google.golang.org/protobuf/proto"
 
 // StepIdentifier names a Step. It is satisfied by the generated step
 // references (StepRef and StateStepRef) and by a bare StepID, so APIs
-// selecting steps — FailFastExcept, say — accept the typed constants
-// generated code exports without stringly-typed ids at call sites.
+// selecting steps accept the typed constants generated code exports
+// without stringly-typed ids at call sites.
 type StepIdentifier interface {
 	ID() StepID
 }

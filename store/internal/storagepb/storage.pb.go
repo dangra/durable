@@ -388,7 +388,9 @@ type Await struct {
 	Mode   AwaitMode              `protobuf:"varint,1,opt,name=mode,proto3,enum=durable.storage.v1.AwaitMode" json:"mode,omitempty"`
 	RunIds []string               `protobuf:"bytes,2,rep,name=run_ids,json=runIds,proto3" json:"run_ids,omitempty"`
 	// Absent when the park has no deadline.
-	Deadline      *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=deadline,proto3" json:"deadline,omitempty"`
+	Deadline *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=deadline,proto3" json:"deadline,omitempty"`
+	// A cancellation that resolves the park cancels its targets too.
+	CancelCascade bool `protobuf:"varint,4,opt,name=cancel_cascade,json=cancelCascade,proto3" json:"cancel_cascade,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -442,6 +444,13 @@ func (x *Await) GetDeadline() *timestamppb.Timestamp {
 		return x.Deadline
 	}
 	return nil
+}
+
+func (x *Await) GetCancelCascade() bool {
+	if x != nil {
+		return x.CancelCascade
+	}
+	return false
 }
 
 // Wake is the resolved memory of a park: its targets, the ones terminal or
@@ -1050,11 +1059,12 @@ const file_durable_storage_v1_storage_proto_rawDesc = "" +
 	"\vannotations\x18\a \x03(\v2,.durable.storage.v1.RunMeta.AnnotationsEntryR\vannotations\x1a>\n" +
 	"\x10AnnotationsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x8b\x01\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xb2\x01\n" +
 	"\x05Await\x121\n" +
 	"\x04mode\x18\x01 \x01(\x0e2\x1d.durable.storage.v1.AwaitModeR\x04mode\x12\x17\n" +
 	"\arun_ids\x18\x02 \x03(\tR\x06runIds\x126\n" +
-	"\bdeadline\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\bdeadline\"N\n" +
+	"\bdeadline\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\bdeadline\x12%\n" +
+	"\x0ecancel_cascade\x18\x04 \x01(\bR\rcancelCascade\"N\n" +
 	"\x04Wake\x12\x18\n" +
 	"\atargets\x18\x01 \x03(\tR\atargets\x12\x12\n" +
 	"\x04done\x18\x02 \x03(\tR\x04done\x12\x18\n" +

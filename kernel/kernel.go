@@ -88,6 +88,9 @@ type Await struct {
 	// Deadline is the absolute time the park expires; zero when it has
 	// none.
 	Deadline time.Time
+	// CancelCascade makes a cancellation that resolves the park cancel
+	// its Targets too.
+	CancelCascade bool
 }
 
 // Clone returns a deep copy.
@@ -103,8 +106,7 @@ func (a *Await) Clone() *Await {
 // Wake is the resolved memory of a park: what the operation parked on and
 // what it found on waking. Done holds the Targets that were terminal or
 // missing at wake time; Expired reports that the park's deadline passed
-// first. A cancellation request bypassing the park also produces a Wake,
-// with Done reflecting the targets' state at that moment.
+// first.
 type Wake struct {
 	Targets []RunID
 	Done    []RunID

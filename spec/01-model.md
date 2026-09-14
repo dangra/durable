@@ -492,8 +492,8 @@ return durable.AwaitRun(id, durable.WithAwaitTimeout(d))  // bounded
 return durable.AwaitAll(ids, durable.WithCancelCascade())  // cancel them with me
 ```
 
-A park names its targets, its mode, an optional deadline, and whether
-its targets are the parking Run's own (see
+A park names its targets, its mode, an optional deadline, and whether a
+cancellation of the parking Run cascades to them (see
 [Cancellation](#cancellation)). It parks
 the current operation: the operation remains unresolved (still pinning
 the Run), the worker is released, no retry attempts burn, and `Status`

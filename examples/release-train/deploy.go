@@ -8,32 +8,30 @@ import (
 	"github.com/dangra/durable/examples/release-train/releasepb"
 )
 
-type provisionEnv struct{ w *world }
+// deploy implements releasepb.DeployServiceHandlers: one method per
+// step, an Unwind method for each step that rolls back, and the reducer.
+type deploy struct{ w *world }
 
-func (h *provisionEnv) Run(ctx context.Context, inv releasepb.ProvisionEnvInvocation) (*releasepb.ProvisionEnv, error) {
+func (h *deploy) ProvisionEnv(ctx context.Context, inv releasepb.DeployServiceInvocation) (*releasepb.ProvisionEnv, error) {
 	return &releasepb.ProvisionEnv{EnvId: h.w.provision(inv.Input().GetService())}, nil
 }
 
-func (h *provisionEnv) Unwind(ctx context.Context, inv releasepb.ProvisionEnvInvocation) error {
+func (h *deploy) UnwindProvisionEnv(ctx context.Context, inv releasepb.DeployServiceInvocation) error {
 	h.w.teardown(inv.Input().GetService())
 	return nil
 }
 
-type runMigrations struct{ w *world }
-
-func (h *runMigrations) Run(ctx context.Context, inv releasepb.RunMigrationsInvocation) (*releasepb.RunMigrations, error) {
+func (h *deploy) RunMigrations(ctx context.Context, inv releasepb.DeployServiceInvocation) (*releasepb.RunMigrations, error) {
 	h.w.migrate(inv.Input().GetService(), inv.Input().GetImage())
 	return &releasepb.RunMigrations{SchemaVersion: inv.Input().GetImage()}, nil
 }
 
-func (h *runMigrations) Unwind(ctx context.Context, inv releasepb.RunMigrationsInvocation) error {
+func (h *deploy) UnwindRunMigrations(ctx context.Context, inv releasepb.DeployServiceInvocation) error {
 	h.w.rollback(inv.Input().GetService())
 	return nil
 }
 
-type canaryAnalysis struct{ w *world }
-
-func (h *canaryAnalysis) Run(ctx context.Context, inv releasepb.CanaryAnalysisInvocation) (*releasepb.CanaryAnalysis, error) {
+func (h *deploy) CanaryAnalysis(ctx context.Context, inv releasepb.DeployServiceInvocation) (*releasepb.CanaryAnalysis, error) {
 	service := inv.Input().GetService()
 	if service == "api" {
 		// Hold the api canary open so the incident can strike mid-run.
@@ -50,9 +48,7 @@ func (h *canaryAnalysis) Run(ctx context.Context, inv releasepb.CanaryAnalysisIn
 	return &releasepb.CanaryAnalysis{Score: 98}, nil
 }
 
-type shiftTraffic struct{ w *world }
-
-func (h *shiftTraffic) Run(ctx context.Context, inv releasepb.ShiftTrafficInvocation) (*releasepb.ShiftTraffic, error) {
+func (h *deploy) ShiftTraffic(ctx context.Context, inv releasepb.DeployServiceInvocation) (*releasepb.ShiftTraffic, error) {
 	service := inv.Input().GetService()
 	h.w.mu.Lock()
 	h.w.traffic[service] = inv.Input().GetImage()
@@ -61,6 +57,6 @@ func (h *shiftTraffic) Run(ctx context.Context, inv releasepb.ShiftTrafficInvoca
 	return &releasepb.ShiftTraffic{LbGeneration: inv.Input().GetImage()}, nil
 }
 
-func reduceDeploy(d *releasepb.DeployService) *releasepb.DeployServiceOutput {
+func (h *deploy) Reduce(d *releasepb.DeployService) *releasepb.DeployServiceOutput {
 	return &releasepb.DeployServiceOutput{Url: "https://" + d.Input().GetService() + ".example.com"}
 }

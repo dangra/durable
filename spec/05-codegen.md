@@ -45,27 +45,27 @@ Published protobuf extensions MUST use globally allocated extension numbers.
 
 ## Code generation
 
-`protoc-gen-durable` generates:
+`protoc-gen-durable` generates, per pipeline:
 
-- typed Step handler interfaces,
-- handler func adapters (`http.HandlerFunc` style),
-- typed concrete Invocation types, with a `NewXxxInvocation(core)`
-  constructor for engine-free handler tests,
 - typed Step references,
-- generic concrete `State` methods,
-- Pipeline constructors,
-- Reducer and failure Reducer function types, each with a `Reduce(view)`
-  method the engine and reducer tests fold through,
-- runtime methods on Pipeline marker types,
-- bound Pipeline handles,
-- typed Runs,
-- typed Results,
+- one Invocation alias, `XxxInvocation = durable.TypedInvocation[*XxxInput]`
+  (`durable.NoInput` for an Input-less pipeline), with a
+  `NewXxxInvocation(core)` constructor for engine-free handler tests,
+- one handler interface, `XxxHandlers`: a method per Step named after
+  the Step, `Unwind<Step>` for each Step that unwinds, and `Reduce` /
+  `ReduceFailure` when the pipeline declares outputs,
+- the Pipeline constructor, `NewXxx(h XxxHandlers)`,
+- `ReduceXxx(h, view)` and `ReduceXxxFailure(h, view)`, the folds the
+  engine reduces through and reducer tests call,
+- runtime methods on the Pipeline marker type,
+- the bound Pipeline handle,
+- the typed Run and Result,
 - runtime adapters.
 
 Generated code imports three packages and is the only code that does:
-`durable` for the handler contract its typed Invocations wrap,
-`pipelinedef` for the `Definition` its constructor builds and the step
-references it exports, and `engine` for `Bind`, `Pipeline`, `Run`,
+`durable` for the handler contract and the `TypedInvocation` its alias
+names, `pipelinedef` for the `Definition` its constructor builds and the
+step references it exports, and `engine` for `Bind`, `Pipeline`, `Run`,
 `Result`, and `Status` beneath its typed handles.
 
 ---
@@ -86,11 +86,14 @@ Generation MUST reject:
 
 Generated APIs MUST make these compile-time errors where possible:
 
-- missing handler,
-- wrong handler signature,
-- missing required `Unwind`,
-- invalid Reducer signature,
+- a missing Step method, a Step added to the pipeline included,
+- a wrong method signature,
+- a missing `Unwind<Step>`,
+- an invalid `Reduce` signature,
 - passing a stateless `StepRef` to `State`.
+
+Generation MUST also reject a pipeline whose Step and reducer method
+names collide.
 
 The structural checks (missing or duplicate identifiers, empty
 Pipelines, a step without a forward adapter, an unwind declaration

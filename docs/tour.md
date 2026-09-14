@@ -84,17 +84,17 @@ message DeployService {
 
 Each step message's *fields* are its **state**: what the forward
 handler returns is committed durably on success, and later steps read
-it. The generated package gives you typed handler interfaces, a
-constructor, and a pipeline handle:
+it. The generated package gives you one handler interface for the
+pipeline, a constructor, and a pipeline handle:
 
 ```go
 st, _ := store.Open("bbolt:///var/lib/deployd/deploys.db") // import _ ".../store/bbolt"
 eng := engine.New(st)
 
-deploy, err := deploypb.NewDeployService(
-    &provisionEnv{}, &runMigrations{}, &shiftTraffic{},
-    reduceDeployService, // pure: folds step states into the Output
-).Bind(eng)
+deploy, err := deploypb.NewDeployService(&deployer{db: db, lb: lb}).Bind(eng)
+// deployer has a method per step — ProvisionEnv, RunMigrations,
+// ShiftTraffic — plus UnwindProvisionEnv, UnwindRunMigrations, and
+// Reduce; a step it lacks is a compile error.
 // bind every pipeline, then:
 eng.Start(ctx)
 
@@ -118,11 +118,11 @@ that [below](#contention-dedup-mutexes-concurrency-classes).
 
 ## Handlers: at-least-once, retries, permanent failure
 
-A forward handler receives a typed invocation: the pipeline input,
+A forward handler receives the pipeline's invocation: the typed input,
 committed state of earlier steps, and attempt metadata.
 
 ```go
-func (h *runMigrations) Run(ctx context.Context, inv deploypb.RunMigrationsInvocation) (*deploypb.RunMigrations, error) {
+func (h *deployer) RunMigrations(ctx context.Context, inv deploypb.DeployServiceInvocation) (*deploypb.RunMigrations, error) {
     env, ok := inv.State(deploypb.ProvisionEnvStep) // typed, committed state
     if !ok {
         return nil, durable.Fail(errors.New("env state unavailable"))
@@ -175,7 +175,7 @@ is torn down. A step opts in with `unwind: true` and an `Unwind`
 handler:
 
 ```go
-func (h *runMigrations) Unwind(ctx context.Context, inv deploypb.RunMigrationsInvocation) error {
+func (h *deployer) UnwindRunMigrations(ctx context.Context, inv deploypb.DeployServiceInvocation) error {
     m, ok := inv.State(deploypb.RunMigrationsStep) // what forward committed
     if !ok {
         return nil // forward never committed; nothing to undo
@@ -250,7 +250,7 @@ that moment.
   cancel is pending: it just honours its context.
 
 ```go
-func (h *shiftTraffic) Run(ctx context.Context, inv deploypb.ShiftTrafficInvocation) (*deploypb.ShiftTraffic, error) {
+func (h *deployer) ShiftTraffic(ctx context.Context, inv deploypb.DeployServiceInvocation) (*deploypb.ShiftTraffic, error) {
     gen, err := h.lb.Shift(ctx, inv.Input().GetImage()) // ctx dies on cancel
     if err != nil {
         return nil, err // under a cancel this is the cancellation; otherwise a retry
@@ -329,7 +329,7 @@ returns the `Result` of an already-terminal run). Instead, a handler
 *parks*:
 
 ```go
-func (h *shipServices) Run(ctx context.Context, inv releasepb.ShipServicesInvocation) (*releasepb.ShipServices, error) {
+func (h *train) ShipServices(ctx context.Context, inv releasepb.ReleaseTrainInvocation) (*releasepb.ShipServices, error) {
     if childID, woken := inv.AwaitedRunID(); woken {
         // The awaited run reached terminality; inspect and continue.
         _ = childID
@@ -364,7 +364,7 @@ targets terminal or missing at wake time), and `Pending()` for the rest
 — so the handler never has to remember its children itself:
 
 ```go
-func (h *shipServices) Run(ctx context.Context, inv releasepb.ShipServicesInvocation) (*releasepb.ShipServices, error) {
+func (h *train) ShipServices(ctx context.Context, inv releasepb.ReleaseTrainInvocation) (*releasepb.ShipServices, error) {
     if w, woken := inv.Awaited(); woken {
         for _, id := range w.Done {              // all of them, under AwaitAll
             run, err := deploy.GetRun(ctx, id)

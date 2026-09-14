@@ -123,48 +123,6 @@ func TestProvisionMachineInputValidationFailsFast(t *testing.T) {
 	}
 }
 
-// TestFuncAdapters builds the same pipeline using the generated
-// http.HandlerFunc-style adapters instead of struct handlers.
-func TestFuncAdapters(t *testing.T) {
-	c := newCloud()
-	reserve := &reserveCapacity{cloud: c}
-	def := machinespb.NewProvisionMachine(
-		machinespb.ValidateFunc(validate{}.Run),
-		&selectHost{cloud: c},
-		machinespb.ReserveCapacityFuncs{
-			RunFunc:    reserve.Run,
-			UnwindFunc: reserve.Unwind,
-		},
-		&createMachine{cloud: c},
-		reduceProvisionMachine,
-	)
-
-	eng := engine.New(mem.New())
-	provision, err := def.Bind(eng)
-	if err != nil {
-		t.Fatalf("Bind: %v", err)
-	}
-	if err := eng.Start(context.Background()); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-	defer eng.Stop(context.Background())
-
-	run, _, err := provision.Schedule(context.Background(), "machine-4", &machinespb.ProvisionMachineInput{
-		Region:   "ord",
-		MemoryMb: 2048,
-	})
-	if err != nil {
-		t.Fatalf("Schedule: %v", err)
-	}
-	result, err := run.Wait(context.Background())
-	if err != nil || !result.Succeeded() {
-		t.Fatalf("Wait = %+v, %v; want success", result, err)
-	}
-}
-
-// TestLifecycleMutex shows the machine-lifecycle mutex: while a provision
-// run is in flight for a machine, decommission is rejected with a conflict
-// naming the blocker — and vice versa once the mutex is released.
 func TestLifecycleMutex(t *testing.T) {
 	c := newCloud()
 	c.createGate = make(chan struct{})

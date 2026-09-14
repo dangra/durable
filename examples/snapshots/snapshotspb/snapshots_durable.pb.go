@@ -11,7 +11,6 @@ import (
 	engine "github.com/dangra/durable/engine"
 	pipelinedef "github.com/dangra/durable/pipelinedef"
 	proto "google.golang.org/protobuf/proto"
-	slog "log/slog"
 	sync "sync"
 )
 
@@ -28,322 +27,65 @@ var ThawVolumeStep = pipelinedef.StepRef("thaw-volume/v1")
 // RegisterSnapshotStep is the typed reference to the state-producing step "register-snapshot/v1".
 var RegisterSnapshotStep = pipelinedef.StateStepRef("register-snapshot/v1", func() *RegisterSnapshot { return &RegisterSnapshot{} })
 
-// FreezeVolumeInvocation is passed to FreezeVolumeHandler methods.
-type FreezeVolumeInvocation struct {
-	core durable.Invocation
+// CreateSnapshotInvocation is the invocation every CreateSnapshotHandlers method receives:
+// durable.Invocation with the pipeline's Input typed.
+type CreateSnapshotInvocation = durable.TypedInvocation[*CreateSnapshotInput]
+
+// NewCreateSnapshotInvocation wraps core for calling a CreateSnapshotHandlers method directly,
+// outside an engine: hand it durabletest.NewInvocation to unit-test a
+// handler. The engine wraps its own invocations; application code never
+// needs this at runtime.
+func NewCreateSnapshotInvocation(core durable.Invocation) CreateSnapshotInvocation {
+	return durable.Typed[*CreateSnapshotInput](core)
 }
 
-// NewFreezeVolumeInvocation wraps core for calling a FreezeVolumeHandler directly, outside
-// an engine: hand it durabletest.NewInvocation to unit-test the handler.
-// The engine wraps its own invocations; application code never needs
-// this at runtime.
-func NewFreezeVolumeInvocation(core durable.Invocation) FreezeVolumeInvocation {
-	return FreezeVolumeInvocation{core: core}
+// CreateSnapshotHandlers implements the "create-snapshot" pipeline: one method per
+// step, named after the step, plus Unwind<Step> for each step that
+// unwinds. A type implements every step or does not compile; a step
+// added to the pipeline is a method the next build demands.
+type CreateSnapshotHandlers interface {
+	// FreezeVolume runs step "freeze-volume/v1".
+	FreezeVolume(ctx context.Context, inv CreateSnapshotInvocation) (*FreezeVolume, error)
+	// UnwindFreezeVolume compensates step "freeze-volume/v1" once it
+	// succeeded and the run unwinds.
+	UnwindFreezeVolume(ctx context.Context, inv CreateSnapshotInvocation) error
+	// UploadSnapshot runs step "upload-snapshot/v1".
+	UploadSnapshot(ctx context.Context, inv CreateSnapshotInvocation) (*UploadSnapshot, error)
+	// UnwindUploadSnapshot compensates step "upload-snapshot/v1" once it
+	// succeeded and the run unwinds.
+	UnwindUploadSnapshot(ctx context.Context, inv CreateSnapshotInvocation) error
+	// ThawVolume runs step "thaw-volume/v1".
+	ThawVolume(ctx context.Context, inv CreateSnapshotInvocation) error
+	// RegisterSnapshot runs step "register-snapshot/v1".
+	RegisterSnapshot(ctx context.Context, inv CreateSnapshotInvocation) (*RegisterSnapshot, error)
+	// Reduce produces the pipeline output from the immutable input and
+	// committed step states on success. It must be pure: deterministic,
+	// side-effect free, synchronous, and non-failing.
+	Reduce(*CreateSnapshot) *CreateSnapshotOutput
+	// ReduceFailure produces the pipeline failure output from the immutable
+	// input, the committed step states, the run's Failure, and the permanent
+	// unwind failures once the unwind completes. It must be pure.
+	ReduceFailure(*CreateSnapshot) *CreateSnapshotFailure
 }
 
-func (inv FreezeVolumeInvocation) PipelineID() durable.PipelineID { return inv.core.PipelineID() }
-func (inv FreezeVolumeInvocation) ResourceID() durable.ResourceID { return inv.core.ResourceID() }
-func (inv FreezeVolumeInvocation) RunID() durable.RunID           { return inv.core.RunID() }
-func (inv FreezeVolumeInvocation) StepID() durable.StepID         { return inv.core.StepID() }
-func (inv FreezeVolumeInvocation) Attempt() uint64                { return inv.core.Attempt() }
-func (inv FreezeVolumeInvocation) Phase() durable.Phase           { return inv.core.Phase() }
-
-// AwaitedRunID reports the run an earlier attempt of this operation parked
-// on via durable.AwaitRun, once that park resolved. Multi-target parks
-// are read through Awaited.
-func (inv FreezeVolumeInvocation) AwaitedRunID() (durable.RunID, bool) {
-	return inv.core.AwaitedRunID()
-}
-
-// Awaited reports the park an earlier attempt of this operation made, once
-// it resolved; ok is false on a first execution.
-func (inv FreezeVolumeInvocation) Awaited() (durable.Wake, bool) { return inv.core.Awaited() }
-
-// Annotations returns a caller-owned copy of the run's immutable
-// acceptance-time annotations (trace contexts, tenant tags).
-func (inv FreezeVolumeInvocation) Annotations() map[string]string { return inv.core.Annotations() }
-
-// Failure is the failure this run is unwinding: non-nil exactly in
-// durable.PhaseUnwind, nil during forward attempts.
-func (inv FreezeVolumeInvocation) Failure() *durable.Failure { return inv.core.Failure() }
-
-// Logger returns a logger scoped to this invocation, with the canonical
-// pipeline, resource, run, step, phase, and attempt keys attached.
-func (inv FreezeVolumeInvocation) Logger() *slog.Logger { return inv.core.Logger() }
-
-// Input returns a defensive caller-owned copy of the immutable pipeline input.
-func (inv FreezeVolumeInvocation) Input() *CreateSnapshotInput {
-	msg, _ := inv.core.InputMessage().(*CreateSnapshotInput)
-	return msg
-}
-
-// State returns the committed state of the referenced step for this run.
-// ok is false when no committed state exists.
-func (inv FreezeVolumeInvocation) State[T proto.Message](step durable.StateStepRef[T]) (T, bool) {
-	return durable.LookupState(inv.core, step)
-}
-
-// FreezeVolumeHandler implements step "freeze-volume/v1".
-type FreezeVolumeHandler interface {
-	Run(context.Context, FreezeVolumeInvocation) (*FreezeVolume, error)
-
-	Unwind(context.Context, FreezeVolumeInvocation) error
-}
-
-// FreezeVolumeFuncs adapts a pair of functions to FreezeVolumeHandler.
-type FreezeVolumeFuncs struct {
-	RunFunc    func(ctx context.Context, inv FreezeVolumeInvocation) (*FreezeVolume, error)
-	UnwindFunc func(ctx context.Context, inv FreezeVolumeInvocation) error
-}
-
-func (f FreezeVolumeFuncs) Run(ctx context.Context, inv FreezeVolumeInvocation) (*FreezeVolume, error) {
-	return f.RunFunc(ctx, inv)
-}
-
-func (f FreezeVolumeFuncs) Unwind(ctx context.Context, inv FreezeVolumeInvocation) error {
-	return f.UnwindFunc(ctx, inv)
-}
-
-// UploadSnapshotInvocation is passed to UploadSnapshotHandler methods.
-type UploadSnapshotInvocation struct {
-	core durable.Invocation
-}
-
-// NewUploadSnapshotInvocation wraps core for calling a UploadSnapshotHandler directly, outside
-// an engine: hand it durabletest.NewInvocation to unit-test the handler.
-// The engine wraps its own invocations; application code never needs
-// this at runtime.
-func NewUploadSnapshotInvocation(core durable.Invocation) UploadSnapshotInvocation {
-	return UploadSnapshotInvocation{core: core}
-}
-
-func (inv UploadSnapshotInvocation) PipelineID() durable.PipelineID { return inv.core.PipelineID() }
-func (inv UploadSnapshotInvocation) ResourceID() durable.ResourceID { return inv.core.ResourceID() }
-func (inv UploadSnapshotInvocation) RunID() durable.RunID           { return inv.core.RunID() }
-func (inv UploadSnapshotInvocation) StepID() durable.StepID         { return inv.core.StepID() }
-func (inv UploadSnapshotInvocation) Attempt() uint64                { return inv.core.Attempt() }
-func (inv UploadSnapshotInvocation) Phase() durable.Phase           { return inv.core.Phase() }
-
-// AwaitedRunID reports the run an earlier attempt of this operation parked
-// on via durable.AwaitRun, once that park resolved. Multi-target parks
-// are read through Awaited.
-func (inv UploadSnapshotInvocation) AwaitedRunID() (durable.RunID, bool) {
-	return inv.core.AwaitedRunID()
-}
-
-// Awaited reports the park an earlier attempt of this operation made, once
-// it resolved; ok is false on a first execution.
-func (inv UploadSnapshotInvocation) Awaited() (durable.Wake, bool) { return inv.core.Awaited() }
-
-// Annotations returns a caller-owned copy of the run's immutable
-// acceptance-time annotations (trace contexts, tenant tags).
-func (inv UploadSnapshotInvocation) Annotations() map[string]string { return inv.core.Annotations() }
-
-// Failure is the failure this run is unwinding: non-nil exactly in
-// durable.PhaseUnwind, nil during forward attempts.
-func (inv UploadSnapshotInvocation) Failure() *durable.Failure { return inv.core.Failure() }
-
-// Logger returns a logger scoped to this invocation, with the canonical
-// pipeline, resource, run, step, phase, and attempt keys attached.
-func (inv UploadSnapshotInvocation) Logger() *slog.Logger { return inv.core.Logger() }
-
-// Input returns a defensive caller-owned copy of the immutable pipeline input.
-func (inv UploadSnapshotInvocation) Input() *CreateSnapshotInput {
-	msg, _ := inv.core.InputMessage().(*CreateSnapshotInput)
-	return msg
-}
-
-// State returns the committed state of the referenced step for this run.
-// ok is false when no committed state exists.
-func (inv UploadSnapshotInvocation) State[T proto.Message](step durable.StateStepRef[T]) (T, bool) {
-	return durable.LookupState(inv.core, step)
-}
-
-// UploadSnapshotHandler implements step "upload-snapshot/v1".
-type UploadSnapshotHandler interface {
-	Run(context.Context, UploadSnapshotInvocation) (*UploadSnapshot, error)
-
-	Unwind(context.Context, UploadSnapshotInvocation) error
-}
-
-// UploadSnapshotFuncs adapts a pair of functions to UploadSnapshotHandler.
-type UploadSnapshotFuncs struct {
-	RunFunc    func(ctx context.Context, inv UploadSnapshotInvocation) (*UploadSnapshot, error)
-	UnwindFunc func(ctx context.Context, inv UploadSnapshotInvocation) error
-}
-
-func (f UploadSnapshotFuncs) Run(ctx context.Context, inv UploadSnapshotInvocation) (*UploadSnapshot, error) {
-	return f.RunFunc(ctx, inv)
-}
-
-func (f UploadSnapshotFuncs) Unwind(ctx context.Context, inv UploadSnapshotInvocation) error {
-	return f.UnwindFunc(ctx, inv)
-}
-
-// ThawVolumeInvocation is passed to ThawVolumeHandler methods.
-type ThawVolumeInvocation struct {
-	core durable.Invocation
-}
-
-// NewThawVolumeInvocation wraps core for calling a ThawVolumeHandler directly, outside
-// an engine: hand it durabletest.NewInvocation to unit-test the handler.
-// The engine wraps its own invocations; application code never needs
-// this at runtime.
-func NewThawVolumeInvocation(core durable.Invocation) ThawVolumeInvocation {
-	return ThawVolumeInvocation{core: core}
-}
-
-func (inv ThawVolumeInvocation) PipelineID() durable.PipelineID { return inv.core.PipelineID() }
-func (inv ThawVolumeInvocation) ResourceID() durable.ResourceID { return inv.core.ResourceID() }
-func (inv ThawVolumeInvocation) RunID() durable.RunID           { return inv.core.RunID() }
-func (inv ThawVolumeInvocation) StepID() durable.StepID         { return inv.core.StepID() }
-func (inv ThawVolumeInvocation) Attempt() uint64                { return inv.core.Attempt() }
-func (inv ThawVolumeInvocation) Phase() durable.Phase           { return inv.core.Phase() }
-
-// AwaitedRunID reports the run an earlier attempt of this operation parked
-// on via durable.AwaitRun, once that park resolved. Multi-target parks
-// are read through Awaited.
-func (inv ThawVolumeInvocation) AwaitedRunID() (durable.RunID, bool) { return inv.core.AwaitedRunID() }
-
-// Awaited reports the park an earlier attempt of this operation made, once
-// it resolved; ok is false on a first execution.
-func (inv ThawVolumeInvocation) Awaited() (durable.Wake, bool) { return inv.core.Awaited() }
-
-// Annotations returns a caller-owned copy of the run's immutable
-// acceptance-time annotations (trace contexts, tenant tags).
-func (inv ThawVolumeInvocation) Annotations() map[string]string { return inv.core.Annotations() }
-
-// Failure is the failure this run is unwinding: non-nil exactly in
-// durable.PhaseUnwind, nil during forward attempts.
-func (inv ThawVolumeInvocation) Failure() *durable.Failure { return inv.core.Failure() }
-
-// Logger returns a logger scoped to this invocation, with the canonical
-// pipeline, resource, run, step, phase, and attempt keys attached.
-func (inv ThawVolumeInvocation) Logger() *slog.Logger { return inv.core.Logger() }
-
-// Input returns a defensive caller-owned copy of the immutable pipeline input.
-func (inv ThawVolumeInvocation) Input() *CreateSnapshotInput {
-	msg, _ := inv.core.InputMessage().(*CreateSnapshotInput)
-	return msg
-}
-
-// State returns the committed state of the referenced step for this run.
-// ok is false when no committed state exists.
-func (inv ThawVolumeInvocation) State[T proto.Message](step durable.StateStepRef[T]) (T, bool) {
-	return durable.LookupState(inv.core, step)
-}
-
-// ThawVolumeHandler implements step "thaw-volume/v1".
-type ThawVolumeHandler interface {
-	Run(context.Context, ThawVolumeInvocation) error
-}
-
-// ThawVolumeFunc adapts a function to ThawVolumeHandler, in the style of
-// http.HandlerFunc.
-type ThawVolumeFunc func(ctx context.Context, inv ThawVolumeInvocation) error
-
-func (f ThawVolumeFunc) Run(ctx context.Context, inv ThawVolumeInvocation) error { return f(ctx, inv) }
-
-// RegisterSnapshotInvocation is passed to RegisterSnapshotHandler methods.
-type RegisterSnapshotInvocation struct {
-	core durable.Invocation
-}
-
-// NewRegisterSnapshotInvocation wraps core for calling a RegisterSnapshotHandler directly, outside
-// an engine: hand it durabletest.NewInvocation to unit-test the handler.
-// The engine wraps its own invocations; application code never needs
-// this at runtime.
-func NewRegisterSnapshotInvocation(core durable.Invocation) RegisterSnapshotInvocation {
-	return RegisterSnapshotInvocation{core: core}
-}
-
-func (inv RegisterSnapshotInvocation) PipelineID() durable.PipelineID { return inv.core.PipelineID() }
-func (inv RegisterSnapshotInvocation) ResourceID() durable.ResourceID { return inv.core.ResourceID() }
-func (inv RegisterSnapshotInvocation) RunID() durable.RunID           { return inv.core.RunID() }
-func (inv RegisterSnapshotInvocation) StepID() durable.StepID         { return inv.core.StepID() }
-func (inv RegisterSnapshotInvocation) Attempt() uint64                { return inv.core.Attempt() }
-func (inv RegisterSnapshotInvocation) Phase() durable.Phase           { return inv.core.Phase() }
-
-// AwaitedRunID reports the run an earlier attempt of this operation parked
-// on via durable.AwaitRun, once that park resolved. Multi-target parks
-// are read through Awaited.
-func (inv RegisterSnapshotInvocation) AwaitedRunID() (durable.RunID, bool) {
-	return inv.core.AwaitedRunID()
-}
-
-// Awaited reports the park an earlier attempt of this operation made, once
-// it resolved; ok is false on a first execution.
-func (inv RegisterSnapshotInvocation) Awaited() (durable.Wake, bool) { return inv.core.Awaited() }
-
-// Annotations returns a caller-owned copy of the run's immutable
-// acceptance-time annotations (trace contexts, tenant tags).
-func (inv RegisterSnapshotInvocation) Annotations() map[string]string { return inv.core.Annotations() }
-
-// Failure is the failure this run is unwinding: non-nil exactly in
-// durable.PhaseUnwind, nil during forward attempts.
-func (inv RegisterSnapshotInvocation) Failure() *durable.Failure { return inv.core.Failure() }
-
-// Logger returns a logger scoped to this invocation, with the canonical
-// pipeline, resource, run, step, phase, and attempt keys attached.
-func (inv RegisterSnapshotInvocation) Logger() *slog.Logger { return inv.core.Logger() }
-
-// Input returns a defensive caller-owned copy of the immutable pipeline input.
-func (inv RegisterSnapshotInvocation) Input() *CreateSnapshotInput {
-	msg, _ := inv.core.InputMessage().(*CreateSnapshotInput)
-	return msg
-}
-
-// State returns the committed state of the referenced step for this run.
-// ok is false when no committed state exists.
-func (inv RegisterSnapshotInvocation) State[T proto.Message](step durable.StateStepRef[T]) (T, bool) {
-	return durable.LookupState(inv.core, step)
-}
-
-// RegisterSnapshotHandler implements step "register-snapshot/v1".
-type RegisterSnapshotHandler interface {
-	Run(context.Context, RegisterSnapshotInvocation) (*RegisterSnapshot, error)
-}
-
-// RegisterSnapshotFunc adapts a function to RegisterSnapshotHandler, in the style of
-// http.HandlerFunc.
-type RegisterSnapshotFunc func(ctx context.Context, inv RegisterSnapshotInvocation) (*RegisterSnapshot, error)
-
-func (f RegisterSnapshotFunc) Run(ctx context.Context, inv RegisterSnapshotInvocation) (*RegisterSnapshot, error) {
-	return f(ctx, inv)
-}
-
-// CreateSnapshotReducer produces the pipeline output from the immutable input and committed step states on success.
-// It must be pure: deterministic, side-effect free, synchronous, and
-// non-failing.
-type CreateSnapshotReducer func(*CreateSnapshot) *CreateSnapshotOutput
-
-// Reduce folds view through r: the marker the reducer receives reads
-// its Input, States, and failures from view for the duration of the
-// call. The engine reduces through it; a unit test hands it
-// durabletest.NewInvocation (which is also a durable.ReduceView) to
-// exercise the reducer alone.
-func (r CreateSnapshotReducer) Reduce(view durable.ReduceView) *CreateSnapshotOutput {
+// ReduceCreateSnapshot folds view through h.Reduce: the marker the reducer
+// receives reads its Input, States, and failures from view for the
+// duration of the call.
+func ReduceCreateSnapshot(h CreateSnapshotHandlers, view durable.ReduceView) *CreateSnapshotOutput {
 	x := &CreateSnapshot{}
 	createSnapshotViews.Store(x, view)
 	defer createSnapshotViews.Delete(x)
-	return r(x)
+	return h.Reduce(x)
 }
 
-// CreateSnapshotFailureReducer produces the pipeline failure output from the immutable input, the committed step states, the run's Failure, and the permanent unwind failures once the unwind completes.
-// It must be pure: deterministic, side-effect free, synchronous, and
-// non-failing.
-type CreateSnapshotFailureReducer func(*CreateSnapshot) *CreateSnapshotFailure
-
-// Reduce folds view through r: the marker the reducer receives reads
-// its Input, States, and failures from view for the duration of the
-// call. The engine reduces through it; a unit test hands it
-// durabletest.NewInvocation (which is also a durable.ReduceView) to
-// exercise the reducer alone.
-func (r CreateSnapshotFailureReducer) Reduce(view durable.ReduceView) *CreateSnapshotFailure {
+// ReduceCreateSnapshotFailure folds view through h.ReduceFailure: the marker the reducer
+// receives reads its Input, States, and failures from view for the
+// duration of the call.
+func ReduceCreateSnapshotFailure(h CreateSnapshotHandlers, view durable.ReduceView) *CreateSnapshotFailure {
 	x := &CreateSnapshot{}
 	createSnapshotViews.Store(x, view)
 	defer createSnapshotViews.Delete(x)
-	return r(x)
+	return h.ReduceFailure(x)
 }
 
 var createSnapshotViews sync.Map
@@ -386,23 +128,16 @@ type CreateSnapshotDefinition struct {
 }
 
 // NewCreateSnapshot assembles the "create-snapshot" pipeline definition
-// from its step handlers and reducers.
-func NewCreateSnapshot(
-	freezeVolume FreezeVolumeHandler,
-	uploadSnapshot UploadSnapshotHandler,
-	thawVolume ThawVolumeHandler,
-	registerSnapshot RegisterSnapshotHandler,
-	reduce CreateSnapshotReducer,
-	reduceFailure CreateSnapshotFailureReducer,
-) *CreateSnapshotDefinition {
+// from its handlers.
+func NewCreateSnapshot(h CreateSnapshotHandlers) *CreateSnapshotDefinition {
 	return &CreateSnapshotDefinition{def: pipelinedef.New(pipelinedef.Config{
 		ID:       "create-snapshot",
 		NewInput: func() proto.Message { return &CreateSnapshotInput{} },
 		Reduce: func(view durable.ReduceView) proto.Message {
-			return reduce.Reduce(view)
+			return ReduceCreateSnapshot(h, view)
 		},
 		ReduceFailure: func(view durable.ReduceView) proto.Message {
-			return reduceFailure.Reduce(view)
+			return ReduceCreateSnapshotFailure(h, view)
 		},
 		Steps: []pipelinedef.Step{
 			{
@@ -410,14 +145,14 @@ func NewCreateSnapshot(
 				Unwind:   true,
 				HasState: true,
 				Run: func(ctx context.Context, core durable.Invocation) (proto.Message, error) {
-					state, err := freezeVolume.Run(ctx, FreezeVolumeInvocation{core: core})
+					state, err := h.FreezeVolume(ctx, durable.Typed[*CreateSnapshotInput](core))
 					if state == nil {
 						return nil, err
 					}
 					return state, err
 				},
 				UnwindFunc: func(ctx context.Context, core durable.Invocation) error {
-					return freezeVolume.Unwind(ctx, FreezeVolumeInvocation{core: core})
+					return h.UnwindFreezeVolume(ctx, durable.Typed[*CreateSnapshotInput](core))
 				},
 			},
 			{
@@ -425,27 +160,27 @@ func NewCreateSnapshot(
 				Unwind:   true,
 				HasState: true,
 				Run: func(ctx context.Context, core durable.Invocation) (proto.Message, error) {
-					state, err := uploadSnapshot.Run(ctx, UploadSnapshotInvocation{core: core})
+					state, err := h.UploadSnapshot(ctx, durable.Typed[*CreateSnapshotInput](core))
 					if state == nil {
 						return nil, err
 					}
 					return state, err
 				},
 				UnwindFunc: func(ctx context.Context, core durable.Invocation) error {
-					return uploadSnapshot.Unwind(ctx, UploadSnapshotInvocation{core: core})
+					return h.UnwindUploadSnapshot(ctx, durable.Typed[*CreateSnapshotInput](core))
 				},
 			},
 			{
 				ID: "thaw-volume/v1",
 				Run: func(ctx context.Context, core durable.Invocation) (proto.Message, error) {
-					return nil, thawVolume.Run(ctx, ThawVolumeInvocation{core: core})
+					return nil, h.ThawVolume(ctx, durable.Typed[*CreateSnapshotInput](core))
 				},
 			},
 			{
 				ID:       "register-snapshot/v1",
 				HasState: true,
 				Run: func(ctx context.Context, core durable.Invocation) (proto.Message, error) {
-					state, err := registerSnapshot.Run(ctx, RegisterSnapshotInvocation{core: core})
+					state, err := h.RegisterSnapshot(ctx, durable.Typed[*CreateSnapshotInput](core))
 					if state == nil {
 						return nil, err
 					}

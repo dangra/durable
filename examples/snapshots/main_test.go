@@ -113,7 +113,7 @@ func TestUploadUnwindDeletesObject(t *testing.T) {
 		},
 		Failure: &durable.Failure{StepID: "register-snapshot/v1"},
 	})
-	if err := uploadSnapshot(w).Unwind(ctx, snapshotspb.NewUploadSnapshotInvocation(inv)); err != nil {
+	if err := (&snapshotter{w}).UnwindUploadSnapshot(ctx, snapshotspb.NewCreateSnapshotInvocation(inv)); err != nil {
 		t.Fatalf("Unwind: %v", err)
 	}
 	if len(w.objects) != 0 {
@@ -126,7 +126,7 @@ func TestUploadUnwindDeletesObject(t *testing.T) {
 	// Without committed upload state there is nothing to delete.
 	bare := durabletest.NewInvocation(durabletest.InvocationConfig{Phase: durable.PhaseUnwind, Failure: &durable.Failure{}})
 	w.objects["other"] = 1
-	if err := uploadSnapshot(w).Unwind(ctx, snapshotspb.NewUploadSnapshotInvocation(bare)); err != nil || len(w.objects) != 1 {
+	if err := (&snapshotter{w}).UnwindUploadSnapshot(ctx, snapshotspb.NewCreateSnapshotInvocation(bare)); err != nil || len(w.objects) != 1 {
 		t.Fatalf("Unwind without state = %v, objects %v", err, w.objects)
 	}
 }
@@ -139,7 +139,7 @@ func TestRegisterFailsPermanentlyWhenCatalogFull(t *testing.T) {
 			snapshotspb.UploadSnapshotStep.ID(): &snapshotspb.UploadSnapshot{ObjectKey: "k"},
 		},
 	})
-	_, err := registerSnapshot(w).Run(context.Background(), snapshotspb.NewRegisterSnapshotInvocation(inv))
+	_, err := (&snapshotter{w}).RegisterSnapshot(context.Background(), snapshotspb.NewCreateSnapshotInvocation(inv))
 	kind, reason, permanent := durable.FailureInfo(err)
 	if !permanent || kind != durable.FailureKindUser || reason != "catalog-full" {
 		t.Fatalf("Run = %v (permanent=%v kind=%v reason=%q); want a user/catalog-full Fail", err, permanent, kind, reason)
@@ -153,7 +153,7 @@ func TestReduceCreateSnapshot(t *testing.T) {
 			snapshotspb.RegisterSnapshotStep.ID(): &snapshotspb.RegisterSnapshot{SnapshotId: "snap-1"},
 		},
 	})
-	out := snapshotspb.CreateSnapshotReducer(reduceCreateSnapshot).Reduce(view)
+	out := snapshotspb.ReduceCreateSnapshot(&snapshotter{}, view)
 	if out.GetSnapshotId() != "snap-1" || out.GetObjectKey() != "k" {
 		t.Fatalf("Reduce = %+v", out)
 	}
@@ -206,7 +206,7 @@ func TestReduceCreateSnapshotFailure(t *testing.T) {
 			snapshotspb.UploadSnapshotStep.ID(): &snapshotspb.UploadSnapshot{ObjectKey: "k"},
 		},
 	})
-	out := snapshotspb.CreateSnapshotFailureReducer(reduceCreateSnapshotFailure).Reduce(clean)
+	out := snapshotspb.ReduceCreateSnapshotFailure(&snapshotter{}, clean)
 	if out.GetFailedStep() != "register-snapshot/v1" || out.GetLeakedObjectKey() != "" || out.GetVolumeLeftFrozen() {
 		t.Fatalf("clean unwind = %+v", out)
 	}
@@ -222,7 +222,7 @@ func TestReduceCreateSnapshotFailure(t *testing.T) {
 			snapshotspb.FreezeVolumeStep.ID():   {StepID: snapshotspb.FreezeVolumeStep.ID()},
 		},
 	})
-	out = snapshotspb.CreateSnapshotFailureReducer(reduceCreateSnapshotFailure).Reduce(leaky)
+	out = snapshotspb.ReduceCreateSnapshotFailure(&snapshotter{}, leaky)
 	if out.GetLeakedObjectKey() != "k" || !out.GetVolumeLeftFrozen() {
 		t.Fatalf("leaky unwind = %+v", out)
 	}

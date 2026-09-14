@@ -18,7 +18,7 @@
 //     via AwaitRun; the parks hold no workers and survive the restart.
 //  5. CANCELLATION — an incident freezes the release mid-way through
 //     the api deploy. Cancel cascades: the parked parent resolves as
-//     canceled without waking, and because it parked with CancelTargets
+//     canceled without waking, and because it parked with CancelCascade
 //     the engine cancels its child deploy — the running canary's ctx
 //     dies — and both runs unwind: migrations roll back, the
 //     environment is torn down.

@@ -432,11 +432,11 @@ them is the unwind of the Steps that did succeed, and idempotent
 handlers on a later Run — the same at-least-once discipline every
 handler already owes.
 
-**Cancellation cascades through a park that claims its targets.** A
-handler that parks on Runs it scheduled says so with `CancelTargets`:
+**Cancellation cascades through a park that asks for it.** A handler
+that parks on Runs it scheduled says so with `WithCancelCascade`:
 
 ```go
-return durable.AwaitAll(ids, durable.CancelTargets())
+return durable.AwaitAll(ids, durable.WithCancelCascade())
 ```
 
 When a cancellation resolves such a park, the Engine cancels its
@@ -489,7 +489,7 @@ return durable.AwaitRun(child.ID())                        // one target
 return durable.AwaitAll(ids)                               // every target
 return durable.AwaitAny(ids)                               // the first target
 return durable.AwaitRun(id, durable.WithAwaitTimeout(d))  // bounded
-return durable.AwaitAll(ids, durable.CancelTargets())      // targets are mine
+return durable.AwaitAll(ids, durable.WithCancelCascade())  // cancel them with me
 ```
 
 A park names its targets, its mode, an optional deadline, and whether
@@ -555,7 +555,7 @@ mode, including `AwaitModeAny`, where another target might have let the
 park escape — a park that can deadlock is refused, not gambled on.
 
 A pending cancellation resolves the park as canceled: the operation is
-not woken and no attempt observes it; a park flagged `CancelTargets`
+not woken and no attempt observes it; a park made with `WithCancelCascade`
 cancels its targets (see [Cancellation](#cancellation)). The park
 survives restart.
 

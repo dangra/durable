@@ -390,7 +390,7 @@ type Await struct {
 	// Absent when the park has no deadline.
 	Deadline *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=deadline,proto3" json:"deadline,omitempty"`
 	// The targets are the parking run's own: canceling it cancels them.
-	CancelTargets bool `protobuf:"varint,4,opt,name=cancel_targets,json=cancelTargets,proto3" json:"cancel_targets,omitempty"`
+	CancelCascade bool `protobuf:"varint,4,opt,name=cancel_cascade,json=cancelCascade,proto3" json:"cancel_cascade,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -446,9 +446,9 @@ func (x *Await) GetDeadline() *timestamppb.Timestamp {
 	return nil
 }
 
-func (x *Await) GetCancelTargets() bool {
+func (x *Await) GetCancelCascade() bool {
 	if x != nil {
-		return x.CancelTargets
+		return x.CancelCascade
 	}
 	return false
 }
@@ -1064,7 +1064,7 @@ const file_durable_storage_v1_storage_proto_rawDesc = "" +
 	"\x04mode\x18\x01 \x01(\x0e2\x1d.durable.storage.v1.AwaitModeR\x04mode\x12\x17\n" +
 	"\arun_ids\x18\x02 \x03(\tR\x06runIds\x126\n" +
 	"\bdeadline\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\bdeadline\x12%\n" +
-	"\x0ecancel_targets\x18\x04 \x01(\bR\rcancelTargets\"N\n" +
+	"\x0ecancel_cascade\x18\x04 \x01(\bR\rcancelCascade\"N\n" +
 	"\x04Wake\x12\x18\n" +
 	"\atargets\x18\x01 \x03(\tR\atargets\x12\x12\n" +
 	"\x04done\x18\x02 \x03(\tR\x04done\x12\x18\n" +

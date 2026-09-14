@@ -698,7 +698,7 @@ func TestAwaitAnyRaceCancelsLosers(t *testing.T) {
 	}
 }
 
-// Canceling a parent parked with CancelTargets cancels the children
+// Canceling a parent parked with CancelCascade cancels the children
 // with it: the unfinished child is cut, the finished one stays
 // finished, and the parent never runs again to do any of it.
 func TestAwaitAllCancelCancelsChildren(t *testing.T) {
@@ -714,7 +714,7 @@ func TestAwaitAllCancelCancelsChildren(t *testing.T) {
 				if err != nil {
 					return err
 				}
-				return durable.AwaitAll(ids, durable.CancelTargets())
+				return durable.AwaitAll(ids, durable.WithCancelCascade())
 			}),
 		},
 	})

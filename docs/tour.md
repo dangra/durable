@@ -263,7 +263,7 @@ Then the successful steps unwind in reverse and the run ends
 `Canceled()`. Two more rules complete the picture:
 
 - **A park can claim its targets.** A handler that parks on runs it
-  scheduled says `durable.AwaitAll(ids, durable.CancelTargets())`;
+  scheduled says `durable.AwaitAll(ids, durable.WithCancelCascade())`;
   canceling the run then cancels those targets too, and their own
   flagged parks cascade on. Without the flag a park never cancels its
   targets: waiting on a peer's run must not destroy it. The parked run
@@ -403,7 +403,7 @@ is nonterminal*; a child that finishes before the retry is terminal, and
 the retry creates a fresh one, so keep child resource IDs deterministic
 and don't let a scheduling attempt do slow work after scheduling. "On
 freeze, cancel my pending children" is one option away: park with
-`durable.CancelTargets()` and a cancel resolves the park without a wake
+`durable.WithCancelCascade()` and a cancel resolves the park without a wake
 and cancels the children, under every mode. Cycle detection is
 conservative: a cycle through any edge invalidates the run, even under
 `AwaitAny` where another target might have let it escape.

@@ -30,7 +30,7 @@
 // returned ctx.Err() included), Fail with FailOptions and
 // kind/reason attribution, or AwaitRun, AwaitAll, and AwaitAny to park on
 // other Runs, bounded by WithAwaitTimeout and claiming them with
-// CancelTargets (the woken attempt reads the park back through Awaited). An unwind handler is the same shape and
+// CancelCascade (the woken attempt reads the park back through Awaited). An unwind handler is the same shape and
 // reads the Failure it is unwinding through Invocation.Failure, non-nil
 // exactly in PhaseUnwind.
 //

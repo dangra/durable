@@ -903,7 +903,7 @@ func (e *Engine) processRun(id durable.RunID) (time.Duration, bool) {
 // in-flight forward attempt is preempted, and the Run is dispatched. A
 // terminal Run returns durable.ErrRunTerminal, a missing one
 // durable.ErrRunNotFound; a request after the first is a no-op, since
-// the first did all of this. A park flagged CancelTargets cascades when
+// the first did all of this. A park flagged CancelCascade cascades when
 // the worker resolves it (see cancelOperation).
 func (e *Engine) requestCancel(ctx context.Context, id durable.RunID, cause string) error {
 	cause = e.boundText(cause)
@@ -931,7 +931,7 @@ func (e *Engine) requestCancel(ctx context.Context, id durable.RunID, cause stri
 // never attempted — and the Run's Failure names the Step. err is what
 // an executing attempt returned, nil when the operation was dormant or
 // parked; a park is dropped without a wake, and one flagged
-// CancelTargets cancels its targets with the same cause. The cause is
+// CancelCascade cancels its targets with the same cause. The cause is
 // the request's, read from the record or from the preemption that cut
 // the attempt.
 func (e *Engine) cancelOperation(rec *driver.RunRecord, stepID durable.StepID, preempted *durable.PreemptedError, err error, elapsed time.Duration) bool {
@@ -975,7 +975,7 @@ func (e *Engine) cancelOperation(rec *driver.RunRecord, stepID durable.StepID, p
 	if !e.apply(rec, driver.Transition{Cursor: idleCursor(rec), Ops: []driver.OpWrite{{StepID: stepID, Phase: durable.PhaseForward, Record: sr.Forward}}, Failure: rec.Failure}) {
 		return false
 	}
-	if park != nil && park.CancelTargets {
+	if park != nil && park.CancelCascade {
 		for _, t := range park.Targets {
 			if err := e.requestCancel(e.baseCtx, t, cause); err != nil && !errors.Is(err, durable.ErrRunTerminal) && !errors.Is(err, durable.ErrRunNotFound) {
 				e.logger.Error("durable: canceling awaited run failed", "run", string(rec.RunID), "target", string(t), "error", err)

@@ -23,19 +23,20 @@ func WithAwaitTimeout(d time.Duration) AwaitOption {
 	}
 }
 
-// CancelTargets marks the park's targets as the parking Run's own: a
-// cancellation of the Run that resolves the park cancels them too, with
-// the same cause, and their own flagged parks cascade on. Without it a
-// park never cancels its targets, because a Run parked on a peer's work
-// must not destroy it. Use it where the handler scheduled the targets:
+// WithCancelCascade makes a cancellation of the parking Run cascade to
+// the park's targets: when the cancellation resolves the park, the
+// targets are canceled with the same cause, and their own cascading
+// parks cascade on. Without it a park never cancels its targets, because
+// a Run parked on a peer's work must not destroy it. Use it where the
+// handler scheduled the targets:
 //
-//	return durable.AwaitAll(ids, durable.CancelTargets())
+//	return durable.AwaitAll(ids, durable.WithCancelCascade())
 //
 // Schedule, then park: a cancel that lands between the two kills the
 // attempt's context, which is the attempt's cue to stop scheduling.
-func CancelTargets() AwaitOption {
+func WithCancelCascade() AwaitOption {
 	return func(ar *awaitResolution) {
-		ar.park.CancelTargets = true
+		ar.park.CancelCascade = true
 	}
 }
 

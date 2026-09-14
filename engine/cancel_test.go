@@ -420,7 +420,7 @@ func childPipeline(id durable.PipelineID, release <-chan struct{}) *pipelinedef.
 	})
 }
 
-// Canceling a parent parked with CancelTargets cancels the child it
+// Canceling a parent parked with CancelCascade cancels the child it
 // parked on, with the same cause, and the parent is not woken to do it.
 func TestCancelCascadesThroughFlaggedPark(t *testing.T) {
 	release := make(chan struct{})
@@ -435,7 +435,7 @@ func TestCancelCascadesThroughFlaggedPark(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			return durable.AwaitRun(child.ID(), durable.CancelTargets())
+			return durable.AwaitRun(child.ID(), durable.WithCancelCascade())
 		})},
 	})
 	_, pipes := startEngine(t, mem.New(), childPipeline("cascade-child", release), parent)
@@ -479,7 +479,7 @@ func TestCascadeSurvivesRestart(t *testing.T) {
 				if err != nil {
 					return err
 				}
-				return durable.AwaitRun(child.ID(), durable.CancelTargets())
+				return durable.AwaitRun(child.ID(), durable.WithCancelCascade())
 			})},
 		})
 	}

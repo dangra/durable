@@ -82,8 +82,8 @@ message Await {
   repeated string run_ids = 2;
   // Absent when the park has no deadline.
   google.protobuf.Timestamp deadline = 3;
-  // The targets are the parking run's own: canceling it cancels them.
-  bool cancel_targets = 4;
+  // A cancellation that resolves the park cancels its targets too.
+  bool cancel_cascade = 4;
 }
 
 // Wake is the resolved memory of a park: its targets, the ones terminal or

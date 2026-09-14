@@ -103,7 +103,7 @@ sequenceDiagram
 | `world.go` | the fake platform backend — what "survives" the crash |
 | `deploy.go` | today's `deploy-service` handlers (`releasepb`) |
 | `legacy.go` | yesterday's handlers (`legacypb`), including the crash-mid-migration one |
-| `train.go` | the parent orchestration: schedule child, `AwaitRun` with `CancelTargets` |
+| `train.go` | the parent orchestration: schedule child, `AwaitRun` with `CancelCascade` |
 | `builds.go` | the two daemon generations wired to their pipelines |
 | `main_test.go` | asserts the durable facts, not print interleaving |
 

@@ -389,7 +389,7 @@ type Await struct {
 	RunIds []string               `protobuf:"bytes,2,rep,name=run_ids,json=runIds,proto3" json:"run_ids,omitempty"`
 	// Absent when the park has no deadline.
 	Deadline *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=deadline,proto3" json:"deadline,omitempty"`
-	// The targets are the parking run's own: canceling it cancels them.
+	// A cancellation that resolves the park cancels its targets too.
 	CancelCascade bool `protobuf:"varint,4,opt,name=cancel_cascade,json=cancelCascade,proto3" json:"cancel_cascade,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

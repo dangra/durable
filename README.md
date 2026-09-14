@@ -28,20 +28,30 @@ type-erased definition it builds; the shared vocabulary lives in
 `store/mem` for ephemeral runs); implementers use `store/driver`,
 telemetry adapters `observe`.
 
-**Requires Go 1.27+** (the generated `State` API uses generic methods).
+**Requires Go 1.27+** (the typed `State` lookup is a generic method).
 
 ## Example
 
-Declare a pipeline ([full example](examples/machines/)):
+Declare a pipeline in protobuf (condensed from
+[examples/machines](examples/machines/), which has a validation step and
+a second pipeline sharing a mutex). Each step is a message whose fields
+are the state it commits; the pipeline message lists the steps in
+order:
 
 ```proto
-message ReserveCapacity {
-  option (durable.v1.step) = {
-    id: "reserve-capacity/v1"
-    unwind: true
-  };
+message SelectHost {
+  option (durable.v1.step) = {id: "select-host/v1"};
+  string host_id = 1;
+}
 
+message ReserveCapacity {
+  option (durable.v1.step) = {id: "reserve-capacity/v1" unwind: true};
   string reservation_id = 1;
+}
+
+message CreateMachine {
+  option (durable.v1.step) = {id: "create-machine/v1"};
+  string machine_id = 1;
 }
 
 message ProvisionMachine {
@@ -50,7 +60,6 @@ message ProvisionMachine {
     input: ".machines.v1.ProvisionMachineInput"
     output: ".machines.v1.ProvisionMachineOutput"
 
-    steps: ".machines.v1.Validate"
     steps: ".machines.v1.SelectHost"
     steps: ".machines.v1.ReserveCapacity"
     steps: ".machines.v1.CreateMachine"
@@ -58,44 +67,86 @@ message ProvisionMachine {
 }
 ```
 
-Implement the generated pipeline interface, one method per step:
+`protoc-gen-durable` turns that into one interface, `ProvisionMachineHandlers`:
+a method per step, `Unwind<Step>` for each step that unwinds, and
+`Reduce` for the output. One type implements the pipeline, so its
+dependencies are declared once, and a step it lacks — a step added to
+the proto included — is a compile error naming the method:
 
 ```go
-func (h *handlers) CreateMachine(
-    ctx context.Context,
-    inv machinespb.ProvisionMachineInvocation,
-) (*machinespb.CreateMachine, error) {
-    reservation, ok := inv.State(machinespb.ReserveCapacityStep)
-    if !ok {
-        return nil, durable.Fail(errors.New("reservation state unavailable"))
+type handlers struct{ cloud *cloud }
+
+func (h *handlers) SelectHost(ctx context.Context, inv machinespb.ProvisionMachineInvocation) (*machinespb.SelectHost, error) {
+    return &machinespb.SelectHost{HostId: "host-" + inv.Input().GetRegion() + "-1"}, nil
+}
+
+func (h *handlers) ReserveCapacity(ctx context.Context, inv machinespb.ProvisionMachineInvocation) (*machinespb.ReserveCapacity, error) {
+    host, _ := inv.State(machinespb.SelectHostStep) // typed, committed state
+    id, err := h.cloud.Reserve(ctx, host.GetHostId())
+    if err != nil {
+        return nil, err // an ordinary error: retried with backoff
     }
-    // ... at-least-once: must be idempotent; plain errors are retried.
+    return &machinespb.ReserveCapacity{ReservationId: id}, nil
+}
+
+func (h *handlers) UnwindReserveCapacity(ctx context.Context, inv machinespb.ProvisionMachineInvocation) error {
+    r, ok := inv.State(machinespb.ReserveCapacityStep)
+    if !ok {
+        return nil // never committed: nothing to release
+    }
+    return h.cloud.Release(ctx, r.GetReservationId())
+}
+
+func (h *handlers) CreateMachine(ctx context.Context, inv machinespb.ProvisionMachineInvocation) (*machinespb.CreateMachine, error) {
+    r, _ := inv.State(machinespb.ReserveCapacityStep)
+    id, err := h.cloud.Create(ctx, r.GetReservationId(), inv.Input().GetRegion())
+    if errors.Is(err, errNoCapacity) {
+        // A decision, not an error class: the run unwinds from here,
+        // and ReserveCapacity's unwind releases the reservation.
+        return nil, durable.Fail(err, durable.WithReason("insufficient-capacity"))
+    }
+    if err != nil {
+        return nil, err
+    }
     return &machinespb.CreateMachine{MachineId: id}, nil
+}
+
+func (h *handlers) Reduce(p *machinespb.ProvisionMachine) *machinespb.ProvisionMachineOutput {
+    m, _ := p.State(machinespb.CreateMachineStep)
+    return &machinespb.ProvisionMachineOutput{MachineId: m.GetMachineId()}
 }
 ```
 
-Wire it up — this side of an application imports `engine`, handler files never do:
+Handlers run at least once, so they are idempotent; the invocation's
+`ctx` dies only for engine shutdown or a cancel of the run, and
+returning `ctx.Err()` is the right answer to both.
+
+Wire it up. This side of an application imports `engine`; handler
+files never do:
 
 ```go
 st, _ := store.Open("bbolt:///var/lib/app/machines.db") // import _ ".../store/bbolt"
 eng := engine.New(st)
-
-provision, _ := machinespb.NewProvisionMachine(&handlers{cloud: c})
-).Bind(eng)
-
+provision, _ := machinespb.NewProvisionMachine(&handlers{cloud: c}).Bind(eng)
 eng.Start(ctx)
 
-run, created, _ := provision.Schedule(ctx, "machine-123", input)
+run, _, _ := provision.Schedule(ctx, "machine-123", &machinespb.ProvisionMachineInput{Region: "ams"})
 result, _ := run.Wait(ctx)
-if result.Succeeded() {
+switch {
+case result.Succeeded():
     fmt.Println(result.Output().GetMachineId())
+case result.Canceled():
+    // run.Cancel(ctx, "operator retracted") on any handle, from any process
+default:
+    fmt.Println(result.Failure.Reason) // "insufficient-capacity"
 }
 ```
 
-Handlers need not be types: every generated handler interface comes with
-an `http.HandlerFunc`-style adapter, so a pipeline can be assembled from
-closures over a dependency struct.
-[examples/snapshots](examples/snapshots/) is written that way end to end.
+A run survives the process: stop the engine mid-step, start another on
+the same store, and `provision.GetRun(ctx, id)` continues where the
+facts left off — under a newer pipeline definition if one shipped in
+between. Handlers unit-test without an engine: hand a method
+`machinespb.NewProvisionMachineInvocation(durabletest.NewInvocation(cfg))`.
 
 For the whole story in one runnable demo — a release surviving a daemon
 crash, a pipeline definition that evolves mid-flight, parent runs

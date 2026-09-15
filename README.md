@@ -34,36 +34,31 @@ telemetry adapters `observe`.
 
 Declare a pipeline in protobuf (condensed from
 [examples/machines](examples/machines/), which has a validation step and
-a second pipeline sharing a mutex). Each step is a message whose fields
-are the state it commits; the pipeline message lists the steps in
-order:
+a second pipeline sharing a mutex). Each step is a message nested in its pipeline, in execution order,
+whose fields are the state it commits:
 
 ```proto
-message SelectHost {
-  option (durable.v1.step) = {id: "select-host/v1"};
-  string host_id = 1;
-}
-
-message ReserveCapacity {
-  option (durable.v1.step) = {id: "reserve-capacity/v1" unwind: true};
-  string reservation_id = 1;
-}
-
-message CreateMachine {
-  option (durable.v1.step) = {id: "create-machine/v1"};
-  string machine_id = 1;
-}
-
 message ProvisionMachine {
   option (durable.v1.pipeline) = {
     id: "provision-machine"
     input: ".machines.v1.ProvisionMachineInput"
     output: ".machines.v1.ProvisionMachineOutput"
-
-    steps: ".machines.v1.SelectHost"
-    steps: ".machines.v1.ReserveCapacity"
-    steps: ".machines.v1.CreateMachine"
   };
+
+  message SelectHost {
+    option (durable.v1.step) = {id: "select-host/v1"};
+    string host_id = 1;
+  }
+
+  message ReserveCapacity {
+    option (durable.v1.step) = {id: "reserve-capacity/v1" unwind: true};
+    string reservation_id = 1;
+  }
+
+  message CreateMachine {
+    option (durable.v1.step) = {id: "create-machine/v1"};
+    string machine_id = 1;
+  }
 }
 ```
 
@@ -76,29 +71,29 @@ the proto included — is a compile error naming the method:
 ```go
 type handlers struct{ cloud *cloud }
 
-func (h *handlers) SelectHost(ctx context.Context, inv machinespb.ProvisionMachineInvocation) (*machinespb.SelectHost, error) {
-    return &machinespb.SelectHost{HostId: "host-" + inv.Input().GetRegion() + "-1"}, nil
+func (h *handlers) SelectHost(ctx context.Context, inv machinespb.ProvisionMachineInvocation) (*machinespb.ProvisionMachine_SelectHost, error) {
+    return &machinespb.ProvisionMachine_SelectHost{HostId: "host-" + inv.Input().GetRegion() + "-1"}, nil
 }
 
-func (h *handlers) ReserveCapacity(ctx context.Context, inv machinespb.ProvisionMachineInvocation) (*machinespb.ReserveCapacity, error) {
-    host, _ := inv.State(machinespb.SelectHostStep) // typed, committed state
+func (h *handlers) ReserveCapacity(ctx context.Context, inv machinespb.ProvisionMachineInvocation) (*machinespb.ProvisionMachine_ReserveCapacity, error) {
+    host, _ := inv.State(machinespb.ProvisionMachine_SelectHostStep) // typed, committed state
     id, err := h.cloud.Reserve(ctx, host.GetHostId())
     if err != nil {
         return nil, err // an ordinary error: retried with backoff
     }
-    return &machinespb.ReserveCapacity{ReservationId: id}, nil
+    return &machinespb.ProvisionMachine_ReserveCapacity{ReservationId: id}, nil
 }
 
 func (h *handlers) UnwindReserveCapacity(ctx context.Context, inv machinespb.ProvisionMachineInvocation) error {
-    r, ok := inv.State(machinespb.ReserveCapacityStep)
+    r, ok := inv.State(machinespb.ProvisionMachine_ReserveCapacityStep)
     if !ok {
         return nil // never committed: nothing to release
     }
     return h.cloud.Release(ctx, r.GetReservationId())
 }
 
-func (h *handlers) CreateMachine(ctx context.Context, inv machinespb.ProvisionMachineInvocation) (*machinespb.CreateMachine, error) {
-    r, _ := inv.State(machinespb.ReserveCapacityStep)
+func (h *handlers) CreateMachine(ctx context.Context, inv machinespb.ProvisionMachineInvocation) (*machinespb.ProvisionMachine_CreateMachine, error) {
+    r, _ := inv.State(machinespb.ProvisionMachine_ReserveCapacityStep)
     id, err := h.cloud.Create(ctx, r.GetReservationId(), inv.Input().GetRegion())
     if errors.Is(err, errNoCapacity) {
         // A decision, not an error class: the run unwinds from here,
@@ -108,11 +103,11 @@ func (h *handlers) CreateMachine(ctx context.Context, inv machinespb.ProvisionMa
     if err != nil {
         return nil, err
     }
-    return &machinespb.CreateMachine{MachineId: id}, nil
+    return &machinespb.ProvisionMachine_CreateMachine{MachineId: id}, nil
 }
 
 func (h *handlers) Reduce(p *machinespb.ProvisionMachine) *machinespb.ProvisionMachineOutput {
-    m, _ := p.State(machinespb.CreateMachineStep)
+    m, _ := p.State(machinespb.ProvisionMachine_CreateMachineStep)
     return &machinespb.ProvisionMachineOutput{MachineId: m.GetMachineId()}
 }
 ```

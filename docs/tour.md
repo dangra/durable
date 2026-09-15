@@ -42,43 +42,40 @@ The full model: [spec/01-model.md](../spec/01-model.md).
 
 ## Declaring a pipeline
 
-Pipelines and steps are protobuf messages carrying `durable.v1`
-options; `protoc-gen-durable` compiles them into a fully typed Go API
+A pipeline is a protobuf message carrying the `durable.v1.pipeline`
+option, with its steps nested inside it in execution order;
+`protoc-gen-durable` compiles them into a fully typed Go API
 (see [spec/05-codegen.md](../spec/05-codegen.md) and the committed
 generated code in [examples/machines](../examples/machines/)):
 
 ```proto
-message ProvisionEnv {
-  option (durable.v1.step) = {
-    id: "provision-env/v1"
-    unwind: true              // has a rollback
-  };
-  string env_id = 1;          // step state: committed on success
-}
-
-message RunMigrations {
-  option (durable.v1.step) = {
-    id: "run-migrations/v1"
-    unwind: true
-  };
-  string schema_version = 1;
-}
-
-message ShiftTraffic {
-  option (durable.v1.step) = { id: "shift-traffic/v1" };
-  string lb_generation = 1;
-}
-
 message DeployService {
   option (durable.v1.pipeline) = {
     id: "deploy-service"
     input: ".deploy.v1.DeployServiceInput"
     output: ".deploy.v1.DeployServiceOutput"
-
-    steps: ".deploy.v1.ProvisionEnv"
-    steps: ".deploy.v1.RunMigrations"
-    steps: ".deploy.v1.ShiftTraffic"
   };
+
+  message ProvisionEnv {
+    option (durable.v1.step) = {
+      id: "provision-env/v1"
+      unwind: true              // has a rollback
+    };
+    string env_id = 1;          // step state: committed on success
+  }
+
+  message RunMigrations {
+    option (durable.v1.step) = {
+      id: "run-migrations/v1"
+      unwind: true
+    };
+    string schema_version = 1;
+  }
+
+  message ShiftTraffic {
+    option (durable.v1.step) = { id: "shift-traffic/v1" };
+    string lb_generation = 1;
+  }
 }
 ```
 
@@ -122,8 +119,8 @@ A forward handler receives the pipeline's invocation: the typed input,
 committed state of earlier steps, and attempt metadata.
 
 ```go
-func (h *deployer) RunMigrations(ctx context.Context, inv deploypb.DeployServiceInvocation) (*deploypb.RunMigrations, error) {
-    env, ok := inv.State(deploypb.ProvisionEnvStep) // typed, committed state
+func (h *deployer) RunMigrations(ctx context.Context, inv deploypb.DeployServiceInvocation) (*deploypb.DeployService_RunMigrations, error) {
+    env, ok := inv.State(deploypb.DeployService_ProvisionEnvStep) // typed, committed state
     if !ok {
         return nil, durable.Fail(errors.New("env state unavailable"))
     }
@@ -131,7 +128,7 @@ func (h *deployer) RunMigrations(ctx context.Context, inv deploypb.DeployService
     if err != nil {
         return nil, err // plain error: retried with backoff
     }
-    return &deploypb.RunMigrations{SchemaVersion: version}, nil
+    return &deploypb.DeployService_RunMigrations{SchemaVersion: version}, nil
 }
 ```
 
@@ -176,7 +173,7 @@ handler:
 
 ```go
 func (h *deployer) UnwindRunMigrations(ctx context.Context, inv deploypb.DeployServiceInvocation) error {
-    m, ok := inv.State(deploypb.RunMigrationsStep) // what forward committed
+    m, ok := inv.State(deploypb.DeployService_RunMigrationsStep) // what forward committed
     if !ok {
         return nil // forward never committed; nothing to undo
     }
@@ -250,12 +247,12 @@ that moment.
   cancel is pending: it just honours its context.
 
 ```go
-func (h *deployer) ShiftTraffic(ctx context.Context, inv deploypb.DeployServiceInvocation) (*deploypb.ShiftTraffic, error) {
+func (h *deployer) ShiftTraffic(ctx context.Context, inv deploypb.DeployServiceInvocation) (*deploypb.DeployService_ShiftTraffic, error) {
     gen, err := h.lb.Shift(ctx, inv.Input().GetImage()) // ctx dies on cancel
     if err != nil {
         return nil, err // under a cancel this is the cancellation; otherwise a retry
     }
-    return &deploypb.ShiftTraffic{LbGeneration: gen}, nil
+    return &deploypb.DeployService_ShiftTraffic{LbGeneration: gen}, nil
 }
 ```
 
@@ -329,11 +326,11 @@ returns the `Result` of an already-terminal run). Instead, a handler
 *parks*:
 
 ```go
-func (h *train) ShipServices(ctx context.Context, inv releasepb.ReleaseTrainInvocation) (*releasepb.ShipServices, error) {
+func (h *train) ShipServices(ctx context.Context, inv releasepb.ReleaseTrainInvocation) (*releasepb.ReleaseTrain_ShipServices, error) {
     if childID, woken := inv.AwaitedRunID(); woken {
         // The awaited run reached terminality; inspect and continue.
         _ = childID
-        return &releasepb.ShipServices{}, nil
+        return &releasepb.ReleaseTrain_ShipServices{}, nil
     }
     child, _, err := deploy.Schedule(ctx, "service-web", input)
     if err != nil {
@@ -364,7 +361,7 @@ targets terminal or missing at wake time), and `Pending()` for the rest
 — so the handler never has to remember its children itself:
 
 ```go
-func (h *train) ShipServices(ctx context.Context, inv releasepb.ReleaseTrainInvocation) (*releasepb.ShipServices, error) {
+func (h *train) ShipServices(ctx context.Context, inv releasepb.ReleaseTrainInvocation) (*releasepb.ReleaseTrain_ShipServices, error) {
     if w, woken := inv.Awaited(); woken {
         for _, id := range w.Done {              // all of them, under AwaitAll
             run, err := deploy.GetRun(ctx, id)
@@ -373,7 +370,7 @@ func (h *train) ShipServices(ctx context.Context, inv releasepb.ReleaseTrainInvo
             if err != nil { return nil, err }
             if !res.Succeeded() { return nil, durable.Fail(fmt.Errorf("deploy %s failed", id)) }
         }
-        return &releasepb.ShipServices{}, nil
+        return &releasepb.ReleaseTrain_ShipServices{}, nil
     }
     var ids []durable.RunID
     for _, svc := range inv.Input().GetServices() {
@@ -429,17 +426,16 @@ message DeployService {
   option (durable.v1.pipeline) = {
     id: "deploy-service"
     mutexes: "service-lifecycle"
-    steps: ".deploy.v1.ProvisionEnv"
-    steps: ".deploy.v1.ShiftTraffic"
   };
+  // steps ...
 }
 
 message RollbackService {
   option (durable.v1.pipeline) = {
     id: "rollback-service"
     mutexes: "service-lifecycle"
-    steps: ".deploy.v1.RestorePrevious"
   };
+  message RestorePrevious { option (durable.v1.step) = {id: "restore-previous/v1"}; }
 }
 ```
 
@@ -457,16 +453,16 @@ message SnapshotService {
   option (durable.v1.pipeline) = {
     id: "snapshot-service"
     mutexes: ["service-lifecycle", "backup-window"]
-    steps: ".deploy.v1.FreezeAndCopy"
   };
+  message FreezeAndCopy { option (durable.v1.step) = {id: "freeze-and-copy/v1"}; }
 }
 
 message ScheduledBackup {
   option (durable.v1.pipeline) = {
     id: "scheduled-backup"
     mutexes: "backup-window"
-    steps: ".deploy.v1.CopyOffsite"
   };
+  message CopyOffsite { option (durable.v1.step) = {id: "copy-offsite/v1"}; }
 }
 ```
 
@@ -555,10 +551,16 @@ furthest current-topology position the run's successful steps reach.
 **Adding a step.** The platform team adds canary analysis:
 
 ```proto
-steps: ".deploy.v1.ProvisionEnv"
-steps: ".deploy.v1.RunMigrations"
-steps: ".deploy.v1.CanaryAnalysis"   // new
-steps: ".deploy.v1.ShiftTraffic"
+message DeployService {
+  option (durable.v1.pipeline) = { /* ... */ };
+  message ProvisionEnv   { /* ... */ }
+  message RunMigrations  { /* ... */ }
+  message CanaryAnalysis {                       // new, in position
+    option (durable.v1.step) = {id: "canary-analysis/v1"};
+    uint32 score = 1;
+  }
+  message ShiftTraffic   { /* ... */ }
+}
 ```
 
 A run whose frontier is `run-migrations/v1` executes the new step —

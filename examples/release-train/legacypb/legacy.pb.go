@@ -28,138 +28,6 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-type ProvisionEnv struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	EnvId         string                 `protobuf:"bytes,1,opt,name=env_id,json=envId,proto3" json:"env_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ProvisionEnv) Reset() {
-	*x = ProvisionEnv{}
-	mi := &file_legacy_v1_legacy_proto_msgTypes[0]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ProvisionEnv) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ProvisionEnv) ProtoMessage() {}
-
-func (x *ProvisionEnv) ProtoReflect() protoreflect.Message {
-	mi := &file_legacy_v1_legacy_proto_msgTypes[0]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ProvisionEnv.ProtoReflect.Descriptor instead.
-func (*ProvisionEnv) Descriptor() ([]byte, []int) {
-	return file_legacy_v1_legacy_proto_rawDescGZIP(), []int{0}
-}
-
-func (x *ProvisionEnv) GetEnvId() string {
-	if x != nil {
-		return x.EnvId
-	}
-	return ""
-}
-
-type RunMigrations struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	SchemaVersion string                 `protobuf:"bytes,1,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *RunMigrations) Reset() {
-	*x = RunMigrations{}
-	mi := &file_legacy_v1_legacy_proto_msgTypes[1]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *RunMigrations) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*RunMigrations) ProtoMessage() {}
-
-func (x *RunMigrations) ProtoReflect() protoreflect.Message {
-	mi := &file_legacy_v1_legacy_proto_msgTypes[1]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use RunMigrations.ProtoReflect.Descriptor instead.
-func (*RunMigrations) Descriptor() ([]byte, []int) {
-	return file_legacy_v1_legacy_proto_rawDescGZIP(), []int{1}
-}
-
-func (x *RunMigrations) GetSchemaVersion() string {
-	if x != nil {
-		return x.SchemaVersion
-	}
-	return ""
-}
-
-type ShiftTraffic struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	LbGeneration  string                 `protobuf:"bytes,1,opt,name=lb_generation,json=lbGeneration,proto3" json:"lb_generation,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ShiftTraffic) Reset() {
-	*x = ShiftTraffic{}
-	mi := &file_legacy_v1_legacy_proto_msgTypes[2]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ShiftTraffic) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ShiftTraffic) ProtoMessage() {}
-
-func (x *ShiftTraffic) ProtoReflect() protoreflect.Message {
-	mi := &file_legacy_v1_legacy_proto_msgTypes[2]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ShiftTraffic.ProtoReflect.Descriptor instead.
-func (*ShiftTraffic) Descriptor() ([]byte, []int) {
-	return file_legacy_v1_legacy_proto_rawDescGZIP(), []int{2}
-}
-
-func (x *ShiftTraffic) GetLbGeneration() string {
-	if x != nil {
-		return x.LbGeneration
-	}
-	return ""
-}
-
 type DeployServiceInput struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Service       string                 `protobuf:"bytes,1,opt,name=service,proto3" json:"service,omitempty"`
@@ -170,7 +38,7 @@ type DeployServiceInput struct {
 
 func (x *DeployServiceInput) Reset() {
 	*x = DeployServiceInput{}
-	mi := &file_legacy_v1_legacy_proto_msgTypes[3]
+	mi := &file_legacy_v1_legacy_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -182,7 +50,7 @@ func (x *DeployServiceInput) String() string {
 func (*DeployServiceInput) ProtoMessage() {}
 
 func (x *DeployServiceInput) ProtoReflect() protoreflect.Message {
-	mi := &file_legacy_v1_legacy_proto_msgTypes[3]
+	mi := &file_legacy_v1_legacy_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -195,7 +63,7 @@ func (x *DeployServiceInput) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeployServiceInput.ProtoReflect.Descriptor instead.
 func (*DeployServiceInput) Descriptor() ([]byte, []int) {
-	return file_legacy_v1_legacy_proto_rawDescGZIP(), []int{3}
+	return file_legacy_v1_legacy_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *DeployServiceInput) GetService() string {
@@ -221,7 +89,7 @@ type DeployServiceOutput struct {
 
 func (x *DeployServiceOutput) Reset() {
 	*x = DeployServiceOutput{}
-	mi := &file_legacy_v1_legacy_proto_msgTypes[4]
+	mi := &file_legacy_v1_legacy_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -233,7 +101,7 @@ func (x *DeployServiceOutput) String() string {
 func (*DeployServiceOutput) ProtoMessage() {}
 
 func (x *DeployServiceOutput) ProtoReflect() protoreflect.Message {
-	mi := &file_legacy_v1_legacy_proto_msgTypes[4]
+	mi := &file_legacy_v1_legacy_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -246,7 +114,7 @@ func (x *DeployServiceOutput) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeployServiceOutput.ProtoReflect.Descriptor instead.
 func (*DeployServiceOutput) Descriptor() ([]byte, []int) {
-	return file_legacy_v1_legacy_proto_rawDescGZIP(), []int{4}
+	return file_legacy_v1_legacy_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *DeployServiceOutput) GetUrl() string {
@@ -264,7 +132,7 @@ type DeployService struct {
 
 func (x *DeployService) Reset() {
 	*x = DeployService{}
-	mi := &file_legacy_v1_legacy_proto_msgTypes[5]
+	mi := &file_legacy_v1_legacy_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -276,7 +144,7 @@ func (x *DeployService) String() string {
 func (*DeployService) ProtoMessage() {}
 
 func (x *DeployService) ProtoReflect() protoreflect.Message {
-	mi := &file_legacy_v1_legacy_proto_msgTypes[5]
+	mi := &file_legacy_v1_legacy_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -289,30 +157,162 @@ func (x *DeployService) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeployService.ProtoReflect.Descriptor instead.
 func (*DeployService) Descriptor() ([]byte, []int) {
-	return file_legacy_v1_legacy_proto_rawDescGZIP(), []int{5}
+	return file_legacy_v1_legacy_proto_rawDescGZIP(), []int{2}
+}
+
+type DeployService_ProvisionEnv struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	EnvId         string                 `protobuf:"bytes,1,opt,name=env_id,json=envId,proto3" json:"env_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeployService_ProvisionEnv) Reset() {
+	*x = DeployService_ProvisionEnv{}
+	mi := &file_legacy_v1_legacy_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeployService_ProvisionEnv) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeployService_ProvisionEnv) ProtoMessage() {}
+
+func (x *DeployService_ProvisionEnv) ProtoReflect() protoreflect.Message {
+	mi := &file_legacy_v1_legacy_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeployService_ProvisionEnv.ProtoReflect.Descriptor instead.
+func (*DeployService_ProvisionEnv) Descriptor() ([]byte, []int) {
+	return file_legacy_v1_legacy_proto_rawDescGZIP(), []int{2, 0}
+}
+
+func (x *DeployService_ProvisionEnv) GetEnvId() string {
+	if x != nil {
+		return x.EnvId
+	}
+	return ""
+}
+
+type DeployService_RunMigrations struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SchemaVersion string                 `protobuf:"bytes,1,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeployService_RunMigrations) Reset() {
+	*x = DeployService_RunMigrations{}
+	mi := &file_legacy_v1_legacy_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeployService_RunMigrations) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeployService_RunMigrations) ProtoMessage() {}
+
+func (x *DeployService_RunMigrations) ProtoReflect() protoreflect.Message {
+	mi := &file_legacy_v1_legacy_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeployService_RunMigrations.ProtoReflect.Descriptor instead.
+func (*DeployService_RunMigrations) Descriptor() ([]byte, []int) {
+	return file_legacy_v1_legacy_proto_rawDescGZIP(), []int{2, 1}
+}
+
+func (x *DeployService_RunMigrations) GetSchemaVersion() string {
+	if x != nil {
+		return x.SchemaVersion
+	}
+	return ""
+}
+
+type DeployService_ShiftTraffic struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	LbGeneration  string                 `protobuf:"bytes,1,opt,name=lb_generation,json=lbGeneration,proto3" json:"lb_generation,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeployService_ShiftTraffic) Reset() {
+	*x = DeployService_ShiftTraffic{}
+	mi := &file_legacy_v1_legacy_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeployService_ShiftTraffic) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeployService_ShiftTraffic) ProtoMessage() {}
+
+func (x *DeployService_ShiftTraffic) ProtoReflect() protoreflect.Message {
+	mi := &file_legacy_v1_legacy_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeployService_ShiftTraffic.ProtoReflect.Descriptor instead.
+func (*DeployService_ShiftTraffic) Descriptor() ([]byte, []int) {
+	return file_legacy_v1_legacy_proto_rawDescGZIP(), []int{2, 2}
+}
+
+func (x *DeployService_ShiftTraffic) GetLbGeneration() string {
+	if x != nil {
+		return x.LbGeneration
+	}
+	return ""
 }
 
 var File_legacy_v1_legacy_proto protoreflect.FileDescriptor
 
 const file_legacy_v1_legacy_proto_rawDesc = "" +
 	"\n" +
-	"\x16legacy/v1/legacy.proto\x12\tlegacy.v1\x1a\x18durable/v1/options.proto\"?\n" +
-	"\fProvisionEnv\x12\x15\n" +
-	"\x06env_id\x18\x01 \x01(\tR\x05envId:\x18\x8a\xa8\x19\x14\n" +
-	"\x10provision-env/v1\x10\x01\"Q\n" +
-	"\rRunMigrations\x12%\n" +
-	"\x0eschema_version\x18\x01 \x01(\tR\rschemaVersion:\x19\x8a\xa8\x19\x15\n" +
-	"\x11run-migrations/v1\x10\x01\"K\n" +
-	"\fShiftTraffic\x12#\n" +
-	"\rlb_generation\x18\x01 \x01(\tR\flbGeneration:\x16\x8a\xa8\x19\x12\n" +
-	"\x10shift-traffic/v1\"D\n" +
+	"\x16legacy/v1/legacy.proto\x12\tlegacy.v1\x1a\x18durable/v1/options.proto\"D\n" +
 	"\x12DeployServiceInput\x12\x18\n" +
 	"\aservice\x18\x01 \x01(\tR\aservice\x12\x14\n" +
 	"\x05image\x18\x02 \x01(\tR\x05image\"'\n" +
 	"\x13DeployServiceOutput\x12\x10\n" +
-	"\x03url\x18\x01 \x01(\tR\x03url\"\xb2\x01\n" +
-	"\rDeployService:\xa0\x01\x92\xa8\x19\x9b\x01\n" +
-	"\x0edeploy-service\x12\x1d.legacy.v1.DeployServiceInput\x1a\x1e.legacy.v1.DeployServiceOutput\"\x17.legacy.v1.ProvisionEnv\"\x18.legacy.v1.RunMigrations\"\x17.legacy.v1.ShiftTrafficB;Z9github.com/dangra/durable/examples/release-train/legacypbb\x06proto3"
+	"\x03url\x18\x01 \x01(\tR\x03url\"\xc5\x02\n" +
+	"\rDeployService\x1a?\n" +
+	"\fProvisionEnv\x12\x15\n" +
+	"\x06env_id\x18\x01 \x01(\tR\x05envId:\x18\x8a\xa8\x19\x14\n" +
+	"\x10provision-env/v1\x10\x01\x1aQ\n" +
+	"\rRunMigrations\x12%\n" +
+	"\x0eschema_version\x18\x01 \x01(\tR\rschemaVersion:\x19\x8a\xa8\x19\x15\n" +
+	"\x11run-migrations/v1\x10\x01\x1aK\n" +
+	"\fShiftTraffic\x12#\n" +
+	"\rlb_generation\x18\x01 \x01(\tR\flbGeneration:\x16\x8a\xa8\x19\x12\n" +
+	"\x10shift-traffic/v1:S\x92\xa8\x19O\n" +
+	"\x0edeploy-service\x12\x1d.legacy.v1.DeployServiceInput\x1a\x1e.legacy.v1.DeployServiceOutputB;Z9github.com/dangra/durable/examples/release-train/legacypbb\x06proto3"
 
 var (
 	file_legacy_v1_legacy_proto_rawDescOnce sync.Once
@@ -328,12 +328,12 @@ func file_legacy_v1_legacy_proto_rawDescGZIP() []byte {
 
 var file_legacy_v1_legacy_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_legacy_v1_legacy_proto_goTypes = []any{
-	(*ProvisionEnv)(nil),        // 0: legacy.v1.ProvisionEnv
-	(*RunMigrations)(nil),       // 1: legacy.v1.RunMigrations
-	(*ShiftTraffic)(nil),        // 2: legacy.v1.ShiftTraffic
-	(*DeployServiceInput)(nil),  // 3: legacy.v1.DeployServiceInput
-	(*DeployServiceOutput)(nil), // 4: legacy.v1.DeployServiceOutput
-	(*DeployService)(nil),       // 5: legacy.v1.DeployService
+	(*DeployServiceInput)(nil),          // 0: legacy.v1.DeployServiceInput
+	(*DeployServiceOutput)(nil),         // 1: legacy.v1.DeployServiceOutput
+	(*DeployService)(nil),               // 2: legacy.v1.DeployService
+	(*DeployService_ProvisionEnv)(nil),  // 3: legacy.v1.DeployService.ProvisionEnv
+	(*DeployService_RunMigrations)(nil), // 4: legacy.v1.DeployService.RunMigrations
+	(*DeployService_ShiftTraffic)(nil),  // 5: legacy.v1.DeployService.ShiftTraffic
 }
 var file_legacy_v1_legacy_proto_depIdxs = []int32{
 	0, // [0:0] is the sub-list for method output_type

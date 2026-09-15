@@ -136,174 +136,6 @@ func (x *ProvisionMachineOutput) GetHostId() string {
 	return ""
 }
 
-type Validate struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *Validate) Reset() {
-	*x = Validate{}
-	mi := &file_machines_v1_machines_proto_msgTypes[2]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *Validate) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*Validate) ProtoMessage() {}
-
-func (x *Validate) ProtoReflect() protoreflect.Message {
-	mi := &file_machines_v1_machines_proto_msgTypes[2]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use Validate.ProtoReflect.Descriptor instead.
-func (*Validate) Descriptor() ([]byte, []int) {
-	return file_machines_v1_machines_proto_rawDescGZIP(), []int{2}
-}
-
-type SelectHost struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	HostId        string                 `protobuf:"bytes,1,opt,name=host_id,json=hostId,proto3" json:"host_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *SelectHost) Reset() {
-	*x = SelectHost{}
-	mi := &file_machines_v1_machines_proto_msgTypes[3]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *SelectHost) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*SelectHost) ProtoMessage() {}
-
-func (x *SelectHost) ProtoReflect() protoreflect.Message {
-	mi := &file_machines_v1_machines_proto_msgTypes[3]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use SelectHost.ProtoReflect.Descriptor instead.
-func (*SelectHost) Descriptor() ([]byte, []int) {
-	return file_machines_v1_machines_proto_rawDescGZIP(), []int{3}
-}
-
-func (x *SelectHost) GetHostId() string {
-	if x != nil {
-		return x.HostId
-	}
-	return ""
-}
-
-type ReserveCapacity struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ReservationId string                 `protobuf:"bytes,1,opt,name=reservation_id,json=reservationId,proto3" json:"reservation_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ReserveCapacity) Reset() {
-	*x = ReserveCapacity{}
-	mi := &file_machines_v1_machines_proto_msgTypes[4]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ReserveCapacity) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ReserveCapacity) ProtoMessage() {}
-
-func (x *ReserveCapacity) ProtoReflect() protoreflect.Message {
-	mi := &file_machines_v1_machines_proto_msgTypes[4]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ReserveCapacity.ProtoReflect.Descriptor instead.
-func (*ReserveCapacity) Descriptor() ([]byte, []int) {
-	return file_machines_v1_machines_proto_rawDescGZIP(), []int{4}
-}
-
-func (x *ReserveCapacity) GetReservationId() string {
-	if x != nil {
-		return x.ReservationId
-	}
-	return ""
-}
-
-type CreateMachine struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	MachineId     string                 `protobuf:"bytes,1,opt,name=machine_id,json=machineId,proto3" json:"machine_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *CreateMachine) Reset() {
-	*x = CreateMachine{}
-	mi := &file_machines_v1_machines_proto_msgTypes[5]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *CreateMachine) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*CreateMachine) ProtoMessage() {}
-
-func (x *CreateMachine) ProtoReflect() protoreflect.Message {
-	mi := &file_machines_v1_machines_proto_msgTypes[5]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use CreateMachine.ProtoReflect.Descriptor instead.
-func (*CreateMachine) Descriptor() ([]byte, []int) {
-	return file_machines_v1_machines_proto_rawDescGZIP(), []int{5}
-}
-
-func (x *CreateMachine) GetMachineId() string {
-	if x != nil {
-		return x.MachineId
-	}
-	return ""
-}
-
 type ProvisionMachine struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -312,7 +144,7 @@ type ProvisionMachine struct {
 
 func (x *ProvisionMachine) Reset() {
 	*x = ProvisionMachine{}
-	mi := &file_machines_v1_machines_proto_msgTypes[6]
+	mi := &file_machines_v1_machines_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -324,7 +156,7 @@ func (x *ProvisionMachine) String() string {
 func (*ProvisionMachine) ProtoMessage() {}
 
 func (x *ProvisionMachine) ProtoReflect() protoreflect.Message {
-	mi := &file_machines_v1_machines_proto_msgTypes[6]
+	mi := &file_machines_v1_machines_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -337,43 +169,7 @@ func (x *ProvisionMachine) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProvisionMachine.ProtoReflect.Descriptor instead.
 func (*ProvisionMachine) Descriptor() ([]byte, []int) {
-	return file_machines_v1_machines_proto_rawDescGZIP(), []int{6}
-}
-
-type ReleaseMachine struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ReleaseMachine) Reset() {
-	*x = ReleaseMachine{}
-	mi := &file_machines_v1_machines_proto_msgTypes[7]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ReleaseMachine) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ReleaseMachine) ProtoMessage() {}
-
-func (x *ReleaseMachine) ProtoReflect() protoreflect.Message {
-	mi := &file_machines_v1_machines_proto_msgTypes[7]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ReleaseMachine.ProtoReflect.Descriptor instead.
-func (*ReleaseMachine) Descriptor() ([]byte, []int) {
-	return file_machines_v1_machines_proto_rawDescGZIP(), []int{7}
+	return file_machines_v1_machines_proto_rawDescGZIP(), []int{2}
 }
 
 // DecommissionMachine shares the machine-lifecycle mutex with
@@ -387,7 +183,7 @@ type DecommissionMachine struct {
 
 func (x *DecommissionMachine) Reset() {
 	*x = DecommissionMachine{}
-	mi := &file_machines_v1_machines_proto_msgTypes[8]
+	mi := &file_machines_v1_machines_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -399,7 +195,7 @@ func (x *DecommissionMachine) String() string {
 func (*DecommissionMachine) ProtoMessage() {}
 
 func (x *DecommissionMachine) ProtoReflect() protoreflect.Message {
-	mi := &file_machines_v1_machines_proto_msgTypes[8]
+	mi := &file_machines_v1_machines_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -412,7 +208,211 @@ func (x *DecommissionMachine) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DecommissionMachine.ProtoReflect.Descriptor instead.
 func (*DecommissionMachine) Descriptor() ([]byte, []int) {
-	return file_machines_v1_machines_proto_rawDescGZIP(), []int{8}
+	return file_machines_v1_machines_proto_rawDescGZIP(), []int{3}
+}
+
+type ProvisionMachine_Validate struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ProvisionMachine_Validate) Reset() {
+	*x = ProvisionMachine_Validate{}
+	mi := &file_machines_v1_machines_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ProvisionMachine_Validate) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ProvisionMachine_Validate) ProtoMessage() {}
+
+func (x *ProvisionMachine_Validate) ProtoReflect() protoreflect.Message {
+	mi := &file_machines_v1_machines_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ProvisionMachine_Validate.ProtoReflect.Descriptor instead.
+func (*ProvisionMachine_Validate) Descriptor() ([]byte, []int) {
+	return file_machines_v1_machines_proto_rawDescGZIP(), []int{2, 0}
+}
+
+type ProvisionMachine_SelectHost struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	HostId        string                 `protobuf:"bytes,1,opt,name=host_id,json=hostId,proto3" json:"host_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ProvisionMachine_SelectHost) Reset() {
+	*x = ProvisionMachine_SelectHost{}
+	mi := &file_machines_v1_machines_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ProvisionMachine_SelectHost) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ProvisionMachine_SelectHost) ProtoMessage() {}
+
+func (x *ProvisionMachine_SelectHost) ProtoReflect() protoreflect.Message {
+	mi := &file_machines_v1_machines_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ProvisionMachine_SelectHost.ProtoReflect.Descriptor instead.
+func (*ProvisionMachine_SelectHost) Descriptor() ([]byte, []int) {
+	return file_machines_v1_machines_proto_rawDescGZIP(), []int{2, 1}
+}
+
+func (x *ProvisionMachine_SelectHost) GetHostId() string {
+	if x != nil {
+		return x.HostId
+	}
+	return ""
+}
+
+type ProvisionMachine_ReserveCapacity struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ReservationId string                 `protobuf:"bytes,1,opt,name=reservation_id,json=reservationId,proto3" json:"reservation_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ProvisionMachine_ReserveCapacity) Reset() {
+	*x = ProvisionMachine_ReserveCapacity{}
+	mi := &file_machines_v1_machines_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ProvisionMachine_ReserveCapacity) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ProvisionMachine_ReserveCapacity) ProtoMessage() {}
+
+func (x *ProvisionMachine_ReserveCapacity) ProtoReflect() protoreflect.Message {
+	mi := &file_machines_v1_machines_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ProvisionMachine_ReserveCapacity.ProtoReflect.Descriptor instead.
+func (*ProvisionMachine_ReserveCapacity) Descriptor() ([]byte, []int) {
+	return file_machines_v1_machines_proto_rawDescGZIP(), []int{2, 2}
+}
+
+func (x *ProvisionMachine_ReserveCapacity) GetReservationId() string {
+	if x != nil {
+		return x.ReservationId
+	}
+	return ""
+}
+
+type ProvisionMachine_CreateMachine struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	MachineId     string                 `protobuf:"bytes,1,opt,name=machine_id,json=machineId,proto3" json:"machine_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ProvisionMachine_CreateMachine) Reset() {
+	*x = ProvisionMachine_CreateMachine{}
+	mi := &file_machines_v1_machines_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ProvisionMachine_CreateMachine) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ProvisionMachine_CreateMachine) ProtoMessage() {}
+
+func (x *ProvisionMachine_CreateMachine) ProtoReflect() protoreflect.Message {
+	mi := &file_machines_v1_machines_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ProvisionMachine_CreateMachine.ProtoReflect.Descriptor instead.
+func (*ProvisionMachine_CreateMachine) Descriptor() ([]byte, []int) {
+	return file_machines_v1_machines_proto_rawDescGZIP(), []int{2, 3}
+}
+
+func (x *ProvisionMachine_CreateMachine) GetMachineId() string {
+	if x != nil {
+		return x.MachineId
+	}
+	return ""
+}
+
+type DecommissionMachine_ReleaseMachine struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DecommissionMachine_ReleaseMachine) Reset() {
+	*x = DecommissionMachine_ReleaseMachine{}
+	mi := &file_machines_v1_machines_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DecommissionMachine_ReleaseMachine) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DecommissionMachine_ReleaseMachine) ProtoMessage() {}
+
+func (x *DecommissionMachine_ReleaseMachine) ProtoReflect() protoreflect.Message {
+	mi := &file_machines_v1_machines_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DecommissionMachine_ReleaseMachine.ProtoReflect.Descriptor instead.
+func (*DecommissionMachine_ReleaseMachine) Descriptor() ([]byte, []int) {
+	return file_machines_v1_machines_proto_rawDescGZIP(), []int{3, 0}
 }
 
 var File_machines_v1_machines_proto protoreflect.FileDescriptor
@@ -427,26 +427,26 @@ const file_machines_v1_machines_proto_rawDesc = "" +
 	"\x16ProvisionMachineOutput\x12\x1d\n" +
 	"\n" +
 	"machine_id\x18\x01 \x01(\tR\tmachineId\x12\x17\n" +
-	"\ahost_id\x18\x02 \x01(\tR\x06hostId\"\x1d\n" +
+	"\ahost_id\x18\x02 \x01(\tR\x06hostId\"\x96\x03\n" +
+	"\x10ProvisionMachine\x1a\x1d\n" +
 	"\bValidate:\x11\x8a\xa8\x19\r\n" +
-	"\vvalidate/v1\";\n" +
+	"\vvalidate/v1\x1a;\n" +
 	"\n" +
 	"SelectHost\x12\x17\n" +
 	"\ahost_id\x18\x01 \x01(\tR\x06hostId:\x14\x8a\xa8\x19\x10\n" +
-	"\x0eselect-host/v1\"h\n" +
+	"\x0eselect-host/v1\x1ah\n" +
 	"\x0fReserveCapacity\x12%\n" +
 	"\x0ereservation_id\x18\x01 \x01(\tR\rreservationId:.\x8a\xa8\x19*\n" +
-	"\x13reserve-capacity/v1\x10\x01\"\x11host-capacity-api\"G\n" +
+	"\x13reserve-capacity/v1\x10\x01\"\x11host-capacity-api\x1aG\n" +
 	"\rCreateMachine\x12\x1d\n" +
 	"\n" +
 	"machine_id\x18\x01 \x01(\tR\tmachineId:\x17\x8a\xa8\x19\x13\n" +
-	"\x11create-machine/v1\"\xf3\x01\n" +
-	"\x10ProvisionMachine:\xde\x01\x92\xa8\x19\xd9\x01\n" +
-	"\x11provision-machine\x12\".machines.v1.ProvisionMachineInput\x1a#.machines.v1.ProvisionMachineOutput\"\x15.machines.v1.Validate\"\x17.machines.v1.SelectHost\"\x1c.machines.v1.ReserveCapacity\"\x1a.machines.v1.CreateMachine:\x11machine-lifecycle\"*\n" +
+	"\x11create-machine/v1:s\x92\xa8\x19o\n" +
+	"\x11provision-machine\x12\".machines.v1.ProvisionMachineInput\x1a#.machines.v1.ProvisionMachineOutput:\x11machine-lifecycle\"p\n" +
+	"\x13DecommissionMachine\x1a*\n" +
 	"\x0eReleaseMachine:\x18\x8a\xa8\x19\x14\n" +
-	"\x12release-machine/v1\"a\n" +
-	"\x13DecommissionMachine:J\x92\xa8\x19F\n" +
-	"\x14decommission-machine\"\x1b.machines.v1.ReleaseMachine:\x11machine-lifecycleBCZAgithub.com/dangra/durable/examples/machines/machinespb;machinespbb\x06proto3"
+	"\x12release-machine/v1:-\x92\xa8\x19)\n" +
+	"\x14decommission-machine:\x11machine-lifecycleBCZAgithub.com/dangra/durable/examples/machines/machinespb;machinespbb\x06proto3"
 
 var (
 	file_machines_v1_machines_proto_rawDescOnce sync.Once
@@ -462,15 +462,15 @@ func file_machines_v1_machines_proto_rawDescGZIP() []byte {
 
 var file_machines_v1_machines_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
 var file_machines_v1_machines_proto_goTypes = []any{
-	(*ProvisionMachineInput)(nil),  // 0: machines.v1.ProvisionMachineInput
-	(*ProvisionMachineOutput)(nil), // 1: machines.v1.ProvisionMachineOutput
-	(*Validate)(nil),               // 2: machines.v1.Validate
-	(*SelectHost)(nil),             // 3: machines.v1.SelectHost
-	(*ReserveCapacity)(nil),        // 4: machines.v1.ReserveCapacity
-	(*CreateMachine)(nil),          // 5: machines.v1.CreateMachine
-	(*ProvisionMachine)(nil),       // 6: machines.v1.ProvisionMachine
-	(*ReleaseMachine)(nil),         // 7: machines.v1.ReleaseMachine
-	(*DecommissionMachine)(nil),    // 8: machines.v1.DecommissionMachine
+	(*ProvisionMachineInput)(nil),              // 0: machines.v1.ProvisionMachineInput
+	(*ProvisionMachineOutput)(nil),             // 1: machines.v1.ProvisionMachineOutput
+	(*ProvisionMachine)(nil),                   // 2: machines.v1.ProvisionMachine
+	(*DecommissionMachine)(nil),                // 3: machines.v1.DecommissionMachine
+	(*ProvisionMachine_Validate)(nil),          // 4: machines.v1.ProvisionMachine.Validate
+	(*ProvisionMachine_SelectHost)(nil),        // 5: machines.v1.ProvisionMachine.SelectHost
+	(*ProvisionMachine_ReserveCapacity)(nil),   // 6: machines.v1.ProvisionMachine.ReserveCapacity
+	(*ProvisionMachine_CreateMachine)(nil),     // 7: machines.v1.ProvisionMachine.CreateMachine
+	(*DecommissionMachine_ReleaseMachine)(nil), // 8: machines.v1.DecommissionMachine.ReleaseMachine
 }
 var file_machines_v1_machines_proto_depIdxs = []int32{
 	0, // [0:0] is the sub-list for method output_type

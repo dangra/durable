@@ -139,138 +139,6 @@ func (x *FulfillOrderOutput) GetShipmentId() string {
 	return ""
 }
 
-type ReserveStock struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ReservationId string                 `protobuf:"bytes,1,opt,name=reservation_id,json=reservationId,proto3" json:"reservation_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ReserveStock) Reset() {
-	*x = ReserveStock{}
-	mi := &file_orders_v1_orders_proto_msgTypes[2]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ReserveStock) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ReserveStock) ProtoMessage() {}
-
-func (x *ReserveStock) ProtoReflect() protoreflect.Message {
-	mi := &file_orders_v1_orders_proto_msgTypes[2]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ReserveStock.ProtoReflect.Descriptor instead.
-func (*ReserveStock) Descriptor() ([]byte, []int) {
-	return file_orders_v1_orders_proto_rawDescGZIP(), []int{2}
-}
-
-func (x *ReserveStock) GetReservationId() string {
-	if x != nil {
-		return x.ReservationId
-	}
-	return ""
-}
-
-type ChargePayment struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ChargeId      string                 `protobuf:"bytes,1,opt,name=charge_id,json=chargeId,proto3" json:"charge_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ChargePayment) Reset() {
-	*x = ChargePayment{}
-	mi := &file_orders_v1_orders_proto_msgTypes[3]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ChargePayment) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ChargePayment) ProtoMessage() {}
-
-func (x *ChargePayment) ProtoReflect() protoreflect.Message {
-	mi := &file_orders_v1_orders_proto_msgTypes[3]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ChargePayment.ProtoReflect.Descriptor instead.
-func (*ChargePayment) Descriptor() ([]byte, []int) {
-	return file_orders_v1_orders_proto_rawDescGZIP(), []int{3}
-}
-
-func (x *ChargePayment) GetChargeId() string {
-	if x != nil {
-		return x.ChargeId
-	}
-	return ""
-}
-
-type Ship struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ShipmentId    string                 `protobuf:"bytes,1,opt,name=shipment_id,json=shipmentId,proto3" json:"shipment_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *Ship) Reset() {
-	*x = Ship{}
-	mi := &file_orders_v1_orders_proto_msgTypes[4]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *Ship) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*Ship) ProtoMessage() {}
-
-func (x *Ship) ProtoReflect() protoreflect.Message {
-	mi := &file_orders_v1_orders_proto_msgTypes[4]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use Ship.ProtoReflect.Descriptor instead.
-func (*Ship) Descriptor() ([]byte, []int) {
-	return file_orders_v1_orders_proto_rawDescGZIP(), []int{4}
-}
-
-func (x *Ship) GetShipmentId() string {
-	if x != nil {
-		return x.ShipmentId
-	}
-	return ""
-}
-
 type FulfillOrder struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -279,7 +147,7 @@ type FulfillOrder struct {
 
 func (x *FulfillOrder) Reset() {
 	*x = FulfillOrder{}
-	mi := &file_orders_v1_orders_proto_msgTypes[5]
+	mi := &file_orders_v1_orders_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -291,7 +159,7 @@ func (x *FulfillOrder) String() string {
 func (*FulfillOrder) ProtoMessage() {}
 
 func (x *FulfillOrder) ProtoReflect() protoreflect.Message {
-	mi := &file_orders_v1_orders_proto_msgTypes[5]
+	mi := &file_orders_v1_orders_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -304,7 +172,139 @@ func (x *FulfillOrder) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FulfillOrder.ProtoReflect.Descriptor instead.
 func (*FulfillOrder) Descriptor() ([]byte, []int) {
-	return file_orders_v1_orders_proto_rawDescGZIP(), []int{5}
+	return file_orders_v1_orders_proto_rawDescGZIP(), []int{2}
+}
+
+type FulfillOrder_ReserveStock struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ReservationId string                 `protobuf:"bytes,1,opt,name=reservation_id,json=reservationId,proto3" json:"reservation_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FulfillOrder_ReserveStock) Reset() {
+	*x = FulfillOrder_ReserveStock{}
+	mi := &file_orders_v1_orders_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FulfillOrder_ReserveStock) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FulfillOrder_ReserveStock) ProtoMessage() {}
+
+func (x *FulfillOrder_ReserveStock) ProtoReflect() protoreflect.Message {
+	mi := &file_orders_v1_orders_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FulfillOrder_ReserveStock.ProtoReflect.Descriptor instead.
+func (*FulfillOrder_ReserveStock) Descriptor() ([]byte, []int) {
+	return file_orders_v1_orders_proto_rawDescGZIP(), []int{2, 0}
+}
+
+func (x *FulfillOrder_ReserveStock) GetReservationId() string {
+	if x != nil {
+		return x.ReservationId
+	}
+	return ""
+}
+
+type FulfillOrder_ChargePayment struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ChargeId      string                 `protobuf:"bytes,1,opt,name=charge_id,json=chargeId,proto3" json:"charge_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FulfillOrder_ChargePayment) Reset() {
+	*x = FulfillOrder_ChargePayment{}
+	mi := &file_orders_v1_orders_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FulfillOrder_ChargePayment) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FulfillOrder_ChargePayment) ProtoMessage() {}
+
+func (x *FulfillOrder_ChargePayment) ProtoReflect() protoreflect.Message {
+	mi := &file_orders_v1_orders_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FulfillOrder_ChargePayment.ProtoReflect.Descriptor instead.
+func (*FulfillOrder_ChargePayment) Descriptor() ([]byte, []int) {
+	return file_orders_v1_orders_proto_rawDescGZIP(), []int{2, 1}
+}
+
+func (x *FulfillOrder_ChargePayment) GetChargeId() string {
+	if x != nil {
+		return x.ChargeId
+	}
+	return ""
+}
+
+type FulfillOrder_Ship struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ShipmentId    string                 `protobuf:"bytes,1,opt,name=shipment_id,json=shipmentId,proto3" json:"shipment_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FulfillOrder_Ship) Reset() {
+	*x = FulfillOrder_Ship{}
+	mi := &file_orders_v1_orders_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FulfillOrder_Ship) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FulfillOrder_Ship) ProtoMessage() {}
+
+func (x *FulfillOrder_Ship) ProtoReflect() protoreflect.Message {
+	mi := &file_orders_v1_orders_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FulfillOrder_Ship.ProtoReflect.Descriptor instead.
+func (*FulfillOrder_Ship) Descriptor() ([]byte, []int) {
+	return file_orders_v1_orders_proto_rawDescGZIP(), []int{2, 2}
+}
+
+func (x *FulfillOrder_Ship) GetShipmentId() string {
+	if x != nil {
+		return x.ShipmentId
+	}
+	return ""
 }
 
 var File_orders_v1_orders_proto protoreflect.FileDescriptor
@@ -319,19 +319,19 @@ const file_orders_v1_orders_proto_rawDesc = "" +
 	"\aship_to\x18\x04 \x01(\tR\x06shipTo\"5\n" +
 	"\x12FulfillOrderOutput\x12\x1f\n" +
 	"\vshipment_id\x18\x01 \x01(\tR\n" +
-	"shipmentId\"O\n" +
+	"shipmentId\"\xb2\x02\n" +
+	"\fFulfillOrder\x1aO\n" +
 	"\fReserveStock\x12%\n" +
 	"\x0ereservation_id\x18\x01 \x01(\tR\rreservationId:\x18\x8a\xa8\x19\x14\n" +
-	"\x10reserve-stock/v1\x10\x01\"G\n" +
+	"\x10reserve-stock/v1\x10\x01\x1aG\n" +
 	"\rChargePayment\x12\x1b\n" +
 	"\tcharge_id\x18\x01 \x01(\tR\bchargeId:\x19\x8a\xa8\x19\x15\n" +
-	"\x11charge-payment/v1\x10\x01\"6\n" +
+	"\x11charge-payment/v1\x10\x01\x1a6\n" +
 	"\x04Ship\x12\x1f\n" +
 	"\vshipment_id\x18\x01 \x01(\tR\n" +
 	"shipmentId:\r\x8a\xa8\x19\t\n" +
-	"\aship/v1\"\xa6\x01\n" +
-	"\fFulfillOrder:\x95\x01\x92\xa8\x19\x90\x01\n" +
-	"\rfulfill-order\x12\x1c.orders.v1.FulfillOrderInput\x1a\x1d.orders.v1.FulfillOrderOutput\"\x17.orders.v1.ReserveStock\"\x18.orders.v1.ChargePayment\"\x0f.orders.v1.ShipBCZAgithub.com/dangra/durable/examples/tracing-otel/orderspb;orderspbb\x06proto3"
+	"\aship/v1:P\x92\xa8\x19L\n" +
+	"\rfulfill-order\x12\x1c.orders.v1.FulfillOrderInput\x1a\x1d.orders.v1.FulfillOrderOutputBCZAgithub.com/dangra/durable/examples/tracing-otel/orderspb;orderspbb\x06proto3"
 
 var (
 	file_orders_v1_orders_proto_rawDescOnce sync.Once
@@ -347,12 +347,12 @@ func file_orders_v1_orders_proto_rawDescGZIP() []byte {
 
 var file_orders_v1_orders_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_orders_v1_orders_proto_goTypes = []any{
-	(*FulfillOrderInput)(nil),  // 0: orders.v1.FulfillOrderInput
-	(*FulfillOrderOutput)(nil), // 1: orders.v1.FulfillOrderOutput
-	(*ReserveStock)(nil),       // 2: orders.v1.ReserveStock
-	(*ChargePayment)(nil),      // 3: orders.v1.ChargePayment
-	(*Ship)(nil),               // 4: orders.v1.Ship
-	(*FulfillOrder)(nil),       // 5: orders.v1.FulfillOrder
+	(*FulfillOrderInput)(nil),          // 0: orders.v1.FulfillOrderInput
+	(*FulfillOrderOutput)(nil),         // 1: orders.v1.FulfillOrderOutput
+	(*FulfillOrder)(nil),               // 2: orders.v1.FulfillOrder
+	(*FulfillOrder_ReserveStock)(nil),  // 3: orders.v1.FulfillOrder.ReserveStock
+	(*FulfillOrder_ChargePayment)(nil), // 4: orders.v1.FulfillOrder.ChargePayment
+	(*FulfillOrder_Ship)(nil),          // 5: orders.v1.FulfillOrder.Ship
 }
 var file_orders_v1_orders_proto_depIdxs = []int32{
 	0, // [0:0] is the sub-list for method output_type

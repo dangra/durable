@@ -65,12 +65,12 @@ type fulfillment struct {
 	tracer trace.Tracer
 }
 
-func (h *fulfillment) ReserveStock(ctx context.Context, inv orderspb.FulfillOrderInvocation) (*orderspb.ReserveStock, error) {
-	return &orderspb.ReserveStock{ReservationId: h.w.id("stock")}, nil
+func (h *fulfillment) ReserveStock(ctx context.Context, inv orderspb.FulfillOrderInvocation) (*orderspb.FulfillOrder_ReserveStock, error) {
+	return &orderspb.FulfillOrder_ReserveStock{ReservationId: h.w.id("stock")}, nil
 }
 
 func (h *fulfillment) UnwindReserveStock(ctx context.Context, inv orderspb.FulfillOrderInvocation) error {
-	if res, ok := inv.State(orderspb.ReserveStockStep); ok {
+	if res, ok := inv.State(orderspb.FulfillOrder_ReserveStockStep); ok {
 		h.w.mu.Lock()
 		h.w.released = append(h.w.released, res.GetReservationId())
 		h.w.mu.Unlock()
@@ -78,7 +78,7 @@ func (h *fulfillment) UnwindReserveStock(ctx context.Context, inv orderspb.Fulfi
 	return nil
 }
 
-func (h *fulfillment) ChargePayment(ctx context.Context, inv orderspb.FulfillOrderInvocation) (*orderspb.ChargePayment, error) {
+func (h *fulfillment) ChargePayment(ctx context.Context, inv orderspb.FulfillOrderInvocation) (*orderspb.FulfillOrder_ChargePayment, error) {
 	// The handler's ctx carries the attempt span the middleware
 	// started, so downstream instrumentation nests under it — this is
 	// what an otelhttp-instrumented gateway call would do implicitly.
@@ -88,11 +88,11 @@ func (h *fulfillment) ChargePayment(ctx context.Context, inv orderspb.FulfillOrd
 	if inv.Attempt() == 1 {
 		return nil, errors.New("payment gateway timeout") // retried
 	}
-	return &orderspb.ChargePayment{ChargeId: h.w.id("charge")}, nil
+	return &orderspb.FulfillOrder_ChargePayment{ChargeId: h.w.id("charge")}, nil
 }
 
 func (h *fulfillment) UnwindChargePayment(ctx context.Context, inv orderspb.FulfillOrderInvocation) error {
-	if c, ok := inv.State(orderspb.ChargePaymentStep); ok {
+	if c, ok := inv.State(orderspb.FulfillOrder_ChargePaymentStep); ok {
 		h.w.mu.Lock()
 		h.w.refunded = append(h.w.refunded, c.GetChargeId())
 		h.w.mu.Unlock()
@@ -100,13 +100,13 @@ func (h *fulfillment) UnwindChargePayment(ctx context.Context, inv orderspb.Fulf
 	return nil
 }
 
-func (h *fulfillment) Ship(ctx context.Context, inv orderspb.FulfillOrderInvocation) (*orderspb.Ship, error) {
+func (h *fulfillment) Ship(ctx context.Context, inv orderspb.FulfillOrderInvocation) (*orderspb.FulfillOrder_Ship, error) {
 	return nil, durable.Fail(errors.New("carrier rejected the address"),
 		durable.WithUserKind(), durable.WithReason("invalid-address"))
 }
 
 func (h *fulfillment) Reduce(o *orderspb.FulfillOrder) *orderspb.FulfillOrderOutput {
-	s, _ := o.State(orderspb.ShipStep)
+	s, _ := o.State(orderspb.FulfillOrder_ShipStep)
 	return &orderspb.FulfillOrderOutput{ShipmentId: s.GetShipmentId()}
 }
 

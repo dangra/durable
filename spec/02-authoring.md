@@ -12,14 +12,19 @@ message ProvisionMachine {
     id: "provision-machine"
     input: ".machines.v1.ProvisionMachineInput"
     output: ".machines.v1.ProvisionMachineOutput"
-
-    steps: ".machines.v1.Validate"
-    steps: ".machines.v1.SelectHost"
-    steps: ".machines.v1.ReserveCapacity"
-    steps: ".machines.v1.CreateMachine"
   };
+
+  message Validate { option (durable.v1.step) = {id: "validate/v1"}; }
+  message SelectHost { /* ... */ }
+  message ReserveCapacity { /* ... */ }
+  message CreateMachine { /* ... */ }
 }
 ```
+
+The Steps are the messages nested directly in the pipeline message,
+and their declaration order is the topology: inserting, reordering,
+or retiring a Step is an edit in one place. A Step belongs to its
+pipeline by construction, and two pipelines may name their Steps alike.
 
 Pipeline marker messages SHOULD NOT contain ordinary protobuf fields.
 
@@ -35,19 +40,26 @@ also acts as the read-only input to the Pipeline Reducer.
 
 ## Step declaration
 
-Example:
+A Step is a message nested in its pipeline message. Example:
 
 ```proto
-message ReserveCapacity {
-  option (durable.v1.step) = {
-    id: "reserve-capacity/v1"
-    unwind: true
-  };
+message ProvisionMachine {
+  option (durable.v1.pipeline) = { /* ... */ };
 
-  string reservation_id = 1;
-  string host_id = 2;
+  message ReserveCapacity {
+    option (durable.v1.step) = {
+      id: "reserve-capacity/v1"
+      unwind: true
+    };
+
+    string reservation_id = 1;
+    string host_id = 2;
+  }
 }
 ```
+
+Its Go type is protoc-gen-go's nested name, `ProvisionMachine_ReserveCapacity`;
+its handler method and its StepID are its own.
 
 Step capabilities are determined by:
 
@@ -83,7 +95,7 @@ message SelectHost {
 A successful handler:
 
 ```go
-return &machines.SelectHost{
+return &machines.ProvisionMachine_SelectHost{
     HostId: host.ID,
 }, nil
 ```
@@ -113,7 +125,7 @@ Only `StateStepRef[T]` is accepted by State lookup.
 Therefore:
 
 ```go
-inv.State(machines.ValidateStep)
+inv.State(machines.ProvisionMachine_ValidateStep)
 ```
 
 MUST fail to compile.
@@ -148,13 +160,13 @@ The library does NOT require generic methods on interfaces.
 Application usage:
 
 ```go
-host, ok := inv.State(machines.SelectHostStep)
+host, ok := inv.State(machines.ProvisionMachine_SelectHostStep)
 ```
 
 infers:
 
 ```go
-host // *machines.SelectHost
+host // *machines.ProvisionMachine_SelectHost
 ```
 
 No:
@@ -189,7 +201,7 @@ Historical compatibility of dynamic State reads belongs to application code.
 Example:
 
 ```go
-network, ok := inv.State(machines.ConfigureNetworkStep)
+network, ok := inv.State(machines.ProvisionMachine_ConfigureNetworkStep)
 if ok {
     return h.createWithNetwork(ctx, network)
 }
@@ -260,7 +272,7 @@ is a compile error naming the method.
 An Unwind handler obtains its own State through:
 
 ```go
-state, ok := inv.State(machines.ReserveCapacityStep)
+state, ok := inv.State(machines.ProvisionMachine_ReserveCapacityStep)
 ```
 
 and the failure it is unwinding through:
@@ -311,7 +323,7 @@ wraps the Engine's: `NewProvisionMachineInvocation(fake)` is what a
 inv := durabletest.NewInvocation(durabletest.InvocationConfig{
     Phase:   durable.PhaseUnwind,
     State:   map[durable.StepID]proto.Message{
-        machines.ReserveCapacityStep.ID(): &machines.ReserveCapacity{ReservationId: "res-1"},
+        machines.ProvisionMachine_ReserveCapacityStep.ID(): &machines.ProvisionMachine_ReserveCapacity{ReservationId: "res-1"},
     },
     Failure: &durable.Failure{ /* ... */ },
 })
@@ -473,12 +485,12 @@ Example:
 func reduceProvisionMachine(
     p *machines.ProvisionMachine,
 ) *machines.ProvisionMachineOutput {
-    machine, ok := p.State(machines.CreateMachineStep)
+    machine, ok := p.State(machines.ProvisionMachine_CreateMachineStep)
     if !ok {
         panic("create-machine state missing")
     }
 
-    host, _ := p.State(machines.SelectHostStep)
+    host, _ := p.State(machines.ProvisionMachine_SelectHostStep)
 
     return &machines.ProvisionMachineOutput{
         MachineId: machine.MachineId,
@@ -822,48 +834,43 @@ message ProvisionMachineOutput {
   string host_id = 2;
 }
 
-message Validate {
-  option (durable.v1.step) = {
-    id: "validate/v1"
-  };
-}
-
-message SelectHost {
-  option (durable.v1.step) = {
-    id: "select-host/v1"
-  };
-
-  string host_id = 1;
-}
-
-message ReserveCapacity {
-  option (durable.v1.step) = {
-    id: "reserve-capacity/v1"
-    unwind: true
-  };
-
-  string reservation_id = 1;
-}
-
-message CreateMachine {
-  option (durable.v1.step) = {
-    id: "create-machine/v1"
-  };
-
-  string machine_id = 1;
-}
-
 message ProvisionMachine {
   option (durable.v1.pipeline) = {
     id: "provision-machine"
     input: ".machines.v1.ProvisionMachineInput"
     output: ".machines.v1.ProvisionMachineOutput"
-
-    steps: ".machines.v1.Validate"
-    steps: ".machines.v1.SelectHost"
-    steps: ".machines.v1.ReserveCapacity"
-    steps: ".machines.v1.CreateMachine"
   };
+
+  message Validate {
+    option (durable.v1.step) = {
+      id: "validate/v1"
+    };
+  }
+
+  message SelectHost {
+    option (durable.v1.step) = {
+      id: "select-host/v1"
+    };
+
+    string host_id = 1;
+  }
+
+  message ReserveCapacity {
+    option (durable.v1.step) = {
+      id: "reserve-capacity/v1"
+      unwind: true
+    };
+
+    string reservation_id = 1;
+  }
+
+  message CreateMachine {
+    option (durable.v1.step) = {
+      id: "create-machine/v1"
+    };
+
+    string machine_id = 1;
+  }
 }
 ```
 
@@ -875,8 +882,8 @@ message ProvisionMachine {
 func (h *handlers) CreateMachine(
     ctx context.Context,
     inv machines.ProvisionMachineInvocation,
-) (*machines.CreateMachine, error) {
-    host, ok := inv.State(machines.SelectHostStep)
+) (*machines.ProvisionMachine_CreateMachine, error) {
+    host, ok := inv.State(machines.ProvisionMachine_SelectHostStep)
     if !ok {
         return nil, durable.Fail(
             errors.New("select-host state unavailable"),
@@ -884,7 +891,7 @@ func (h *handlers) CreateMachine(
     }
 
     reservation, ok := inv.State(
-        machines.ReserveCapacityStep,
+        machines.ProvisionMachine_ReserveCapacityStep,
     )
     if !ok {
         return nil, durable.Fail(
@@ -901,7 +908,7 @@ func (h *handlers) CreateMachine(
         return nil, err
     }
 
-    return &machines.CreateMachine{
+    return &machines.ProvisionMachine_CreateMachine{
         MachineId: machine.ID,
     }, nil
 }
@@ -917,7 +924,7 @@ func (h *reserveCapacity) Unwind(
     inv machines.ReserveCapacityInvocation,
 ) error {
     reservation, ok := inv.State(
-        machines.ReserveCapacityStep,
+        machines.ProvisionMachine_ReserveCapacityStep,
     )
     if !ok {
         return nil
@@ -945,12 +952,12 @@ func (h *reserveCapacity) Unwind(
 func reduceProvisionMachine(
     p *machines.ProvisionMachine,
 ) *machines.ProvisionMachineOutput {
-    machine, ok := p.State(machines.CreateMachineStep)
+    machine, ok := p.State(machines.ProvisionMachine_CreateMachineStep)
     if !ok {
         panic("create-machine state unavailable")
     }
 
-    host, ok := p.State(machines.SelectHostStep)
+    host, ok := p.State(machines.ProvisionMachine_SelectHostStep)
     if !ok {
         return &machines.ProvisionMachineOutput{
             MachineId: machine.MachineId,

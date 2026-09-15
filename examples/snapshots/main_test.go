@@ -106,10 +106,10 @@ func TestUploadUnwindDeletesObject(t *testing.T) {
 
 	inv := durabletest.NewInvocation(durabletest.InvocationConfig{
 		ResourceID: "vol-9",
-		StepID:     snapshotspb.UploadSnapshotStep.ID(),
+		StepID:     snapshotspb.CreateSnapshot_UploadSnapshotStep.ID(),
 		Phase:      durable.PhaseUnwind,
 		State: map[durable.StepID]proto.Message{
-			snapshotspb.UploadSnapshotStep.ID(): &snapshotspb.UploadSnapshot{ObjectKey: "backups/vol-9/run.img"},
+			snapshotspb.CreateSnapshot_UploadSnapshotStep.ID(): &snapshotspb.CreateSnapshot_UploadSnapshot{ObjectKey: "backups/vol-9/run.img"},
 		},
 		Failure: &durable.Failure{StepID: "register-snapshot/v1"},
 	})
@@ -136,7 +136,7 @@ func TestRegisterFailsPermanentlyWhenCatalogFull(t *testing.T) {
 	w.full = true
 	inv := durabletest.NewInvocation(durabletest.InvocationConfig{
 		State: map[durable.StepID]proto.Message{
-			snapshotspb.UploadSnapshotStep.ID(): &snapshotspb.UploadSnapshot{ObjectKey: "k"},
+			snapshotspb.CreateSnapshot_UploadSnapshotStep.ID(): &snapshotspb.CreateSnapshot_UploadSnapshot{ObjectKey: "k"},
 		},
 	})
 	_, err := (&snapshotter{w}).RegisterSnapshot(context.Background(), snapshotspb.NewCreateSnapshotInvocation(inv))
@@ -149,8 +149,8 @@ func TestRegisterFailsPermanentlyWhenCatalogFull(t *testing.T) {
 func TestReduceCreateSnapshot(t *testing.T) {
 	view := durabletest.NewInvocation(durabletest.InvocationConfig{
 		State: map[durable.StepID]proto.Message{
-			snapshotspb.UploadSnapshotStep.ID():   &snapshotspb.UploadSnapshot{ObjectKey: "k", Bytes: 7},
-			snapshotspb.RegisterSnapshotStep.ID(): &snapshotspb.RegisterSnapshot{SnapshotId: "snap-1"},
+			snapshotspb.CreateSnapshot_UploadSnapshotStep.ID():   &snapshotspb.CreateSnapshot_UploadSnapshot{ObjectKey: "k", Bytes: 7},
+			snapshotspb.CreateSnapshot_RegisterSnapshotStep.ID(): &snapshotspb.CreateSnapshot_RegisterSnapshot{SnapshotId: "snap-1"},
 		},
 	})
 	out := snapshotspb.ReduceCreateSnapshot(&snapshotter{}, view)
@@ -203,7 +203,7 @@ func TestReduceCreateSnapshotFailure(t *testing.T) {
 		Phase:   durable.PhaseUnwind,
 		Failure: failure,
 		State: map[durable.StepID]proto.Message{
-			snapshotspb.UploadSnapshotStep.ID(): &snapshotspb.UploadSnapshot{ObjectKey: "k"},
+			snapshotspb.CreateSnapshot_UploadSnapshotStep.ID(): &snapshotspb.CreateSnapshot_UploadSnapshot{ObjectKey: "k"},
 		},
 	})
 	out := snapshotspb.ReduceCreateSnapshotFailure(&snapshotter{}, clean)
@@ -215,11 +215,11 @@ func TestReduceCreateSnapshotFailure(t *testing.T) {
 		Phase:   durable.PhaseUnwind,
 		Failure: failure,
 		State: map[durable.StepID]proto.Message{
-			snapshotspb.UploadSnapshotStep.ID(): &snapshotspb.UploadSnapshot{ObjectKey: "k"},
+			snapshotspb.CreateSnapshot_UploadSnapshotStep.ID(): &snapshotspb.CreateSnapshot_UploadSnapshot{ObjectKey: "k"},
 		},
 		UnwindFailures: map[durable.StepID]durable.Failure{
-			snapshotspb.UploadSnapshotStep.ID(): {StepID: snapshotspb.UploadSnapshotStep.ID(), Reason: "storage-stuck"},
-			snapshotspb.FreezeVolumeStep.ID():   {StepID: snapshotspb.FreezeVolumeStep.ID()},
+			snapshotspb.CreateSnapshot_UploadSnapshotStep.ID(): {StepID: snapshotspb.CreateSnapshot_UploadSnapshotStep.ID(), Reason: "storage-stuck"},
+			snapshotspb.CreateSnapshot_FreezeVolumeStep.ID():   {StepID: snapshotspb.CreateSnapshot_FreezeVolumeStep.ID()},
 		},
 	})
 	out = snapshotspb.ReduceCreateSnapshotFailure(&snapshotter{}, leaky)

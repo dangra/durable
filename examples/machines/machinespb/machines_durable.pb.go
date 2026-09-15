@@ -15,18 +15,18 @@ import (
 	sync "sync"
 )
 
-// ValidateStep is the reference to the stateless step "validate/v1".
+// ProvisionMachine_ValidateStep is the reference to the stateless step "validate/v1".
 // It is not accepted by State lookup.
-var ValidateStep = pipelinedef.StepRef("validate/v1")
+var ProvisionMachine_ValidateStep = pipelinedef.StepRef("validate/v1")
 
-// SelectHostStep is the typed reference to the state-producing step "select-host/v1".
-var SelectHostStep = pipelinedef.StateStepRef("select-host/v1", func() *SelectHost { return &SelectHost{} })
+// ProvisionMachine_SelectHostStep is the typed reference to the state-producing step "select-host/v1".
+var ProvisionMachine_SelectHostStep = pipelinedef.StateStepRef("select-host/v1", func() *ProvisionMachine_SelectHost { return &ProvisionMachine_SelectHost{} })
 
-// ReserveCapacityStep is the typed reference to the state-producing step "reserve-capacity/v1".
-var ReserveCapacityStep = pipelinedef.StateStepRef("reserve-capacity/v1", func() *ReserveCapacity { return &ReserveCapacity{} })
+// ProvisionMachine_ReserveCapacityStep is the typed reference to the state-producing step "reserve-capacity/v1".
+var ProvisionMachine_ReserveCapacityStep = pipelinedef.StateStepRef("reserve-capacity/v1", func() *ProvisionMachine_ReserveCapacity { return &ProvisionMachine_ReserveCapacity{} })
 
-// CreateMachineStep is the typed reference to the state-producing step "create-machine/v1".
-var CreateMachineStep = pipelinedef.StateStepRef("create-machine/v1", func() *CreateMachine { return &CreateMachine{} })
+// ProvisionMachine_CreateMachineStep is the typed reference to the state-producing step "create-machine/v1".
+var ProvisionMachine_CreateMachineStep = pipelinedef.StateStepRef("create-machine/v1", func() *ProvisionMachine_CreateMachine { return &ProvisionMachine_CreateMachine{} })
 
 // ProvisionMachineInvocation is the invocation every ProvisionMachineHandlers method receives:
 // durable.Invocation with the pipeline's Input typed.
@@ -48,14 +48,14 @@ type ProvisionMachineHandlers interface {
 	// Validate runs step "validate/v1".
 	Validate(ctx context.Context, inv ProvisionMachineInvocation) error
 	// SelectHost runs step "select-host/v1".
-	SelectHost(ctx context.Context, inv ProvisionMachineInvocation) (*SelectHost, error)
+	SelectHost(ctx context.Context, inv ProvisionMachineInvocation) (*ProvisionMachine_SelectHost, error)
 	// ReserveCapacity runs step "reserve-capacity/v1".
-	ReserveCapacity(ctx context.Context, inv ProvisionMachineInvocation) (*ReserveCapacity, error)
+	ReserveCapacity(ctx context.Context, inv ProvisionMachineInvocation) (*ProvisionMachine_ReserveCapacity, error)
 	// UnwindReserveCapacity compensates step "reserve-capacity/v1" once it
 	// succeeded and the run unwinds.
 	UnwindReserveCapacity(ctx context.Context, inv ProvisionMachineInvocation) error
 	// CreateMachine runs step "create-machine/v1".
-	CreateMachine(ctx context.Context, inv ProvisionMachineInvocation) (*CreateMachine, error)
+	CreateMachine(ctx context.Context, inv ProvisionMachineInvocation) (*ProvisionMachine_CreateMachine, error)
 	// Reduce produces the pipeline output from the immutable input and
 	// committed step states on success. It must be pure: deterministic,
 	// side-effect free, synchronous, and non-failing.
@@ -279,9 +279,9 @@ type ProvisionMachineResult struct {
 // succeeded.
 func (r ProvisionMachineResult) Output() *ProvisionMachineOutput { return r.output }
 
-// ReleaseMachineStep is the reference to the stateless step "release-machine/v1".
+// DecommissionMachine_ReleaseMachineStep is the reference to the stateless step "release-machine/v1".
 // It is not accepted by State lookup.
-var ReleaseMachineStep = pipelinedef.StepRef("release-machine/v1")
+var DecommissionMachine_ReleaseMachineStep = pipelinedef.StepRef("release-machine/v1")
 
 // DecommissionMachineInvocation is the invocation every DecommissionMachineHandlers method receives:
 // durable.Invocation with the pipeline's Input typed.

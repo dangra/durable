@@ -107,8 +107,8 @@ func (w *world) register(key string) (string, error) {
 // reducers.
 type snapshotter struct{ w *world }
 
-func (h *snapshotter) FreezeVolume(ctx context.Context, inv snapshotspb.CreateSnapshotInvocation) (*snapshotspb.FreezeVolume, error) {
-	return &snapshotspb.FreezeVolume{FreezeToken: h.w.freeze(string(inv.ResourceID()))}, nil
+func (h *snapshotter) FreezeVolume(ctx context.Context, inv snapshotspb.CreateSnapshotInvocation) (*snapshotspb.CreateSnapshot_FreezeVolume, error) {
+	return &snapshotspb.CreateSnapshot_FreezeVolume{FreezeToken: h.w.freeze(string(inv.ResourceID()))}, nil
 }
 
 // UnwindFreezeVolume thaws on unwind so a failed run never leaves the
@@ -118,17 +118,17 @@ func (h *snapshotter) UnwindFreezeVolume(ctx context.Context, inv snapshotspb.Cr
 	return nil
 }
 
-func (h *snapshotter) UploadSnapshot(ctx context.Context, inv snapshotspb.CreateSnapshotInvocation) (*snapshotspb.UploadSnapshot, error) {
-	if _, ok := inv.State(snapshotspb.FreezeVolumeStep); !ok {
+func (h *snapshotter) UploadSnapshot(ctx context.Context, inv snapshotspb.CreateSnapshotInvocation) (*snapshotspb.CreateSnapshot_UploadSnapshot, error) {
+	if _, ok := inv.State(snapshotspb.CreateSnapshot_FreezeVolumeStep); !ok {
 		return nil, durable.Fail(errors.New("volume is not frozen"))
 	}
 	// The run id in the key makes the upload idempotent per run.
 	key := path.Join(inv.Input().GetBucket(), string(inv.ResourceID()), string(inv.RunID())+".img")
-	return &snapshotspb.UploadSnapshot{ObjectKey: key, Bytes: h.w.upload(key)}, nil
+	return &snapshotspb.CreateSnapshot_UploadSnapshot{ObjectKey: key, Bytes: h.w.upload(key)}, nil
 }
 
 func (h *snapshotter) UnwindUploadSnapshot(ctx context.Context, inv snapshotspb.CreateSnapshotInvocation) error {
-	up, ok := inv.State(snapshotspb.UploadSnapshotStep)
+	up, ok := inv.State(snapshotspb.CreateSnapshot_UploadSnapshotStep)
 	if !ok {
 		return nil
 	}
@@ -150,8 +150,8 @@ func (h *snapshotter) ThawVolume(ctx context.Context, inv snapshotspb.CreateSnap
 	return nil
 }
 
-func (h *snapshotter) RegisterSnapshot(ctx context.Context, inv snapshotspb.CreateSnapshotInvocation) (*snapshotspb.RegisterSnapshot, error) {
-	up, ok := inv.State(snapshotspb.UploadSnapshotStep)
+func (h *snapshotter) RegisterSnapshot(ctx context.Context, inv snapshotspb.CreateSnapshotInvocation) (*snapshotspb.CreateSnapshot_RegisterSnapshot, error) {
+	up, ok := inv.State(snapshotspb.CreateSnapshot_UploadSnapshotStep)
 	if !ok {
 		return nil, durable.Fail(errors.New("upload state unavailable"))
 	}
@@ -164,12 +164,12 @@ func (h *snapshotter) RegisterSnapshot(ctx context.Context, inv snapshotspb.Crea
 	if err != nil {
 		return nil, err // retried
 	}
-	return &snapshotspb.RegisterSnapshot{SnapshotId: id}, nil
+	return &snapshotspb.CreateSnapshot_RegisterSnapshot{SnapshotId: id}, nil
 }
 
 func (h *snapshotter) Reduce(p *snapshotspb.CreateSnapshot) *snapshotspb.CreateSnapshotOutput {
-	reg, _ := p.State(snapshotspb.RegisterSnapshotStep)
-	up, _ := p.State(snapshotspb.UploadSnapshotStep)
+	reg, _ := p.State(snapshotspb.CreateSnapshot_RegisterSnapshotStep)
+	up, _ := p.State(snapshotspb.CreateSnapshot_UploadSnapshotStep)
 	return &snapshotspb.CreateSnapshotOutput{SnapshotId: reg.GetSnapshotId(), ObjectKey: up.GetObjectKey()}
 }
 
@@ -182,12 +182,12 @@ func (h *snapshotter) ReduceFailure(p *snapshotspb.CreateSnapshot) *snapshotspb.
 		FailedStep: string(p.Failure().StepID),
 		Reason:     p.Failure().Reason,
 	}
-	if _, failed := p.UnwindFailure(snapshotspb.UploadSnapshotStep); failed {
-		if up, ok := p.State(snapshotspb.UploadSnapshotStep); ok {
+	if _, failed := p.UnwindFailure(snapshotspb.CreateSnapshot_UploadSnapshotStep); failed {
+		if up, ok := p.State(snapshotspb.CreateSnapshot_UploadSnapshotStep); ok {
 			out.LeakedObjectKey = up.GetObjectKey()
 		}
 	}
-	_, out.VolumeLeftFrozen = p.UnwindFailure(snapshotspb.FreezeVolumeStep)
+	_, out.VolumeLeftFrozen = p.UnwindFailure(snapshotspb.CreateSnapshot_FreezeVolumeStep)
 	return out
 }
 

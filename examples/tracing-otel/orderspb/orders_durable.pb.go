@@ -14,14 +14,14 @@ import (
 	sync "sync"
 )
 
-// ReserveStockStep is the typed reference to the state-producing step "reserve-stock/v1".
-var ReserveStockStep = pipelinedef.StateStepRef("reserve-stock/v1", func() *ReserveStock { return &ReserveStock{} })
+// FulfillOrder_ReserveStockStep is the typed reference to the state-producing step "reserve-stock/v1".
+var FulfillOrder_ReserveStockStep = pipelinedef.StateStepRef("reserve-stock/v1", func() *FulfillOrder_ReserveStock { return &FulfillOrder_ReserveStock{} })
 
-// ChargePaymentStep is the typed reference to the state-producing step "charge-payment/v1".
-var ChargePaymentStep = pipelinedef.StateStepRef("charge-payment/v1", func() *ChargePayment { return &ChargePayment{} })
+// FulfillOrder_ChargePaymentStep is the typed reference to the state-producing step "charge-payment/v1".
+var FulfillOrder_ChargePaymentStep = pipelinedef.StateStepRef("charge-payment/v1", func() *FulfillOrder_ChargePayment { return &FulfillOrder_ChargePayment{} })
 
-// ShipStep is the typed reference to the state-producing step "ship/v1".
-var ShipStep = pipelinedef.StateStepRef("ship/v1", func() *Ship { return &Ship{} })
+// FulfillOrder_ShipStep is the typed reference to the state-producing step "ship/v1".
+var FulfillOrder_ShipStep = pipelinedef.StateStepRef("ship/v1", func() *FulfillOrder_Ship { return &FulfillOrder_Ship{} })
 
 // FulfillOrderInvocation is the invocation every FulfillOrderHandlers method receives:
 // durable.Invocation with the pipeline's Input typed.
@@ -41,17 +41,17 @@ func NewFulfillOrderInvocation(core durable.Invocation) FulfillOrderInvocation {
 // added to the pipeline is a method the next build demands.
 type FulfillOrderHandlers interface {
 	// ReserveStock runs step "reserve-stock/v1".
-	ReserveStock(ctx context.Context, inv FulfillOrderInvocation) (*ReserveStock, error)
+	ReserveStock(ctx context.Context, inv FulfillOrderInvocation) (*FulfillOrder_ReserveStock, error)
 	// UnwindReserveStock compensates step "reserve-stock/v1" once it
 	// succeeded and the run unwinds.
 	UnwindReserveStock(ctx context.Context, inv FulfillOrderInvocation) error
 	// ChargePayment runs step "charge-payment/v1".
-	ChargePayment(ctx context.Context, inv FulfillOrderInvocation) (*ChargePayment, error)
+	ChargePayment(ctx context.Context, inv FulfillOrderInvocation) (*FulfillOrder_ChargePayment, error)
 	// UnwindChargePayment compensates step "charge-payment/v1" once it
 	// succeeded and the run unwinds.
 	UnwindChargePayment(ctx context.Context, inv FulfillOrderInvocation) error
 	// Ship runs step "ship/v1".
-	Ship(ctx context.Context, inv FulfillOrderInvocation) (*Ship, error)
+	Ship(ctx context.Context, inv FulfillOrderInvocation) (*FulfillOrder_Ship, error)
 	// Reduce produces the pipeline output from the immutable input and
 	// committed step states on success. It must be pure: deterministic,
 	// side-effect free, synchronous, and non-failing.

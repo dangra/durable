@@ -18,48 +18,39 @@ message ProvisionMachineOutput {
   string host_id = 2;
 }
 
-message Validate {
-  option (durable.v1.step) = {id: "validate/v1"};
-}
-
-message SelectHost {
-  option (durable.v1.step) = {id: "select-host/v1"};
-
-  string host_id = 1;
-}
-
-message ReserveCapacity {
-  option (durable.v1.step) = {
-    id: "reserve-capacity/v1"
-    unwind: true
-    concurrency_class: "host-capacity-api"
-  };
-
-  string reservation_id = 1;
-}
-
-message CreateMachine {
-  option (durable.v1.step) = {id: "create-machine/v1"};
-
-  string machine_id = 1;
-}
-
 message ProvisionMachine {
   option (durable.v1.pipeline) = {
     id: "provision-machine"
     input: ".machines.v1.ProvisionMachineInput"
     output: ".machines.v1.ProvisionMachineOutput"
     mutexes: "machine-lifecycle"
-
-    steps: ".machines.v1.Validate"
-    steps: ".machines.v1.SelectHost"
-    steps: ".machines.v1.ReserveCapacity"
-    steps: ".machines.v1.CreateMachine"
   };
-}
 
-message ReleaseMachine {
-  option (durable.v1.step) = {id: "release-machine/v1"};
+  message Validate {
+    option (durable.v1.step) = {id: "validate/v1"};
+  }
+
+  message SelectHost {
+    option (durable.v1.step) = {id: "select-host/v1"};
+
+    string host_id = 1;
+  }
+
+  message ReserveCapacity {
+    option (durable.v1.step) = {
+      id: "reserve-capacity/v1"
+      unwind: true
+      concurrency_class: "host-capacity-api"
+    };
+
+    string reservation_id = 1;
+  }
+
+  message CreateMachine {
+    option (durable.v1.step) = {id: "create-machine/v1"};
+
+    string machine_id = 1;
+  }
 }
 
 // DecommissionMachine shares the machine-lifecycle mutex with
@@ -69,7 +60,9 @@ message DecommissionMachine {
   option (durable.v1.pipeline) = {
     id: "decommission-machine"
     mutexes: "machine-lifecycle"
-
-    steps: ".machines.v1.ReleaseMachine"
   };
+
+  message ReleaseMachine {
+    option (durable.v1.step) = {id: "release-machine/v1"};
+  }
 }

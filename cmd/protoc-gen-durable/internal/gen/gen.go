@@ -53,41 +53,58 @@ func Generate(p *protogen.Plugin) error {
 		errs = append(errs, fmt.Errorf(format, args...))
 	}
 
-	steps := make(map[protoreflect.FullName]*stepDecl)
+	// Declarations are collected only from files being generated. A
+	// pipeline is a top-level message; its steps are the messages nested
+	// directly in it, in declaration order, which is the topology. A
+	// step anywhere else, or a pipeline nested anywhere, is an error.
 	var pipelines []*pipelineDecl
-	// Declarations are collected only from files being generated.
+	byID := make(map[string]protoreflect.FullName)
 	for _, f := range p.Files {
 		if !f.Generate {
 			continue
 		}
-		walkMessages(f.Messages, func(m *protogen.Message) {
+		for _, m := range f.Messages {
 			if so := stepOptions(m); so != nil {
-				if so.GetId() == "" {
-					fail("%s: step declaration missing id", m.Desc.FullName())
-				}
-				steps[m.Desc.FullName()] = &stepDecl{
-					msg:      m,
-					opts:     so,
-					hasState: len(m.Fields) > 0,
-				}
+				fail("%s: a step must be nested in its pipeline message", m.Desc.FullName())
 			}
-			if po := pipelineOptions(m); po != nil {
-				pipelines = append(pipelines, &pipelineDecl{msg: m, file: f, opts: po})
+			po := pipelineOptions(m)
+			if po == nil {
+				walkMessages(m.Messages, func(n *protogen.Message) {
+					if stepOptions(n) != nil {
+						fail("%s: a step must be nested directly in a pipeline message", n.Desc.FullName())
+					}
+					if pipelineOptions(n) != nil {
+						fail("%s: a pipeline must be a top-level message", n.Desc.FullName())
+					}
+				})
+				continue
 			}
-		})
-	}
-
-	// Duplicate StepIDs across all declarations.
-	byID := make(map[string]protoreflect.FullName)
-	for name, s := range steps {
-		id := s.opts.GetId()
-		if id == "" {
-			continue
-		}
-		if prev, dup := byID[id]; dup {
-			fail("duplicate step id %q declared by %s and %s", id, prev, name)
-		} else {
-			byID[id] = name
+			pl := &pipelineDecl{msg: m, file: f, opts: po}
+			pipelines = append(pipelines, pl)
+			for _, n := range m.Messages {
+				so := stepOptions(n)
+				if so == nil {
+					fail("%s: every message nested in a pipeline is a step; %s declares no step option", m.Desc.FullName(), n.Desc.Name())
+					continue
+				}
+				if pipelineOptions(n) != nil {
+					fail("%s: a pipeline must be a top-level message", n.Desc.FullName())
+				}
+				walkMessages(n.Messages, func(x *protogen.Message) {
+					if stepOptions(x) != nil || pipelineOptions(x) != nil {
+						fail("%s: a message nested in a step is plain data, not a step or pipeline", x.Desc.FullName())
+					}
+				})
+				id := so.GetId()
+				if id == "" {
+					fail("%s: step declaration missing id", n.Desc.FullName())
+				} else if prev, dup := byID[id]; dup {
+					fail("duplicate step id %q declared by %s and %s", id, prev, n.Desc.FullName())
+				} else {
+					byID[id] = n.Desc.FullName()
+				}
+				pl.steps = append(pl.steps, &stepDecl{msg: n, opts: so, hasState: len(n.Fields) > 0, owner: pl})
+			}
 		}
 	}
 
@@ -104,7 +121,7 @@ func Generate(p *protogen.Plugin) error {
 		if len(m.Fields) > 0 {
 			fail("%s: pipeline marker message must not declare fields", m.Desc.FullName())
 		}
-		if len(pl.opts.GetSteps()) == 0 {
+		if len(pl.steps) == 0 {
 			fail("%s: pipeline declares no steps", m.Desc.FullName())
 		}
 
@@ -132,34 +149,6 @@ func Generate(p *protogen.Plugin) error {
 				pl.failureOutput = msg
 			}
 		}
-
-		for _, ref := range pl.opts.GetSteps() {
-			name := trimDot(ref)
-			msg, ok := messages[name]
-			if !ok {
-				fail("%s: step %q not found", m.Desc.FullName(), ref)
-				continue
-			}
-			sd, ok := steps[protoreflect.FullName(name)]
-			if !ok {
-				fail("%s: message %q in pipeline topology is not a durable step declaration", m.Desc.FullName(), ref)
-				continue
-			}
-			_ = msg
-			if sd.owner != nil {
-				fail("step %s is declared by pipelines %q and %q; one durable step belongs to exactly one active pipeline",
-					name, sd.owner.opts.GetId(), pl.opts.GetId())
-				continue
-			}
-			sd.owner = pl
-			pl.steps = append(pl.steps, sd)
-		}
-	}
-
-	for name, s := range steps {
-		if s.owner == nil {
-			fail("step %s is not referenced by any pipeline", name)
-		}
 	}
 
 	// Every step is a method on its pipeline's handler interface, so the
@@ -179,9 +168,9 @@ func Generate(p *protogen.Plugin) error {
 			claim("ReduceFailure", "the failure reducer")
 		}
 		for _, s := range pl.steps {
-			claim(s.msg.GoIdent.GoName, "step "+s.opts.GetId())
+			claim(s.methodName(), "step "+s.opts.GetId())
 			if s.opts.GetUnwind() {
-				claim("Unwind"+s.msg.GoIdent.GoName, "the unwind of step "+s.opts.GetId())
+				claim("Unwind"+s.methodName(), "the unwind of step "+s.opts.GetId())
 			}
 		}
 	}
@@ -361,6 +350,10 @@ func emitInvocationAlias(g *protogen.GeneratedFile, pl *pipelineDecl) {
 	g.P()
 }
 
+// methodName is the step's handler method: the nested message's own
+// name. Its Go type is Pipeline_Step, protoc-gen-go's nested naming.
+func (s *stepDecl) methodName() string { return string(s.msg.Desc.Name()) }
+
 // runSig is the signature of a step's forward method, after the name.
 func (s *stepDecl) runSig(g *protogen.GeneratedFile, inv string) string {
 	sig := "(ctx " + g.QualifiedGoIdent(contextPkg.Ident("Context")) + ", inv " + inv + ") "
@@ -384,13 +377,13 @@ func emitHandlers(g *protogen.GeneratedFile, pl *pipelineDecl) {
 	g.P("// added to the pipeline is a method the next build demands.")
 	g.P("type ", pl.handlersName(), " interface {")
 	for _, s := range pl.steps {
-		goName := s.msg.GoIdent.GoName
-		g.P("// ", goName, " runs step ", strconv(s.opts.GetId()), ".")
-		g.P(goName, s.runSig(g, inv))
+		method := s.methodName()
+		g.P("// ", method, " runs step ", strconv(s.opts.GetId()), ".")
+		g.P(method, s.runSig(g, inv))
 		if s.opts.GetUnwind() {
-			g.P("// Unwind", goName, " compensates step ", strconv(s.opts.GetId()), " once it")
+			g.P("// Unwind", method, " compensates step ", strconv(s.opts.GetId()), " once it")
 			g.P("// succeeded and the run unwinds.")
-			g.P("Unwind", goName, "(ctx ", ctx, ", inv ", inv, ") error")
+			g.P("Unwind", method, "(ctx ", ctx, ", inv ", inv, ") error")
 		}
 	}
 	if pl.output != nil {
@@ -518,7 +511,7 @@ func emitDefinition(g *protogen.GeneratedFile, pl *pipelineDecl) {
 	g.P("Steps: []", g.QualifiedGoIdent(defPkg.Ident("Step")), "{")
 	typed := g.QualifiedGoIdent(durablePkg.Ident("Typed")) + "[" + pl.inputType(g) + "]"
 	for _, s := range pl.steps {
-		goName := s.msg.GoIdent.GoName
+		goName := s.methodName()
 		g.P("{")
 		g.P("ID: ", strconv(s.opts.GetId()), ",")
 		if s.opts.GetUnwind() {

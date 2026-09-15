@@ -15,17 +15,17 @@ import (
 	sync "sync"
 )
 
-// ProvisionEnvStep is the typed reference to the state-producing step "provision-env/v1".
-var ProvisionEnvStep = pipelinedef.StateStepRef("provision-env/v1", func() *ProvisionEnv { return &ProvisionEnv{} })
+// DeployService_ProvisionEnvStep is the typed reference to the state-producing step "provision-env/v1".
+var DeployService_ProvisionEnvStep = pipelinedef.StateStepRef("provision-env/v1", func() *DeployService_ProvisionEnv { return &DeployService_ProvisionEnv{} })
 
-// RunMigrationsStep is the typed reference to the state-producing step "run-migrations/v1".
-var RunMigrationsStep = pipelinedef.StateStepRef("run-migrations/v1", func() *RunMigrations { return &RunMigrations{} })
+// DeployService_RunMigrationsStep is the typed reference to the state-producing step "run-migrations/v1".
+var DeployService_RunMigrationsStep = pipelinedef.StateStepRef("run-migrations/v1", func() *DeployService_RunMigrations { return &DeployService_RunMigrations{} })
 
-// CanaryAnalysisStep is the typed reference to the state-producing step "canary-analysis/v1".
-var CanaryAnalysisStep = pipelinedef.StateStepRef("canary-analysis/v1", func() *CanaryAnalysis { return &CanaryAnalysis{} })
+// DeployService_CanaryAnalysisStep is the typed reference to the state-producing step "canary-analysis/v1".
+var DeployService_CanaryAnalysisStep = pipelinedef.StateStepRef("canary-analysis/v1", func() *DeployService_CanaryAnalysis { return &DeployService_CanaryAnalysis{} })
 
-// ShiftTrafficStep is the typed reference to the state-producing step "shift-traffic/v1".
-var ShiftTrafficStep = pipelinedef.StateStepRef("shift-traffic/v1", func() *ShiftTraffic { return &ShiftTraffic{} })
+// DeployService_ShiftTrafficStep is the typed reference to the state-producing step "shift-traffic/v1".
+var DeployService_ShiftTrafficStep = pipelinedef.StateStepRef("shift-traffic/v1", func() *DeployService_ShiftTraffic { return &DeployService_ShiftTraffic{} })
 
 // DeployServiceInvocation is the invocation every DeployServiceHandlers method receives:
 // durable.Invocation with the pipeline's Input typed.
@@ -45,19 +45,19 @@ func NewDeployServiceInvocation(core durable.Invocation) DeployServiceInvocation
 // added to the pipeline is a method the next build demands.
 type DeployServiceHandlers interface {
 	// ProvisionEnv runs step "provision-env/v1".
-	ProvisionEnv(ctx context.Context, inv DeployServiceInvocation) (*ProvisionEnv, error)
+	ProvisionEnv(ctx context.Context, inv DeployServiceInvocation) (*DeployService_ProvisionEnv, error)
 	// UnwindProvisionEnv compensates step "provision-env/v1" once it
 	// succeeded and the run unwinds.
 	UnwindProvisionEnv(ctx context.Context, inv DeployServiceInvocation) error
 	// RunMigrations runs step "run-migrations/v1".
-	RunMigrations(ctx context.Context, inv DeployServiceInvocation) (*RunMigrations, error)
+	RunMigrations(ctx context.Context, inv DeployServiceInvocation) (*DeployService_RunMigrations, error)
 	// UnwindRunMigrations compensates step "run-migrations/v1" once it
 	// succeeded and the run unwinds.
 	UnwindRunMigrations(ctx context.Context, inv DeployServiceInvocation) error
 	// CanaryAnalysis runs step "canary-analysis/v1".
-	CanaryAnalysis(ctx context.Context, inv DeployServiceInvocation) (*CanaryAnalysis, error)
+	CanaryAnalysis(ctx context.Context, inv DeployServiceInvocation) (*DeployService_CanaryAnalysis, error)
 	// ShiftTraffic runs step "shift-traffic/v1".
-	ShiftTraffic(ctx context.Context, inv DeployServiceInvocation) (*ShiftTraffic, error)
+	ShiftTraffic(ctx context.Context, inv DeployServiceInvocation) (*DeployService_ShiftTraffic, error)
 	// Reduce produces the pipeline output from the immutable input and
 	// committed step states on success. It must be pure: deterministic,
 	// side-effect free, synchronous, and non-failing.
@@ -288,20 +288,20 @@ type DeployServiceResult struct {
 // succeeded.
 func (r DeployServiceResult) Output() *DeployServiceOutput { return r.output }
 
-// PlanReleaseStep is the reference to the stateless step "plan/v1".
+// ReleaseTrain_PlanReleaseStep is the reference to the stateless step "plan/v1".
 // It is not accepted by State lookup.
-var PlanReleaseStep = pipelinedef.StepRef("plan/v1")
+var ReleaseTrain_PlanReleaseStep = pipelinedef.StepRef("plan/v1")
 
-// ShipWebStep is the reference to the stateless step "ship-web/v1".
+// ReleaseTrain_ShipWebStep is the reference to the stateless step "ship-web/v1".
 // It is not accepted by State lookup.
-var ShipWebStep = pipelinedef.StepRef("ship-web/v1")
+var ReleaseTrain_ShipWebStep = pipelinedef.StepRef("ship-web/v1")
 
-// ShipApiStep is the reference to the stateless step "ship-api/v1".
+// ReleaseTrain_ShipApiStep is the reference to the stateless step "ship-api/v1".
 // It is not accepted by State lookup.
-var ShipApiStep = pipelinedef.StepRef("ship-api/v1")
+var ReleaseTrain_ShipApiStep = pipelinedef.StepRef("ship-api/v1")
 
-// AnnounceStep is the typed reference to the state-producing step "announce/v1".
-var AnnounceStep = pipelinedef.StateStepRef("announce/v1", func() *Announce { return &Announce{} })
+// ReleaseTrain_AnnounceStep is the typed reference to the state-producing step "announce/v1".
+var ReleaseTrain_AnnounceStep = pipelinedef.StateStepRef("announce/v1", func() *ReleaseTrain_Announce { return &ReleaseTrain_Announce{} })
 
 // ReleaseTrainInvocation is the invocation every ReleaseTrainHandlers method receives:
 // durable.Invocation with the pipeline's Input typed.
@@ -327,7 +327,7 @@ type ReleaseTrainHandlers interface {
 	// ShipApi runs step "ship-api/v1".
 	ShipApi(ctx context.Context, inv ReleaseTrainInvocation) error
 	// Announce runs step "announce/v1".
-	Announce(ctx context.Context, inv ReleaseTrainInvocation) (*Announce, error)
+	Announce(ctx context.Context, inv ReleaseTrainInvocation) (*ReleaseTrain_Announce, error)
 }
 
 var releaseTrainViews sync.Map

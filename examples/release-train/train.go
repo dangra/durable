@@ -54,11 +54,11 @@ func (s *shipper) ShipApi(ctx context.Context, inv releasepb.ReleaseTrainInvocat
 // announce wraps the release once every service shipped. In the demo it
 // never runs: the train is frozen during ship-api, and a canceled run
 // selects no new forward work — the wrap-up simply never happens.
-func (s *shipper) Announce(ctx context.Context, inv releasepb.ReleaseTrainInvocation) (*releasepb.Announce, error) {
+func (s *shipper) Announce(ctx context.Context, inv releasepb.ReleaseTrainInvocation) (*releasepb.ReleaseTrain_Announce, error) {
 	url := "https://releases.example.com/" + inv.Input().GetImageTag()
 	s.w.mu.Lock()
 	s.w.announced = true
 	s.w.mu.Unlock()
 	s.w.logf("[train] release %s announced: %s", inv.Input().GetImageTag(), url)
-	return &releasepb.Announce{ChangelogUrl: url}, nil
+	return &releasepb.ReleaseTrain_Announce{ChangelogUrl: url}, nil
 }

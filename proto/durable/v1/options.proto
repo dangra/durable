@@ -39,7 +39,6 @@ message PipelineOptions {
   // Fully-qualified Output message type.
   string output = 3;
 
-
   // Optional default concurrency class for all of this pipeline's steps;
   // a step's own concurrency_class overrides it.
   string concurrency_class = 6;

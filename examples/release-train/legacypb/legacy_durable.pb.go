@@ -14,14 +14,14 @@ import (
 	sync "sync"
 )
 
-// ProvisionEnvStep is the typed reference to the state-producing step "provision-env/v1".
-var ProvisionEnvStep = pipelinedef.StateStepRef("provision-env/v1", func() *ProvisionEnv { return &ProvisionEnv{} })
+// DeployService_ProvisionEnvStep is the typed reference to the state-producing step "provision-env/v1".
+var DeployService_ProvisionEnvStep = pipelinedef.StateStepRef("provision-env/v1", func() *DeployService_ProvisionEnv { return &DeployService_ProvisionEnv{} })
 
-// RunMigrationsStep is the typed reference to the state-producing step "run-migrations/v1".
-var RunMigrationsStep = pipelinedef.StateStepRef("run-migrations/v1", func() *RunMigrations { return &RunMigrations{} })
+// DeployService_RunMigrationsStep is the typed reference to the state-producing step "run-migrations/v1".
+var DeployService_RunMigrationsStep = pipelinedef.StateStepRef("run-migrations/v1", func() *DeployService_RunMigrations { return &DeployService_RunMigrations{} })
 
-// ShiftTrafficStep is the typed reference to the state-producing step "shift-traffic/v1".
-var ShiftTrafficStep = pipelinedef.StateStepRef("shift-traffic/v1", func() *ShiftTraffic { return &ShiftTraffic{} })
+// DeployService_ShiftTrafficStep is the typed reference to the state-producing step "shift-traffic/v1".
+var DeployService_ShiftTrafficStep = pipelinedef.StateStepRef("shift-traffic/v1", func() *DeployService_ShiftTraffic { return &DeployService_ShiftTraffic{} })
 
 // DeployServiceInvocation is the invocation every DeployServiceHandlers method receives:
 // durable.Invocation with the pipeline's Input typed.
@@ -41,17 +41,17 @@ func NewDeployServiceInvocation(core durable.Invocation) DeployServiceInvocation
 // added to the pipeline is a method the next build demands.
 type DeployServiceHandlers interface {
 	// ProvisionEnv runs step "provision-env/v1".
-	ProvisionEnv(ctx context.Context, inv DeployServiceInvocation) (*ProvisionEnv, error)
+	ProvisionEnv(ctx context.Context, inv DeployServiceInvocation) (*DeployService_ProvisionEnv, error)
 	// UnwindProvisionEnv compensates step "provision-env/v1" once it
 	// succeeded and the run unwinds.
 	UnwindProvisionEnv(ctx context.Context, inv DeployServiceInvocation) error
 	// RunMigrations runs step "run-migrations/v1".
-	RunMigrations(ctx context.Context, inv DeployServiceInvocation) (*RunMigrations, error)
+	RunMigrations(ctx context.Context, inv DeployServiceInvocation) (*DeployService_RunMigrations, error)
 	// UnwindRunMigrations compensates step "run-migrations/v1" once it
 	// succeeded and the run unwinds.
 	UnwindRunMigrations(ctx context.Context, inv DeployServiceInvocation) error
 	// ShiftTraffic runs step "shift-traffic/v1".
-	ShiftTraffic(ctx context.Context, inv DeployServiceInvocation) (*ShiftTraffic, error)
+	ShiftTraffic(ctx context.Context, inv DeployServiceInvocation) (*DeployService_ShiftTraffic, error)
 	// Reduce produces the pipeline output from the immutable input and
 	// committed step states on success. It must be pure: deterministic,
 	// side-effect free, synchronous, and non-failing.

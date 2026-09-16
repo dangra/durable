@@ -112,8 +112,6 @@ type PipelineOptions struct {
 	Input string `protobuf:"bytes,2,opt,name=input,proto3" json:"input,omitempty"`
 	// Fully-qualified Output message type.
 	Output string `protobuf:"bytes,3,opt,name=output,proto3" json:"output,omitempty"`
-	// Ordered Step topology as fully-qualified Step message types.
-	Steps []string `protobuf:"bytes,4,rep,name=steps,proto3" json:"steps,omitempty"`
 	// Optional default concurrency class for all of this pipeline's steps;
 	// a step's own concurrency_class overrides it.
 	ConcurrencyClass string `protobuf:"bytes,6,opt,name=concurrency_class,json=concurrencyClass,proto3" json:"concurrency_class,omitempty"`
@@ -193,13 +191,6 @@ func (x *PipelineOptions) GetOutput() string {
 	return ""
 }
 
-func (x *PipelineOptions) GetSteps() []string {
-	if x != nil {
-		return x.Steps
-	}
-	return nil
-}
-
 func (x *PipelineOptions) GetConcurrencyClass() string {
 	if x != nil {
 		return x.ConcurrencyClass
@@ -270,12 +261,11 @@ const file_durable_v1_options_proto_rawDesc = "" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x16\n" +
 	"\x06unwind\x18\x02 \x01(\bR\x06unwind\x12\x18\n" +
 	"\aretired\x18\x03 \x01(\bR\aretired\x12+\n" +
-	"\x11concurrency_class\x18\x04 \x01(\tR\x10concurrencyClass\"\xf0\x01\n" +
+	"\x11concurrency_class\x18\x04 \x01(\tR\x10concurrencyClass\"\xda\x01\n" +
 	"\x0fPipelineOptions\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05input\x18\x02 \x01(\tR\x05input\x12\x16\n" +
-	"\x06output\x18\x03 \x01(\tR\x06output\x12\x14\n" +
-	"\x05steps\x18\x04 \x03(\tR\x05steps\x12+\n" +
+	"\x06output\x18\x03 \x01(\tR\x06output\x12+\n" +
 	"\x11concurrency_class\x18\x06 \x01(\tR\x10concurrencyClass\x12\x18\n" +
 	"\amutexes\x18\a \x03(\tR\amutexes\x12\x1b\n" +
 	"\trun_class\x18\t \x01(\tR\brunClass\x12%\n" +

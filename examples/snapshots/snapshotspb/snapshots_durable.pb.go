@@ -14,18 +14,18 @@ import (
 	sync "sync"
 )
 
-// FreezeVolumeStep is the typed reference to the state-producing step "freeze-volume/v1".
-var FreezeVolumeStep = pipelinedef.StateStepRef("freeze-volume/v1", func() *FreezeVolume { return &FreezeVolume{} })
+// CreateSnapshot_FreezeVolumeStep is the typed reference to the state-producing step "freeze-volume/v1".
+var CreateSnapshot_FreezeVolumeStep = pipelinedef.StateStepRef("freeze-volume/v1", func() *CreateSnapshot_FreezeVolume { return &CreateSnapshot_FreezeVolume{} })
 
-// UploadSnapshotStep is the typed reference to the state-producing step "upload-snapshot/v1".
-var UploadSnapshotStep = pipelinedef.StateStepRef("upload-snapshot/v1", func() *UploadSnapshot { return &UploadSnapshot{} })
+// CreateSnapshot_UploadSnapshotStep is the typed reference to the state-producing step "upload-snapshot/v1".
+var CreateSnapshot_UploadSnapshotStep = pipelinedef.StateStepRef("upload-snapshot/v1", func() *CreateSnapshot_UploadSnapshot { return &CreateSnapshot_UploadSnapshot{} })
 
-// ThawVolumeStep is the reference to the stateless step "thaw-volume/v1".
+// CreateSnapshot_ThawVolumeStep is the reference to the stateless step "thaw-volume/v1".
 // It is not accepted by State lookup.
-var ThawVolumeStep = pipelinedef.StepRef("thaw-volume/v1")
+var CreateSnapshot_ThawVolumeStep = pipelinedef.StepRef("thaw-volume/v1")
 
-// RegisterSnapshotStep is the typed reference to the state-producing step "register-snapshot/v1".
-var RegisterSnapshotStep = pipelinedef.StateStepRef("register-snapshot/v1", func() *RegisterSnapshot { return &RegisterSnapshot{} })
+// CreateSnapshot_RegisterSnapshotStep is the typed reference to the state-producing step "register-snapshot/v1".
+var CreateSnapshot_RegisterSnapshotStep = pipelinedef.StateStepRef("register-snapshot/v1", func() *CreateSnapshot_RegisterSnapshot { return &CreateSnapshot_RegisterSnapshot{} })
 
 // CreateSnapshotInvocation is the invocation every CreateSnapshotHandlers method receives:
 // durable.Invocation with the pipeline's Input typed.
@@ -45,19 +45,19 @@ func NewCreateSnapshotInvocation(core durable.Invocation) CreateSnapshotInvocati
 // added to the pipeline is a method the next build demands.
 type CreateSnapshotHandlers interface {
 	// FreezeVolume runs step "freeze-volume/v1".
-	FreezeVolume(ctx context.Context, inv CreateSnapshotInvocation) (*FreezeVolume, error)
+	FreezeVolume(ctx context.Context, inv CreateSnapshotInvocation) (*CreateSnapshot_FreezeVolume, error)
 	// UnwindFreezeVolume compensates step "freeze-volume/v1" once it
 	// succeeded and the run unwinds.
 	UnwindFreezeVolume(ctx context.Context, inv CreateSnapshotInvocation) error
 	// UploadSnapshot runs step "upload-snapshot/v1".
-	UploadSnapshot(ctx context.Context, inv CreateSnapshotInvocation) (*UploadSnapshot, error)
+	UploadSnapshot(ctx context.Context, inv CreateSnapshotInvocation) (*CreateSnapshot_UploadSnapshot, error)
 	// UnwindUploadSnapshot compensates step "upload-snapshot/v1" once it
 	// succeeded and the run unwinds.
 	UnwindUploadSnapshot(ctx context.Context, inv CreateSnapshotInvocation) error
 	// ThawVolume runs step "thaw-volume/v1".
 	ThawVolume(ctx context.Context, inv CreateSnapshotInvocation) error
 	// RegisterSnapshot runs step "register-snapshot/v1".
-	RegisterSnapshot(ctx context.Context, inv CreateSnapshotInvocation) (*RegisterSnapshot, error)
+	RegisterSnapshot(ctx context.Context, inv CreateSnapshotInvocation) (*CreateSnapshot_RegisterSnapshot, error)
 	// Reduce produces the pipeline output from the immutable input and
 	// committed step states on success. It must be pure: deterministic,
 	// side-effect free, synchronous, and non-failing.

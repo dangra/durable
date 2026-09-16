@@ -11,8 +11,8 @@ import (
 // legacyDeploy implements legacypb.DeployServiceHandlers.
 type legacyDeploy struct{ w *world }
 
-func (h *legacyDeploy) ProvisionEnv(ctx context.Context, inv legacypb.DeployServiceInvocation) (*legacypb.ProvisionEnv, error) {
-	return &legacypb.ProvisionEnv{EnvId: h.w.provision(inv.Input().GetService())}, nil
+func (h *legacyDeploy) ProvisionEnv(ctx context.Context, inv legacypb.DeployServiceInvocation) (*legacypb.DeployService_ProvisionEnv, error) {
+	return &legacypb.DeployService_ProvisionEnv{EnvId: h.w.provision(inv.Input().GetService())}, nil
 }
 
 func (h *legacyDeploy) UnwindProvisionEnv(ctx context.Context, inv legacypb.DeployServiceInvocation) error {
@@ -24,7 +24,7 @@ func (h *legacyDeploy) UnwindProvisionEnv(ctx context.Context, inv legacypb.Depl
 // durable can commit the fact: the daemon dies mid-attempt. The
 // restarted build re-executes this operation and hits the idempotent
 // skip.
-func (h *legacyDeploy) RunMigrations(ctx context.Context, inv legacypb.DeployServiceInvocation) (*legacypb.RunMigrations, error) {
+func (h *legacyDeploy) RunMigrations(ctx context.Context, inv legacypb.DeployServiceInvocation) (*legacypb.DeployService_RunMigrations, error) {
 	h.w.migrate(inv.Input().GetService(), inv.Input().GetImage())
 	close(h.w.webMigrating)
 	<-ctx.Done() // the daemon shuts down under us
@@ -37,13 +37,13 @@ func (h *legacyDeploy) UnwindRunMigrations(ctx context.Context, inv legacypb.Dep
 	return nil
 }
 
-func (h *legacyDeploy) ShiftTraffic(ctx context.Context, inv legacypb.DeployServiceInvocation) (*legacypb.ShiftTraffic, error) {
+func (h *legacyDeploy) ShiftTraffic(ctx context.Context, inv legacypb.DeployServiceInvocation) (*legacypb.DeployService_ShiftTraffic, error) {
 	// Never reached in this demo: the daemon dies before the web deploy
 	// gets here, and the next build routes through canary analysis first.
 	h.w.mu.Lock()
 	h.w.traffic[inv.Input().GetService()] = inv.Input().GetImage()
 	h.w.mu.Unlock()
-	return &legacypb.ShiftTraffic{LbGeneration: inv.Input().GetImage()}, nil
+	return &legacypb.DeployService_ShiftTraffic{LbGeneration: inv.Input().GetImage()}, nil
 }
 
 func (h *legacyDeploy) Reduce(d *legacypb.DeployService) *legacypb.DeployServiceOutput {

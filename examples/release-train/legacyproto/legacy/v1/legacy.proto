@@ -11,30 +11,6 @@ import "durable/v1/options.proto";
 
 option go_package = "github.com/dangra/durable/examples/release-train/legacypb";
 
-message ProvisionEnv {
-  option (durable.v1.step) = {
-    id: "provision-env/v1"
-    unwind: true
-  };
-
-  string env_id = 1;
-}
-
-message RunMigrations {
-  option (durable.v1.step) = {
-    id: "run-migrations/v1"
-    unwind: true
-  };
-
-  string schema_version = 1;
-}
-
-message ShiftTraffic {
-  option (durable.v1.step) = {id: "shift-traffic/v1"};
-
-  string lb_generation = 1;
-}
-
 message DeployServiceInput {
   string service = 1;
   string image = 2;
@@ -49,9 +25,29 @@ message DeployService {
     id: "deploy-service"
     input: ".legacy.v1.DeployServiceInput"
     output: ".legacy.v1.DeployServiceOutput"
-
-    steps: ".legacy.v1.ProvisionEnv"
-    steps: ".legacy.v1.RunMigrations"
-    steps: ".legacy.v1.ShiftTraffic"
   };
+
+  message ProvisionEnv {
+    option (durable.v1.step) = {
+      id: "provision-env/v1"
+      unwind: true
+    };
+
+    string env_id = 1;
+  }
+
+  message RunMigrations {
+    option (durable.v1.step) = {
+      id: "run-migrations/v1"
+      unwind: true
+    };
+
+    string schema_version = 1;
+  }
+
+  message ShiftTraffic {
+    option (durable.v1.step) = {id: "shift-traffic/v1"};
+
+    string lb_generation = 1;
+  }
 }

@@ -21,38 +21,34 @@ message FulfillOrderOutput {
   string shipment_id = 1;
 }
 
-message ReserveStock {
-  option (durable.v1.step) = {
-    id: "reserve-stock/v1"
-    unwind: true
-  };
-
-  string reservation_id = 1;
-}
-
-message ChargePayment {
-  option (durable.v1.step) = {
-    id: "charge-payment/v1"
-    unwind: true
-  };
-
-  string charge_id = 1;
-}
-
-message Ship {
-  option (durable.v1.step) = {id: "ship/v1"};
-
-  string shipment_id = 1;
-}
-
 message FulfillOrder {
   option (durable.v1.pipeline) = {
     id: "fulfill-order"
     input: ".orders.v1.FulfillOrderInput"
     output: ".orders.v1.FulfillOrderOutput"
-
-    steps: ".orders.v1.ReserveStock"
-    steps: ".orders.v1.ChargePayment"
-    steps: ".orders.v1.Ship"
   };
+
+  message ReserveStock {
+    option (durable.v1.step) = {
+      id: "reserve-stock/v1"
+      unwind: true
+    };
+
+    string reservation_id = 1;
+  }
+
+  message ChargePayment {
+    option (durable.v1.step) = {
+      id: "charge-payment/v1"
+      unwind: true
+    };
+
+    string charge_id = 1;
+  }
+
+  message Ship {
+    option (durable.v1.step) = {id: "ship/v1"};
+
+    string shipment_id = 1;
+  }
 }

@@ -53,14 +53,14 @@ func (h *handlers) Validate(ctx context.Context, inv machinespb.ProvisionMachine
 	return nil
 }
 
-func (h *handlers) SelectHost(ctx context.Context, inv machinespb.ProvisionMachineInvocation) (*machinespb.SelectHost, error) {
-	return &machinespb.SelectHost{
+func (h *handlers) SelectHost(ctx context.Context, inv machinespb.ProvisionMachineInvocation) (*machinespb.ProvisionMachine_SelectHost, error) {
+	return &machinespb.ProvisionMachine_SelectHost{
 		HostId: "host-" + inv.Input().GetRegion() + "-1",
 	}, nil
 }
 
-func (h *handlers) ReserveCapacity(ctx context.Context, inv machinespb.ProvisionMachineInvocation) (*machinespb.ReserveCapacity, error) {
-	host, ok := inv.State(machinespb.SelectHostStep)
+func (h *handlers) ReserveCapacity(ctx context.Context, inv machinespb.ProvisionMachineInvocation) (*machinespb.ProvisionMachine_ReserveCapacity, error) {
+	host, ok := inv.State(machinespb.ProvisionMachine_SelectHostStep)
 	if !ok {
 		return nil, durable.Fail(errors.New("select-host state unavailable"))
 	}
@@ -69,11 +69,11 @@ func (h *handlers) ReserveCapacity(ctx context.Context, inv machinespb.Provision
 	id := h.cloud.id("res")
 	h.cloud.reservations[id] = true
 	_ = host
-	return &machinespb.ReserveCapacity{ReservationId: id}, nil
+	return &machinespb.ProvisionMachine_ReserveCapacity{ReservationId: id}, nil
 }
 
 func (h *handlers) UnwindReserveCapacity(ctx context.Context, inv machinespb.ProvisionMachineInvocation) error {
-	reservation, ok := inv.State(machinespb.ReserveCapacityStep)
+	reservation, ok := inv.State(machinespb.ProvisionMachine_ReserveCapacityStep)
 	if !ok {
 		return nil
 	}
@@ -83,8 +83,8 @@ func (h *handlers) UnwindReserveCapacity(ctx context.Context, inv machinespb.Pro
 	return nil
 }
 
-func (h *handlers) CreateMachine(ctx context.Context, inv machinespb.ProvisionMachineInvocation) (*machinespb.CreateMachine, error) {
-	reservation, ok := inv.State(machinespb.ReserveCapacityStep)
+func (h *handlers) CreateMachine(ctx context.Context, inv machinespb.ProvisionMachineInvocation) (*machinespb.ProvisionMachine_CreateMachine, error) {
+	reservation, ok := inv.State(machinespb.ProvisionMachine_ReserveCapacityStep)
 	if !ok {
 		return nil, durable.Fail(errors.New("reservation state unavailable"))
 	}
@@ -107,15 +107,15 @@ func (h *handlers) CreateMachine(ctx context.Context, inv machinespb.ProvisionMa
 	if !h.cloud.reservations[reservation.GetReservationId()] {
 		return nil, errors.New("reservation not yet visible") // transient, retried
 	}
-	return &machinespb.CreateMachine{MachineId: h.cloud.id("machine")}, nil
+	return &machinespb.ProvisionMachine_CreateMachine{MachineId: h.cloud.id("machine")}, nil
 }
 
 func (h *handlers) Reduce(p *machinespb.ProvisionMachine) *machinespb.ProvisionMachineOutput {
-	machine, ok := p.State(machinespb.CreateMachineStep)
+	machine, ok := p.State(machinespb.ProvisionMachine_CreateMachineStep)
 	if !ok {
 		panic("successful pipeline missing create-machine state")
 	}
-	host, _ := p.State(machinespb.SelectHostStep)
+	host, _ := p.State(machinespb.ProvisionMachine_SelectHostStep)
 	return &machinespb.ProvisionMachineOutput{
 		MachineId: machine.GetMachineId(),
 		HostId:    host.GetHostId(),

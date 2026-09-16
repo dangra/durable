@@ -24,7 +24,6 @@ message PipelineOptions {
   string id = 1;
   string input = 2;
   string output = 3;
-  repeated string steps = 4;
   string concurrency_class = 6;
   repeated string mutexes = 7;
   string failure_output = 8;
@@ -72,16 +71,25 @@ step references it exports, and `engine` for `Bind`, `Pipeline`, `Run`,
 
 ## Generation-time validation
 
+A pipeline is a top-level message carrying the pipeline option; its
+Steps are the messages nested directly in it, each carrying the step
+option, and their declaration order is the topology. Nothing lists the
+Steps twice, a Step belongs to exactly one pipeline by construction, and
+two pipelines in one package may name their Steps alike. A Step's Go
+type is protoc-gen-go's nested name, `Pipeline_Step`; its handler method
+is the short name.
+
 Generation MUST reject:
 
 - missing PipelineID,
 - missing StepID,
 - duplicate StepID,
-- nonexistent Step references,
-- non-Step messages in Pipeline topology,
+- a step message outside a pipeline message, or nested deeper than
+  directly in one,
+- a message nested in a pipeline that is not a step,
+- a pipeline message that is not top-level,
 - empty Pipelines,
 - invalid Input/Output references,
-- Step reuse across active Pipelines,
 - malformed capability declarations.
 
 Generated APIs MUST make these compile-time errors where possible:

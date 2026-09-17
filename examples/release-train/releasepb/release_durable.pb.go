@@ -58,20 +58,20 @@ type DeployServiceHandlers interface {
 	CanaryAnalysis(ctx context.Context, inv DeployServiceInvocation) (*DeployService_CanaryAnalysis, error)
 	// ShiftTraffic runs step "shift-traffic/v1".
 	ShiftTraffic(ctx context.Context, inv DeployServiceInvocation) (*DeployService_ShiftTraffic, error)
-	// Reduce produces the pipeline output from the immutable input and
+	// ReduceOutput produces the pipeline output from the immutable input and
 	// committed step states on success. It must be pure: deterministic,
 	// side-effect free, synchronous, and non-failing.
-	Reduce(*DeployService) *DeployServiceOutput
+	ReduceOutput(*DeployService) *DeployServiceOutput
 }
 
-// ReduceDeployService folds view through h.Reduce: the marker the reducer
+// ReduceDeployServiceOutput folds view through h.ReduceOutput: the marker the reducer
 // receives reads its Input, States, and failures from view for the
 // duration of the call.
-func ReduceDeployService(h DeployServiceHandlers, view durable.ReduceView) *DeployServiceOutput {
+func ReduceDeployServiceOutput(h DeployServiceHandlers, view durable.ReduceView) *DeployServiceOutput {
 	x := &DeployService{}
 	deployServiceViews.Store(x, view)
 	defer deployServiceViews.Delete(x)
-	return h.Reduce(x)
+	return h.ReduceOutput(x)
 }
 
 var deployServiceViews sync.Map
@@ -120,7 +120,7 @@ func NewDeployService(h DeployServiceHandlers) *DeployServiceDefinition {
 		ID:       "deploy-service",
 		NewInput: func() proto.Message { return &DeployServiceInput{} },
 		Reduce: func(view durable.ReduceView) proto.Message {
-			return ReduceDeployService(h, view)
+			return ReduceDeployServiceOutput(h, view)
 		},
 		Steps: []pipelinedef.Step{
 			{

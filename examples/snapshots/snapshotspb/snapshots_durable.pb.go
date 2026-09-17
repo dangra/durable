@@ -58,24 +58,24 @@ type CreateSnapshotHandlers interface {
 	ThawVolume(ctx context.Context, inv CreateSnapshotInvocation) error
 	// RegisterSnapshot runs step "register-snapshot/v1".
 	RegisterSnapshot(ctx context.Context, inv CreateSnapshotInvocation) (*CreateSnapshot_RegisterSnapshot, error)
-	// Reduce produces the pipeline output from the immutable input and
+	// ReduceOutput produces the pipeline output from the immutable input and
 	// committed step states on success. It must be pure: deterministic,
 	// side-effect free, synchronous, and non-failing.
-	Reduce(*CreateSnapshot) *CreateSnapshotOutput
+	ReduceOutput(*CreateSnapshot) *CreateSnapshotOutput
 	// ReduceFailure produces the pipeline failure output from the immutable
 	// input, the committed step states, the run's Failure, and the permanent
 	// unwind failures once the unwind completes. It must be pure.
 	ReduceFailure(*CreateSnapshot) *CreateSnapshotFailure
 }
 
-// ReduceCreateSnapshot folds view through h.Reduce: the marker the reducer
+// ReduceCreateSnapshotOutput folds view through h.ReduceOutput: the marker the reducer
 // receives reads its Input, States, and failures from view for the
 // duration of the call.
-func ReduceCreateSnapshot(h CreateSnapshotHandlers, view durable.ReduceView) *CreateSnapshotOutput {
+func ReduceCreateSnapshotOutput(h CreateSnapshotHandlers, view durable.ReduceView) *CreateSnapshotOutput {
 	x := &CreateSnapshot{}
 	createSnapshotViews.Store(x, view)
 	defer createSnapshotViews.Delete(x)
-	return h.Reduce(x)
+	return h.ReduceOutput(x)
 }
 
 // ReduceCreateSnapshotFailure folds view through h.ReduceFailure: the marker the reducer
@@ -134,7 +134,7 @@ func NewCreateSnapshot(h CreateSnapshotHandlers) *CreateSnapshotDefinition {
 		ID:       "create-snapshot",
 		NewInput: func() proto.Message { return &CreateSnapshotInput{} },
 		Reduce: func(view durable.ReduceView) proto.Message {
-			return ReduceCreateSnapshot(h, view)
+			return ReduceCreateSnapshotOutput(h, view)
 		},
 		ReduceFailure: func(view durable.ReduceView) proto.Message {
 			return ReduceCreateSnapshotFailure(h, view)

@@ -259,7 +259,7 @@ type ProvisionMachineHandlers interface {
     ReserveCapacity(context.Context, ProvisionMachineInvocation) (*ReserveCapacity, error)
     UnwindReserveCapacity(context.Context, ProvisionMachineInvocation) error
 
-    Reduce(*ProvisionMachine) *ProvisionMachineOutput
+    ReduceOutput(*ProvisionMachine) *ProvisionMachineOutput
 }
 
 func NewProvisionMachine(h ProvisionMachineHandlers) *ProvisionMachineDefinition
@@ -317,7 +317,7 @@ annotations, park memory) that satisfies both `durable.Invocation` and
 would invalidate the Run for. Generated code wraps it the same way it
 wraps the Engine's: `NewProvisionMachineInvocation(fake)` is what a
 `ProvisionMachineHandlers` method takes, and
-`ReduceProvisionMachine(h, fake)` folds the reducer over it.
+`ReduceProvisionMachineOutput(h, fake)` folds the reducer over it.
 
 ```go
 inv := durabletest.NewInvocation(durabletest.InvocationConfig{

@@ -64,7 +64,7 @@ message ProvisionMachine {
 
 `protoc-gen-durable` turns that into one interface, `ProvisionMachineHandlers`:
 a method per step, `Unwind<Step>` for each step that unwinds, and
-`Reduce` for the output. One type implements the pipeline, so its
+`ReduceOutput` for the output. One type implements the pipeline, so its
 dependencies are declared once, and a step it lacks — a step added to
 the proto included — is a compile error naming the method:
 
@@ -106,7 +106,7 @@ func (h *handlers) CreateMachine(ctx context.Context, inv machinespb.ProvisionMa
     return &machinespb.ProvisionMachine_CreateMachine{MachineId: id}, nil
 }
 
-func (h *handlers) Reduce(p *machinespb.ProvisionMachine) *machinespb.ProvisionMachineOutput {
+func (h *handlers) ReduceOutput(p *machinespb.ProvisionMachine) *machinespb.ProvisionMachineOutput {
     m, _ := p.State(machinespb.ProvisionMachine_CreateMachineStep)
     return &machinespb.ProvisionMachineOutput{MachineId: m.GetMachineId()}
 }

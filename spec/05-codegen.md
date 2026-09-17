@@ -51,10 +51,10 @@ Published protobuf extensions MUST use globally allocated extension numbers.
   (`durable.NoInput` for an Input-less pipeline), with a
   `NewXxxInvocation(core)` constructor for engine-free handler tests,
 - one handler interface, `XxxHandlers`: a method per Step named after
-  the Step, `Unwind<Step>` for each Step that unwinds, and `Reduce` /
+  the Step, `Unwind<Step>` for each Step that unwinds, and `ReduceOutput` /
   `ReduceFailure` when the pipeline declares outputs,
 - the Pipeline constructor, `NewXxx(h XxxHandlers)`,
-- `ReduceXxx(h, view)` and `ReduceXxxFailure(h, view)`, the folds the
+- `ReduceXxxOutput(h, view)` and `ReduceXxxFailure(h, view)`, the folds the
   engine reduces through and reducer tests call,
 - runtime methods on the Pipeline marker type,
 - the bound Pipeline handle,
@@ -97,7 +97,7 @@ Generated APIs MUST make these compile-time errors where possible:
 - a missing Step method, a Step added to the pipeline included,
 - a wrong method signature,
 - a missing `Unwind<Step>`,
-- an invalid `Reduce` signature,
+- an invalid `ReduceOutput` or `ReduceFailure` signature,
 - passing a stateless `StepRef` to `State`.
 
 Generation MUST also reject a pipeline whose Step and reducer method

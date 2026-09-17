@@ -56,20 +56,20 @@ type ProvisionMachineHandlers interface {
 	UnwindReserveCapacity(ctx context.Context, inv ProvisionMachineInvocation) error
 	// CreateMachine runs step "create-machine/v1".
 	CreateMachine(ctx context.Context, inv ProvisionMachineInvocation) (*ProvisionMachine_CreateMachine, error)
-	// Reduce produces the pipeline output from the immutable input and
+	// ReduceOutput produces the pipeline output from the immutable input and
 	// committed step states on success. It must be pure: deterministic,
 	// side-effect free, synchronous, and non-failing.
-	Reduce(*ProvisionMachine) *ProvisionMachineOutput
+	ReduceOutput(*ProvisionMachine) *ProvisionMachineOutput
 }
 
-// ReduceProvisionMachine folds view through h.Reduce: the marker the reducer
+// ReduceProvisionMachineOutput folds view through h.ReduceOutput: the marker the reducer
 // receives reads its Input, States, and failures from view for the
 // duration of the call.
-func ReduceProvisionMachine(h ProvisionMachineHandlers, view durable.ReduceView) *ProvisionMachineOutput {
+func ReduceProvisionMachineOutput(h ProvisionMachineHandlers, view durable.ReduceView) *ProvisionMachineOutput {
 	x := &ProvisionMachine{}
 	provisionMachineViews.Store(x, view)
 	defer provisionMachineViews.Delete(x)
-	return h.Reduce(x)
+	return h.ReduceOutput(x)
 }
 
 var provisionMachineViews sync.Map
@@ -119,7 +119,7 @@ func NewProvisionMachine(h ProvisionMachineHandlers) *ProvisionMachineDefinition
 		Mutexes:  []string{"machine-lifecycle"},
 		NewInput: func() proto.Message { return &ProvisionMachineInput{} },
 		Reduce: func(view durable.ReduceView) proto.Message {
-			return ReduceProvisionMachine(h, view)
+			return ReduceProvisionMachineOutput(h, view)
 		},
 		Steps: []pipelinedef.Step{
 			{

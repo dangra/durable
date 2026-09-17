@@ -57,6 +57,6 @@ func (h *deploy) ShiftTraffic(ctx context.Context, inv releasepb.DeployServiceIn
 	return &releasepb.DeployService_ShiftTraffic{LbGeneration: inv.Input().GetImage()}, nil
 }
 
-func (h *deploy) Reduce(d *releasepb.DeployService) *releasepb.DeployServiceOutput {
+func (h *deploy) ReduceOutput(d *releasepb.DeployService) *releasepb.DeployServiceOutput {
 	return &releasepb.DeployServiceOutput{Url: "https://" + d.Input().GetService() + ".example.com"}
 }

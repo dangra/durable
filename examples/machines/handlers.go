@@ -110,7 +110,7 @@ func (h *handlers) CreateMachine(ctx context.Context, inv machinespb.ProvisionMa
 	return &machinespb.ProvisionMachine_CreateMachine{MachineId: h.cloud.id("machine")}, nil
 }
 
-func (h *handlers) Reduce(p *machinespb.ProvisionMachine) *machinespb.ProvisionMachineOutput {
+func (h *handlers) ReduceOutput(p *machinespb.ProvisionMachine) *machinespb.ProvisionMachineOutput {
 	machine, ok := p.State(machinespb.ProvisionMachine_CreateMachineStep)
 	if !ok {
 		panic("successful pipeline missing create-machine state")

@@ -96,7 +96,7 @@ func TestSnapshotUnwindsOnCatalogFull(t *testing.T) {
 }
 
 // The closures are unit-testable without an engine: the generated
-// NewXxxInvocation wraps the durabletest fake, and XxxReducer.Reduce
+// NewXxxInvocation wraps the durabletest fake, and ReduceXxxOutput
 // folds it as a reducer view.
 
 func TestUploadUnwindDeletesObject(t *testing.T) {
@@ -153,7 +153,7 @@ func TestReduceCreateSnapshot(t *testing.T) {
 			snapshotspb.CreateSnapshot_RegisterSnapshotStep.ID(): &snapshotspb.CreateSnapshot_RegisterSnapshot{SnapshotId: "snap-1"},
 		},
 	})
-	out := snapshotspb.ReduceCreateSnapshot(&snapshotter{}, view)
+	out := snapshotspb.ReduceCreateSnapshotOutput(&snapshotter{}, view)
 	if out.GetSnapshotId() != "snap-1" || out.GetObjectKey() != "k" {
 		t.Fatalf("Reduce = %+v", out)
 	}

@@ -112,14 +112,13 @@ type ProvisionMachineDefinition struct {
 }
 
 // NewProvisionMachine assembles the "provision-machine" pipeline definition
-// from its handlers. mw wraps this pipeline's operations alone, forward and
-// unwind alike, inside any engine-level middleware; the first is outermost.
-func NewProvisionMachine(h ProvisionMachineHandlers, mw ...durable.Middleware) *ProvisionMachineDefinition {
-	return &ProvisionMachineDefinition{def: pipelinedef.New(pipelinedef.Config{
-		ID:         "provision-machine",
-		Mutexes:    []string{"machine-lifecycle"},
-		Middleware: mw,
-		NewInput:   func() proto.Message { return &ProvisionMachineInput{} },
+// from its handlers; opts (pipelinedef.WithMiddleware) configure what the
+// proto cannot declare.
+func NewProvisionMachine(h ProvisionMachineHandlers, opts ...pipelinedef.Option) *ProvisionMachineDefinition {
+	cfg := pipelinedef.Config{
+		ID:       "provision-machine",
+		Mutexes:  []string{"machine-lifecycle"},
+		NewInput: func() proto.Message { return &ProvisionMachineInput{} },
 		Reduce: func(view durable.ReduceView) proto.Message {
 			return ReduceProvisionMachineOutput(h, view)
 		},
@@ -169,7 +168,11 @@ func NewProvisionMachine(h ProvisionMachineHandlers, mw ...durable.Middleware) *
 				},
 			},
 		},
-	})}
+	}
+	for _, o := range opts {
+		o(&cfg)
+	}
+	return &ProvisionMachineDefinition{def: pipelinedef.New(cfg)}
 }
 
 // Bind registers the definition with an engine. It is allowed only before
@@ -340,13 +343,12 @@ type DecommissionMachineDefinition struct {
 }
 
 // NewDecommissionMachine assembles the "decommission-machine" pipeline definition
-// from its handlers. mw wraps this pipeline's operations alone, forward and
-// unwind alike, inside any engine-level middleware; the first is outermost.
-func NewDecommissionMachine(h DecommissionMachineHandlers, mw ...durable.Middleware) *DecommissionMachineDefinition {
-	return &DecommissionMachineDefinition{def: pipelinedef.New(pipelinedef.Config{
-		ID:         "decommission-machine",
-		Mutexes:    []string{"machine-lifecycle"},
-		Middleware: mw,
+// from its handlers; opts (pipelinedef.WithMiddleware) configure what the
+// proto cannot declare.
+func NewDecommissionMachine(h DecommissionMachineHandlers, opts ...pipelinedef.Option) *DecommissionMachineDefinition {
+	cfg := pipelinedef.Config{
+		ID:      "decommission-machine",
+		Mutexes: []string{"machine-lifecycle"},
 		Steps: []pipelinedef.Step{
 			{
 				ID: "release-machine/v1",
@@ -355,7 +357,11 @@ func NewDecommissionMachine(h DecommissionMachineHandlers, mw ...durable.Middlew
 				},
 			},
 		},
-	})}
+	}
+	for _, o := range opts {
+		o(&cfg)
+	}
+	return &DecommissionMachineDefinition{def: pipelinedef.New(cfg)}
 }
 
 // Bind registers the definition with an engine. It is allowed only before

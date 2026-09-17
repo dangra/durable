@@ -648,8 +648,9 @@ The first middleware is outermost. `Invocation.Phase()` distinguishes
 forward from unwind operations.
 
 **Pipeline-level middleware.** A definition MAY carry its own chain,
-`pipelinedef.Config.Middleware`; the generated constructor exposes it
-as a variadic, `NewXxx(h, mw...)`. It wraps only that pipeline's
+`pipelinedef.Config.Middleware`, set on a generated constructor with the
+`pipelinedef.WithMiddleware` option: `NewXxx(h, pipelinedef.WithMiddleware(mw...))`.
+It wraps only that pipeline's
 operations, forward and unwind alike, and composes inside the
 engine-level chain:
 

@@ -53,8 +53,8 @@ Published protobuf extensions MUST use globally allocated extension numbers.
 - one handler interface, `XxxHandlers`: a method per Step named after
   the Step, `Unwind<Step>` for each Step that unwinds, and `ReduceOutput` /
   `ReduceFailure` when the pipeline declares outputs,
-- the Pipeline constructor, `NewXxx(h XxxHandlers, mw ...durable.Middleware)`;
-  the variadic is the pipeline's own middleware chain
+- the Pipeline constructor, `NewXxx(h XxxHandlers, opts ...pipelinedef.Option)`;
+  `pipelinedef.WithMiddleware` is the pipeline's own middleware chain
   ([04-engine](04-engine.md#middleware)),
 - `ReduceXxxOutput(h, view)` and `ReduceXxxFailure(h, view)`, the folds the
   engine reduces through and reducer tests call,

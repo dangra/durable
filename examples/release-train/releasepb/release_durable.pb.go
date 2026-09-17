@@ -114,13 +114,12 @@ type DeployServiceDefinition struct {
 }
 
 // NewDeployService assembles the "deploy-service" pipeline definition
-// from its handlers. mw wraps this pipeline's operations alone, forward and
-// unwind alike, inside any engine-level middleware; the first is outermost.
-func NewDeployService(h DeployServiceHandlers, mw ...durable.Middleware) *DeployServiceDefinition {
-	return &DeployServiceDefinition{def: pipelinedef.New(pipelinedef.Config{
-		ID:         "deploy-service",
-		Middleware: mw,
-		NewInput:   func() proto.Message { return &DeployServiceInput{} },
+// from its handlers; opts (pipelinedef.WithMiddleware) configure what the
+// proto cannot declare.
+func NewDeployService(h DeployServiceHandlers, opts ...pipelinedef.Option) *DeployServiceDefinition {
+	cfg := pipelinedef.Config{
+		ID:       "deploy-service",
+		NewInput: func() proto.Message { return &DeployServiceInput{} },
 		Reduce: func(view durable.ReduceView) proto.Message {
 			return ReduceDeployServiceOutput(h, view)
 		},
@@ -178,7 +177,11 @@ func NewDeployService(h DeployServiceHandlers, mw ...durable.Middleware) *Deploy
 				},
 			},
 		},
-	})}
+	}
+	for _, o := range opts {
+		o(&cfg)
+	}
+	return &DeployServiceDefinition{def: pipelinedef.New(cfg)}
 }
 
 // Bind registers the definition with an engine. It is allowed only before
@@ -372,13 +375,12 @@ type ReleaseTrainDefinition struct {
 }
 
 // NewReleaseTrain assembles the "release-train" pipeline definition
-// from its handlers. mw wraps this pipeline's operations alone, forward and
-// unwind alike, inside any engine-level middleware; the first is outermost.
-func NewReleaseTrain(h ReleaseTrainHandlers, mw ...durable.Middleware) *ReleaseTrainDefinition {
-	return &ReleaseTrainDefinition{def: pipelinedef.New(pipelinedef.Config{
-		ID:         "release-train",
-		Middleware: mw,
-		NewInput:   func() proto.Message { return &ReleaseTrainInput{} },
+// from its handlers; opts (pipelinedef.WithMiddleware) configure what the
+// proto cannot declare.
+func NewReleaseTrain(h ReleaseTrainHandlers, opts ...pipelinedef.Option) *ReleaseTrainDefinition {
+	cfg := pipelinedef.Config{
+		ID:       "release-train",
+		NewInput: func() proto.Message { return &ReleaseTrainInput{} },
 		Steps: []pipelinedef.Step{
 			{
 				ID: "plan/v1",
@@ -410,7 +412,11 @@ func NewReleaseTrain(h ReleaseTrainHandlers, mw ...durable.Middleware) *ReleaseT
 				},
 			},
 		},
-	})}
+	}
+	for _, o := range opts {
+		o(&cfg)
+	}
+	return &ReleaseTrainDefinition{def: pipelinedef.New(cfg)}
 }
 
 // Bind registers the definition with an engine. It is allowed only before

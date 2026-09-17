@@ -12,7 +12,7 @@ analogy with Go's `net/http`; the normative contracts live in
 | `http.Handler` | `durable.Handler` — the uniform type-erased operation `func(ctx, Invocation) (proto.Message, error)` |
 | `http.HandlerFunc` | the generated per-pipeline handler interface's methods, erased by the constructor's adapters |
 | middleware `func(http.Handler) http.Handler` | `durable.Middleware`, installed engine-wide with `engine.WithMiddleware` |
-| wrapping one handler at mux registration, `mux.Handle(pattern, mw(h))` | pipeline-level middleware: `pipelinedef.Config.Middleware`, the generated `NewXxx(h, mw...)` variadic; composes inside the engine chain |
+| wrapping one handler at mux registration, `mux.Handle(pattern, mw(h))` | pipeline-level middleware: `pipelinedef.Config.Middleware`, set with `pipelinedef.WithMiddleware` on the generated constructor; composes inside the engine chain |
 | `ServeMux` and route patterns | the protobuf Pipeline topology; `StepID` plays the route pattern |
 | `*http.Request` | `durable.Invocation` — identity, attempt, phase, input, State lookup; an interface, so tests can fake it |
 | `http.ResponseWriter` | — (deliberately absent; see below) |

@@ -128,13 +128,12 @@ type CreateSnapshotDefinition struct {
 }
 
 // NewCreateSnapshot assembles the "create-snapshot" pipeline definition
-// from its handlers. mw wraps this pipeline's operations alone, forward and
-// unwind alike, inside any engine-level middleware; the first is outermost.
-func NewCreateSnapshot(h CreateSnapshotHandlers, mw ...durable.Middleware) *CreateSnapshotDefinition {
-	return &CreateSnapshotDefinition{def: pipelinedef.New(pipelinedef.Config{
-		ID:         "create-snapshot",
-		Middleware: mw,
-		NewInput:   func() proto.Message { return &CreateSnapshotInput{} },
+// from its handlers; opts (pipelinedef.WithMiddleware) configure what the
+// proto cannot declare.
+func NewCreateSnapshot(h CreateSnapshotHandlers, opts ...pipelinedef.Option) *CreateSnapshotDefinition {
+	cfg := pipelinedef.Config{
+		ID:       "create-snapshot",
+		NewInput: func() proto.Message { return &CreateSnapshotInput{} },
 		Reduce: func(view durable.ReduceView) proto.Message {
 			return ReduceCreateSnapshotOutput(h, view)
 		},
@@ -190,7 +189,11 @@ func NewCreateSnapshot(h CreateSnapshotHandlers, mw ...durable.Middleware) *Crea
 				},
 			},
 		},
-	})}
+	}
+	for _, o := range opts {
+		o(&cfg)
+	}
+	return &CreateSnapshotDefinition{def: pipelinedef.New(cfg)}
 }
 
 // Bind registers the definition with an engine. It is allowed only before

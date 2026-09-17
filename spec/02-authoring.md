@@ -262,12 +262,13 @@ type ProvisionMachineHandlers interface {
     ReduceOutput(*ProvisionMachine) *ProvisionMachineOutput
 }
 
-func NewProvisionMachine(h ProvisionMachineHandlers, mw ...durable.Middleware) *ProvisionMachineDefinition
+func NewProvisionMachine(h ProvisionMachineHandlers, opts ...pipelinedef.Option) *ProvisionMachineDefinition
 ```
 
-The variadic installs pipeline-level middleware, wrapping this
-pipeline's operations alone inside any engine-level chain (see
-[04-engine](04-engine.md#middleware)).
+The options configure what the proto cannot declare;
+`pipelinedef.WithMiddleware(mw...)` installs pipeline-level middleware,
+wrapping this pipeline's operations alone inside any engine-level chain
+(see [04-engine](04-engine.md#middleware)).
 
 One type implements the whole pipeline, so its dependencies are declared
 once; a Step the implementor lacks, a Step added to the proto included,
@@ -593,8 +594,8 @@ definition := machines.NewProvisionMachine(&handlers{cloud: c})
 
 The constructor takes one implementation of the pipeline's handler
 interface: a missing or mis-typed Step method, a Step added to the proto
-included, fails to compile. Middleware for this pipeline alone rides the
-variadic: `machines.NewProvisionMachine(&handlers{cloud: c}, notFoundIsPermanent)`.
+included, fails to compile. Middleware for this pipeline alone is an
+option: `machines.NewProvisionMachine(&handlers{cloud: c}, pipelinedef.WithMiddleware(notFoundIsPermanent))`.
 
 ---
 

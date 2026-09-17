@@ -66,8 +66,9 @@ type Config struct {
 	// Middleware wraps this pipeline's operations alone, forward and
 	// unwind alike (Invocation.Phase distinguishes them), inside any
 	// engine-level middleware: engine middleware is outermost, then these
-	// in order, first listed outermost, then the handler. Composition is
-	// fixed at Engine.Bind, which rejects a nil entry.
+	// in order, first listed outermost, then the handler. Generated
+	// constructors set it through WithMiddleware. Composition is fixed at
+	// Engine.Bind, which rejects a nil entry.
 	Middleware []durable.Middleware
 
 	// NewInput constructs an empty Input message; nil for an Input-less
@@ -122,4 +123,18 @@ func StepRef(id durable.StepID) durable.StepRef { return durable.StepRef{Step: i
 // Generated code exports one per state-producing Step.
 func StateStepRef[T proto.Message](id durable.StepID, new func() T) durable.StateStepRef[T] {
 	return durable.StateStepRef[T]{Step: id, New: new}
+}
+
+// Option configures a generated pipeline's Config at construction:
+// NewXxx(h, opts...). Options are the runtime knobs a proto cannot
+// declare; today that is the pipeline's own middleware.
+type Option func(*Config)
+
+// WithMiddleware installs middleware on this pipeline alone, wrapping
+// its operations, forward and unwind alike, inside any engine-level
+// middleware; the first listed is outermost. Repeated options append.
+func WithMiddleware(mw ...durable.Middleware) Option {
+	return func(c *Config) {
+		c.Middleware = append(c.Middleware, mw...)
+	}
 }

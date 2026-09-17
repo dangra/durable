@@ -67,7 +67,8 @@ type Config struct {
 	// unwind alike (Invocation.Phase distinguishes them), inside any
 	// engine-level middleware: engine middleware is outermost, then these
 	// in order, first listed outermost, then the handler. Generated
-	// constructors set it through WithMiddleware. Composition is fixed at
+	// packages set it through their WithMiddleware option, an alias of
+	// the one here. Composition is fixed at
 	// Engine.Bind, which rejects a nil entry.
 	Middleware []durable.Middleware
 
@@ -127,7 +128,9 @@ func StateStepRef[T proto.Message](id durable.StepID, new func() T) durable.Stat
 
 // Option configures a generated pipeline's Config at construction:
 // NewXxx(h, opts...). Options are the runtime knobs a proto cannot
-// declare; today that is the pipeline's own middleware.
+// declare; today that is the pipeline's own middleware. Generated
+// packages alias Option and WithMiddleware, so wiring code reaches them
+// without importing this package.
 type Option func(*Config)
 
 // WithMiddleware installs middleware on this pipeline alone, wrapping

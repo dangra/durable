@@ -14,6 +14,19 @@ import (
 	sync "sync"
 )
 
+// Option configures a pipeline of this package at construction,
+// NewXxx(h, opts...): the runtime knobs a proto cannot declare. It is
+// pipelinedef.Option, so the two are interchangeable.
+type Option = pipelinedef.Option
+
+// WithMiddleware installs middleware on the constructed pipeline alone,
+// wrapping its operations, forward and unwind alike, inside any
+// engine-level middleware; the first listed is outermost. Repeated
+// options append.
+func WithMiddleware(mw ...durable.Middleware) Option {
+	return pipelinedef.WithMiddleware(mw...)
+}
+
 // DeployService_ProvisionEnvStep is the typed reference to the state-producing step "provision-env/v1".
 var DeployService_ProvisionEnvStep = pipelinedef.StateStepRef("provision-env/v1", func() *DeployService_ProvisionEnv { return &DeployService_ProvisionEnv{} })
 
@@ -108,9 +121,9 @@ type DeployServiceDefinition struct {
 }
 
 // NewDeployService assembles the "deploy-service" pipeline definition
-// from its handlers; opts (pipelinedef.WithMiddleware) configure what the
-// proto cannot declare.
-func NewDeployService(h DeployServiceHandlers, opts ...pipelinedef.Option) *DeployServiceDefinition {
+// from its handlers; opts (WithMiddleware) configure what the proto
+// cannot declare.
+func NewDeployService(h DeployServiceHandlers, opts ...Option) *DeployServiceDefinition {
 	cfg := pipelinedef.Config{
 		ID:       "deploy-service",
 		NewInput: func() proto.Message { return &DeployServiceInput{} },

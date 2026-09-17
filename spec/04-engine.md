@@ -649,7 +649,9 @@ forward from unwind operations.
 
 **Pipeline-level middleware.** A definition MAY carry its own chain,
 `pipelinedef.Config.Middleware`, set on a generated constructor with the
-`pipelinedef.WithMiddleware` option: `NewXxx(h, pipelinedef.WithMiddleware(mw...))`.
+package's generated `WithMiddleware` option: `NewXxx(h, WithMiddleware(mw...))`
+(an alias of `pipelinedef.WithMiddleware`, so wiring code imports only
+the generated package).
 It wraps only that pipeline's
 operations, forward and unwind alike, and composes inside the
 engine-level chain:

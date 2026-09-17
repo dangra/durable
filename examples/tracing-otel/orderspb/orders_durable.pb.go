@@ -14,6 +14,19 @@ import (
 	sync "sync"
 )
 
+// Option configures a pipeline of this package at construction,
+// NewXxx(h, opts...): the runtime knobs a proto cannot declare. It is
+// pipelinedef.Option, so the two are interchangeable.
+type Option = pipelinedef.Option
+
+// WithMiddleware installs middleware on the constructed pipeline alone,
+// wrapping its operations, forward and unwind alike, inside any
+// engine-level middleware; the first listed is outermost. Repeated
+// options append.
+func WithMiddleware(mw ...durable.Middleware) Option {
+	return pipelinedef.WithMiddleware(mw...)
+}
+
 // FulfillOrder_ReserveStockStep is the typed reference to the state-producing step "reserve-stock/v1".
 var FulfillOrder_ReserveStockStep = pipelinedef.StateStepRef("reserve-stock/v1", func() *FulfillOrder_ReserveStock { return &FulfillOrder_ReserveStock{} })
 
@@ -108,9 +121,9 @@ type FulfillOrderDefinition struct {
 }
 
 // NewFulfillOrder assembles the "fulfill-order" pipeline definition
-// from its handlers; opts (pipelinedef.WithMiddleware) configure what the
-// proto cannot declare.
-func NewFulfillOrder(h FulfillOrderHandlers, opts ...pipelinedef.Option) *FulfillOrderDefinition {
+// from its handlers; opts (WithMiddleware) configure what the proto
+// cannot declare.
+func NewFulfillOrder(h FulfillOrderHandlers, opts ...Option) *FulfillOrderDefinition {
 	cfg := pipelinedef.Config{
 		ID:       "fulfill-order",
 		NewInput: func() proto.Message { return &FulfillOrderInput{} },

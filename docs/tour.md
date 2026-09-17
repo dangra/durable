@@ -594,7 +594,7 @@ lifecycle events (`observe.Observer`), and snapshots occupancy
 OpenTelemetry integration (per-attempt spans linked to the scheduling
 trace, metrics, log correlation, W3C Baggage relay), declared once at
 engine construction — or, for a concern that belongs to one pipeline,
-on that pipeline's constructor (`deploypb.NewDeployService(h, pipelinedef.WithMiddleware(mw))`),
+on that pipeline's constructor (`deploypb.NewDeployService(h, deploypb.WithMiddleware(mw))`),
 composed inside the engine's chain; [examples/tracing-otel](../examples/tracing-otel/)
 demonstrates it end to end.
 

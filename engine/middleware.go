@@ -10,8 +10,8 @@ import (
 // executes, forward and unwind alike; use Invocation.Phase to distinguish
 // them. The first middleware is the outermost, following the net/http
 // convention: WithMiddleware(a, b) yields a(b(handler)). Pipeline-level
-// middleware (pipelinedef.WithMiddleware on a generated constructor, or
-// pipelinedef.Config.Middleware) composes inside this chain: engine
+// middleware (a generated package's WithMiddleware constructor option,
+// or pipelinedef.Config.Middleware) composes inside this chain: engine
 // middleware is outermost.
 func WithMiddleware(mw ...durable.Middleware) Option {
 	return func(e *Engine) {

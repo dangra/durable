@@ -10,7 +10,6 @@ import (
 	"github.com/dangra/durable"
 	"github.com/dangra/durable/engine"
 	"github.com/dangra/durable/examples/machines/machinespb"
-	"github.com/dangra/durable/pipelinedef"
 	"github.com/dangra/durable/store/mem"
 	"google.golang.org/protobuf/proto"
 )
@@ -221,7 +220,7 @@ func TestPipelineMiddleware(t *testing.T) {
 	}
 	c := newCloud()
 	eng := engine.New(mem.New())
-	provision, err := machinespb.NewProvisionMachine(&handlers{cloud: c}, pipelinedef.WithMiddleware(counting)).Bind(eng)
+	provision, err := machinespb.NewProvisionMachine(&handlers{cloud: c}, machinespb.WithMiddleware(counting)).Bind(eng)
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
 	}

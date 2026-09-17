@@ -45,8 +45,8 @@
 //
 // Middleware. Handler and Middleware are the net/http-shaped operation
 // layer every attempt passes through (installed engine-wide with
-// engine.WithMiddleware, or on one pipeline with pipelinedef.WithMiddleware
-// on its generated constructor). AwaitRequest, AwaitTimeout, FailureInfo,
+// engine.WithMiddleware, or on one pipeline with the generated package's
+// WithMiddleware option on its constructor). AwaitRequest, AwaitTimeout, FailureInfo,
 // FailureCause, and FailureReason classify a handler's return the way
 // the engine will; PreemptedError and ErrEngineStopping name why an
 // attempt ctx died, for middleware that labels spans.
@@ -105,8 +105,8 @@
 //     the wiring side of an application.
 //   - pipelinedef is the type-erased pipeline description generated
 //     code builds and Engine.Bind validates; hand-rolled definitions use
-//     it too. Wiring code imports it for the constructor options
-//     (WithMiddleware); handler code never does.
+//     it too. Generated packages alias its constructor options (Option,
+//     WithMiddleware), so application code never imports it.
 //   - kernel is the shared vocabulary — identities, phases, outcomes,
 //     parks, failure records — that every other package builds on. This
 //     package aliases all of it, so user code never imports kernel.

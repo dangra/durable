@@ -91,7 +91,7 @@ eng := engine.New(st)
 deploy, err := deploypb.NewDeployService(&deployer{db: db, lb: lb}).Bind(eng)
 // deployer has a method per step — ProvisionEnv, RunMigrations,
 // ShiftTraffic — plus UnwindProvisionEnv, UnwindRunMigrations, and
-// Reduce; a step it lacks is a compile error.
+// ReduceOutput; a step it lacks is a compile error.
 // bind every pipeline, then:
 eng.Start(ctx)
 

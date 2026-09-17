@@ -167,7 +167,7 @@ func (h *snapshotter) RegisterSnapshot(ctx context.Context, inv snapshotspb.Crea
 	return &snapshotspb.CreateSnapshot_RegisterSnapshot{SnapshotId: id}, nil
 }
 
-func (h *snapshotter) Reduce(p *snapshotspb.CreateSnapshot) *snapshotspb.CreateSnapshotOutput {
+func (h *snapshotter) ReduceOutput(p *snapshotspb.CreateSnapshot) *snapshotspb.CreateSnapshotOutput {
 	reg, _ := p.State(snapshotspb.CreateSnapshot_RegisterSnapshotStep)
 	up, _ := p.State(snapshotspb.CreateSnapshot_UploadSnapshotStep)
 	return &snapshotspb.CreateSnapshotOutput{SnapshotId: reg.GetSnapshotId(), ObjectKey: up.GetObjectKey()}

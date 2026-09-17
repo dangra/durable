@@ -162,7 +162,7 @@ func Generate(p *protogen.Plugin) error {
 			methods[method] = by
 		}
 		if pl.output != nil {
-			claim("Reduce", "the output reducer")
+			claim("ReduceOutput", "the output reducer")
 		}
 		if pl.failureOutput != nil {
 			claim("ReduceFailure", "the failure reducer")
@@ -278,7 +278,7 @@ func emitPipeline(g *protogen.GeneratedFile, pl *pipelineDecl) {
 	emitInvocationAlias(g, pl)
 	emitHandlers(g, pl)
 	if pl.output != nil {
-		emitReduceHelper(g, pl, "", pl.output)
+		emitReduceHelper(g, pl, "Output", pl.output)
 	}
 	if pl.failureOutput != nil {
 		emitReduceHelper(g, pl, "Failure", pl.failureOutput)
@@ -387,10 +387,10 @@ func emitHandlers(g *protogen.GeneratedFile, pl *pipelineDecl) {
 		}
 	}
 	if pl.output != nil {
-		g.P("// Reduce produces the pipeline output from the immutable input and")
+		g.P("// ReduceOutput produces the pipeline output from the immutable input and")
 		g.P("// committed step states on success. It must be pure: deterministic,")
 		g.P("// side-effect free, synchronous, and non-failing.")
-		g.P("Reduce(*", g.QualifiedGoIdent(pl.msg.GoIdent), ") *", g.QualifiedGoIdent(pl.output.GoIdent))
+		g.P("ReduceOutput(*", g.QualifiedGoIdent(pl.msg.GoIdent), ") *", g.QualifiedGoIdent(pl.output.GoIdent))
 	}
 	if pl.failureOutput != nil {
 		g.P("// ReduceFailure produces the pipeline failure output from the immutable")
@@ -403,7 +403,7 @@ func emitHandlers(g *protogen.GeneratedFile, pl *pipelineDecl) {
 	_ = name
 }
 
-// emitReduceHelper emits Reduce<Pipeline>[Failure](h, view): the fold the
+// emitReduceHelper emits Reduce<Pipeline>Output/Failure(h, view): the fold the
 // engine reduces through and a reducer unit test calls with a
 // durabletest.NewInvocation (which is also a durable.ReduceView).
 func emitReduceHelper(g *protogen.GeneratedFile, pl *pipelineDecl, kind string, out *protogen.Message) {
@@ -500,7 +500,7 @@ func emitDefinition(g *protogen.GeneratedFile, pl *pipelineDecl) {
 	}
 	if pl.output != nil {
 		g.P("Reduce: func(view ", g.QualifiedGoIdent(durablePkg.Ident("ReduceView")), ") ", protoMsg, " {")
-		g.P("return Reduce", name, "(h, view)")
+		g.P("return Reduce", name, "Output(h, view)")
 		g.P("},")
 	}
 	if pl.failureOutput != nil {

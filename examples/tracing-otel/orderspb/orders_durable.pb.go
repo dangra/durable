@@ -52,20 +52,20 @@ type FulfillOrderHandlers interface {
 	UnwindChargePayment(ctx context.Context, inv FulfillOrderInvocation) error
 	// Ship runs step "ship/v1".
 	Ship(ctx context.Context, inv FulfillOrderInvocation) (*FulfillOrder_Ship, error)
-	// Reduce produces the pipeline output from the immutable input and
+	// ReduceOutput produces the pipeline output from the immutable input and
 	// committed step states on success. It must be pure: deterministic,
 	// side-effect free, synchronous, and non-failing.
-	Reduce(*FulfillOrder) *FulfillOrderOutput
+	ReduceOutput(*FulfillOrder) *FulfillOrderOutput
 }
 
-// ReduceFulfillOrder folds view through h.Reduce: the marker the reducer
+// ReduceFulfillOrderOutput folds view through h.ReduceOutput: the marker the reducer
 // receives reads its Input, States, and failures from view for the
 // duration of the call.
-func ReduceFulfillOrder(h FulfillOrderHandlers, view durable.ReduceView) *FulfillOrderOutput {
+func ReduceFulfillOrderOutput(h FulfillOrderHandlers, view durable.ReduceView) *FulfillOrderOutput {
 	x := &FulfillOrder{}
 	fulfillOrderViews.Store(x, view)
 	defer fulfillOrderViews.Delete(x)
-	return h.Reduce(x)
+	return h.ReduceOutput(x)
 }
 
 var fulfillOrderViews sync.Map
@@ -114,7 +114,7 @@ func NewFulfillOrder(h FulfillOrderHandlers) *FulfillOrderDefinition {
 		ID:       "fulfill-order",
 		NewInput: func() proto.Message { return &FulfillOrderInput{} },
 		Reduce: func(view durable.ReduceView) proto.Message {
-			return ReduceFulfillOrder(h, view)
+			return ReduceFulfillOrderOutput(h, view)
 		},
 		Steps: []pipelinedef.Step{
 			{

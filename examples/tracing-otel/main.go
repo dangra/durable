@@ -105,7 +105,7 @@ func (h *fulfillment) Ship(ctx context.Context, inv orderspb.FulfillOrderInvocat
 		durable.WithUserKind(), durable.WithReason("invalid-address"))
 }
 
-func (h *fulfillment) Reduce(o *orderspb.FulfillOrder) *orderspb.FulfillOrderOutput {
+func (h *fulfillment) ReduceOutput(o *orderspb.FulfillOrder) *orderspb.FulfillOrderOutput {
 	s, _ := o.State(orderspb.FulfillOrder_ShipStep)
 	return &orderspb.FulfillOrderOutput{ShipmentId: s.GetShipmentId()}
 }

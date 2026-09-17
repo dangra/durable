@@ -537,3 +537,65 @@ func TestCascadeSurvivesRestart(t *testing.T) {
 		t.Fatalf("child Wait = %+v, %v; want canceled with the parent's cause", res, err)
 	}
 }
+
+// holdingStore is a driver.Store that, after applying the transition
+// hold selects, blocks until released: it widens the window between an
+// attempt's reservation and its registration for preemption.
+type holdingStore struct {
+	driver.Store
+	hold    func(driver.Transition) bool
+	held    chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (s *holdingStore) ApplyTransition(ctx context.Context, id durable.RunID, t driver.Transition) error {
+	err := s.Store.ApplyTransition(ctx, id, t)
+	if err == nil && s.hold(t) {
+		s.once.Do(func() {
+			close(s.held)
+			<-s.release
+		})
+	}
+	return err
+}
+
+// A cancel request that lands after the worker read the record and
+// reserved the attempt, but before the attempt registered for
+// preemption, still cuts the attempt: it starts with its context
+// already canceled instead of running to its own end.
+func TestCancelBetweenReservationAndRegistrationCutsTheAttempt(t *testing.T) {
+	store := &holdingStore{
+		Store:   mem.New(),
+		hold:    func(tr driver.Transition) bool { return tr.Cursor.StepID == "late/v1" },
+		held:    make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	def := pipelinedef.New(pipelinedef.Config{
+		ID: "late-cancel",
+		Steps: []pipelinedef.Step{stateless("late/v1", func(ctx context.Context, inv durable.Invocation) error {
+			<-ctx.Done()
+			return ctx.Err()
+		})},
+	})
+	_, pipes := startEngine(t, store, def)
+	run, _, err := pipes[0].Schedule(context.Background(), "r", nil)
+	if err != nil {
+		t.Fatalf("Schedule: %v", err)
+	}
+	select {
+	case <-store.held:
+	case <-time.After(5 * time.Second):
+		t.Fatal("attempt reservation never reached the store")
+	}
+	if err := run.Cancel(context.Background(), "late"); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	close(store.release)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	res, err := run.Wait(ctx)
+	if err != nil || !res.Canceled() || res.Failure.Message != "late" {
+		t.Fatalf("Wait = %+v, %v; want canceled with cause late", res, err)
+	}
+}

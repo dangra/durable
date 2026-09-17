@@ -275,6 +275,14 @@ type Engine struct {
 	started       bool
 	invalid       map[durable.RunID]*InvalidRunError
 	attemptCancel map[durable.RunID]attemptHandle
+	// pendingPreempt holds the cause of a cancel request that found no
+	// attempt registered for its Run. The Run's worker may have read
+	// its record before the request landed and be reserving a forward
+	// attempt on that stale read; attemptContext applies the cause when
+	// the attempt registers, so the request cuts it as if it had been
+	// in flight. An entry is consumed by that registration or dropped
+	// at terminality.
+	pendingPreempt map[durable.RunID]string
 	// dirty marks the Runs whose store record changed under their
 	// worker's carried copy — today only by a cancel request, which goes
 	// through the engine. The worker takes the mark each iteration and
@@ -320,15 +328,16 @@ type Engine struct {
 // scheduling is accepted.
 func New(store driver.Store, opts ...Option) *Engine {
 	e := &Engine{
-		store:         store,
-		clock:         wallClock{},
-		logger:        slog.Default(),
-		retry:         defaultRetryPolicy,
-		textLimit:     DefaultTextLimit,
-		invalid:       make(map[durable.RunID]*InvalidRunError),
-		attemptCancel: make(map[durable.RunID]attemptHandle),
-		classCapacity: make(map[string]int),
-		awaitTimers:   make(map[durable.RunID]chan struct{}),
+		store:          store,
+		clock:          wallClock{},
+		logger:         slog.Default(),
+		retry:          defaultRetryPolicy,
+		textLimit:      DefaultTextLimit,
+		invalid:        make(map[durable.RunID]*InvalidRunError),
+		attemptCancel:  make(map[durable.RunID]attemptHandle),
+		pendingPreempt: make(map[durable.RunID]string),
+		classCapacity:  make(map[string]int),
+		awaitTimers:    make(map[durable.RunID]chan struct{}),
 
 		runClassCapacity: make(map[string]int),
 		runClassQueue:    make(map[string]int),
@@ -701,12 +710,20 @@ func inAttempt(ctx context.Context) bool {
 }
 
 // attemptContext derives the per-attempt handler context and registers its
-// cancel so a cancellation request can preempt the in-flight attempt.
+// cancel so a cancellation request can preempt the in-flight attempt. A
+// request that arrived before the registration, while the worker was
+// reserving the attempt on a record read before the request landed, is
+// applied here: a forward attempt starts already cut.
 func (e *Engine) attemptContext(id durable.RunID, phase durable.Phase) (context.Context, func()) {
 	ctx, cancel := context.WithCancelCause(context.WithValue(e.baseCtx, attemptKey{}, id))
 	e.mu.Lock()
 	e.attemptCancel[id] = attemptHandle{cancel: cancel, phase: phase}
+	cause, pending := e.pendingPreempt[id]
+	delete(e.pendingPreempt, id)
 	e.mu.Unlock()
+	if pending && phase == durable.PhaseForward {
+		cancel(&durable.PreemptedError{Cause: cause})
+	}
 	return ctx, func() {
 		e.mu.Lock()
 		delete(e.attemptCancel, id)
@@ -719,10 +736,15 @@ func (e *Engine) attemptContext(id durable.RunID, phase durable.Phase) (context.
 // if any, with a *PreemptedError cause carrying the request's cause.
 // The attempt resolves as canceled unless it returns success (see
 // runForward). An unwind attempt is never preempted: during a
-// cancellation the unwind is the work.
+// cancellation the unwind is the work. With no attempt registered the
+// cause is left for the next registration (see attemptContext): the
+// worker may be between reserving an attempt and registering it.
 func (e *Engine) preemptAttempt(id durable.RunID, cause string) {
 	e.mu.Lock()
 	h, ok := e.attemptCancel[id]
+	if !ok {
+		e.pendingPreempt[id] = cause
+	}
 	e.mu.Unlock()
 	if ok && h.phase == durable.PhaseForward {
 		h.cancel(&durable.PreemptedError{Cause: cause})
@@ -1010,6 +1032,9 @@ func (e *Engine) completeRun(rec *driver.RunRecord) {
 		"elapsed", rec.UpdatedAt.Sub(rec.CreatedAt))
 	e.emitRunTerminal(rec)
 	e.releaseRunClass(rec.RunID)
+	e.mu.Lock()
+	delete(e.pendingPreempt, rec.RunID)
+	e.mu.Unlock()
 	e.waiters.Notify(rec.RunID)
 	e.awaitTargetDone(rec.RunID)
 }

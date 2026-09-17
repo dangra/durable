@@ -412,8 +412,10 @@ for a Step never attempted), and the Run's Failure names the Step.
 
 An attempt is executing: its context is canceled, with `context.Cause`
 a `*PreemptedError` carrying the request's cause — informational, for
-middleware that labels spans; a handler needs only `ctx.Done()`. What
-the attempt returns decides the Step, never the Run:
+middleware that labels spans; a handler needs only `ctx.Done()`. An
+attempt the worker was reserving on a record read before the request
+landed starts with its context already canceled. What the attempt
+returns decides the Step, never the Run:
 
 - success commits the Step's State as usual, and the Step unwinds with
   the others;

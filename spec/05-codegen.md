@@ -53,7 +53,11 @@ Published protobuf extensions MUST use globally allocated extension numbers.
 - one handler interface, `XxxHandlers`: a method per Step named after
   the Step, `Unwind<Step>` for each Step that unwinds, and `ReduceOutput` /
   `ReduceFailure` when the pipeline declares outputs,
-- the Pipeline constructor, `NewXxx(h XxxHandlers)`,
+- the Pipeline constructor, `NewXxx(h XxxHandlers, opts ...Option)`, and
+  once per package the `Option` alias of `pipelinedef.Option` and the
+  `WithMiddleware(mw...)` option, the pipeline's own middleware chain
+  ([04-engine](04-engine.md#middleware)); wiring code never imports
+  pipelinedef,
 - `ReduceXxxOutput(h, view)` and `ReduceXxxFailure(h, view)`, the folds the
   engine reduces through and reducer tests call,
 - runtime methods on the Pipeline marker type,

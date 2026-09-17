@@ -18,7 +18,10 @@ type Handler func(ctx context.Context, inv Invocation) (proto.Message, error)
 
 // Middleware wraps a Handler — durable's analog of
 // func(http.Handler) http.Handler. Use it for cross-cutting concerns such
-// as logging, metrics, tracing spans, or per-operation timeouts.
+// as logging, metrics, tracing spans, or per-operation timeouts. It is
+// installed engine-wide with engine.WithMiddleware, or on one pipeline
+// with its generated package's WithMiddleware constructor option; the
+// engine chain is outermost, and both are composed once at Engine.Bind.
 //
 // Middleware runs once per attempt, inside the durable attempt
 // reservation: it inherits the operation's at-least-once semantics and

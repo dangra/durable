@@ -63,6 +63,15 @@ type Config struct {
 	// share its capacity.
 	RunClass string
 
+	// Middleware wraps this pipeline's operations alone, forward and
+	// unwind alike (Invocation.Phase distinguishes them), inside any
+	// engine-level middleware: engine middleware is outermost, then these
+	// in order, first listed outermost, then the handler. Generated
+	// packages set it through their WithMiddleware option, an alias of
+	// the one here. Composition is fixed at
+	// Engine.Bind, which rejects a nil entry.
+	Middleware []durable.Middleware
+
 	// NewInput constructs an empty Input message; nil for an Input-less
 	// pipeline.
 	NewInput func() proto.Message
@@ -84,12 +93,13 @@ type Definition struct {
 	cfg Config
 }
 
-// New wraps cfg. It copies the Steps and Mutexes slices so later mutation
-// of cfg does not reach the Definition, and applies the pipeline-level
-// concurrency class to steps that declare none.
+// New wraps cfg. It copies the Steps, Mutexes, and Middleware slices so
+// later mutation of cfg does not reach the Definition, and applies the
+// pipeline-level concurrency class to steps that declare none.
 func New(cfg Config) *Definition {
 	cfg.Steps = append([]Step(nil), cfg.Steps...)
 	cfg.Mutexes = append([]string(nil), cfg.Mutexes...)
+	cfg.Middleware = append([]durable.Middleware(nil), cfg.Middleware...)
 	for i := range cfg.Steps {
 		if cfg.Steps[i].ConcurrencyClass == "" {
 			cfg.Steps[i].ConcurrencyClass = cfg.ConcurrencyClass
@@ -103,7 +113,7 @@ func (d *Definition) ID() durable.PipelineID { return d.cfg.ID }
 
 // Config returns the description the Definition was built from, with the
 // concurrency-class default applied. The engine reads it at Bind; the
-// Steps slice is shared and must not be modified.
+// Steps and Middleware slices are shared and must not be modified.
 func (d *Definition) Config() Config { return d.cfg }
 
 // StepRef constructs the reference to a stateless Step. Generated code
@@ -114,4 +124,20 @@ func StepRef(id durable.StepID) durable.StepRef { return durable.StepRef{Step: i
 // Generated code exports one per state-producing Step.
 func StateStepRef[T proto.Message](id durable.StepID, new func() T) durable.StateStepRef[T] {
 	return durable.StateStepRef[T]{Step: id, New: new}
+}
+
+// Option configures a generated pipeline's Config at construction:
+// NewXxx(h, opts...). Options are the runtime knobs a proto cannot
+// declare; today that is the pipeline's own middleware. Generated
+// packages alias Option and WithMiddleware, so wiring code reaches them
+// without importing this package.
+type Option func(*Config)
+
+// WithMiddleware installs middleware on this pipeline alone, wrapping
+// its operations, forward and unwind alike, inside any engine-level
+// middleware; the first listed is outermost. Repeated options append.
+func WithMiddleware(mw ...durable.Middleware) Option {
+	return func(c *Config) {
+		c.Middleware = append(c.Middleware, mw...)
+	}
 }

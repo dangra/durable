@@ -262,8 +262,13 @@ type ProvisionMachineHandlers interface {
     ReduceOutput(*ProvisionMachine) *ProvisionMachineOutput
 }
 
-func NewProvisionMachine(h ProvisionMachineHandlers) *ProvisionMachineDefinition
+func NewProvisionMachine(h ProvisionMachineHandlers, opts ...Option) *ProvisionMachineDefinition
 ```
+
+The options configure what the proto cannot declare; the generated
+package's `WithMiddleware(mw...)` installs pipeline-level middleware,
+wrapping this pipeline's operations alone inside any engine-level chain
+(see [04-engine](04-engine.md#middleware)).
 
 One type implements the whole pipeline, so its dependencies are declared
 once; a Step the implementor lacks, a Step added to the proto included,
@@ -584,27 +589,20 @@ Purity makes this safe.
 Example:
 
 ```go
-definition := machines.NewProvisionMachine(
-    &validate{},
-    &selectHost{},
-    &reserveCapacity{},
-    &createMachine{},
-    reduceProvisionMachine,
-)
+definition := machines.NewProvisionMachine(&handlers{cloud: c})
 ```
 
-The positional constructor is type-safe because each position expects a distinct generated handler interface.
-
-Accidentally swapping two unrelated Step handlers fails to compile.
+The constructor takes one implementation of the pipeline's handler
+interface: a missing or mis-typed Step method, a Step added to the proto
+included, fails to compile. Middleware for this pipeline alone is an
+option: `machines.NewProvisionMachine(&handlers{cloud: c}, machines.WithMiddleware(notFoundIsPermanent))`.
 
 ---
 
 ## Bind
 
 ```go
-provision, err := machines.NewProvisionMachine(
-    ...,
-).Bind(eng)
+provision, err := machines.NewProvisionMachine(&handlers{cloud: c}).Bind(eng)
 ```
 
 returns:

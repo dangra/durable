@@ -188,8 +188,13 @@ func Generate(p *protogen.Plugin) error {
 		}
 		byFile[pl.file] = append(byFile[pl.file], pl)
 	}
+	// The constructor options are package-level, emitted once per Go
+	// package into its first generated file.
+	optionsDone := make(map[protogen.GoImportPath]bool)
 	for _, f := range fileOrder {
-		emitFile(p, f, byFile[f])
+		emitOptions := !optionsDone[f.GoImportPath]
+		optionsDone[f.GoImportPath] = true
+		emitFile(p, f, byFile[f], emitOptions)
 	}
 	return nil
 }
@@ -252,7 +257,7 @@ func lowerFirst(s string) string {
 // pipeline the proto file declares: step references, invocation types,
 // handler interfaces, definition constructors, reducer plumbing, and the
 // bound pipeline, run, and result types.
-func emitFile(p *protogen.Plugin, f *protogen.File, pipelines []*pipelineDecl) {
+func emitFile(p *protogen.Plugin, f *protogen.File, pipelines []*pipelineDecl, emitOptions bool) {
 	filename := f.GeneratedFilenamePrefix + "_durable.pb.go"
 	g := p.NewGeneratedFile(filename, f.GoImportPath)
 
@@ -266,9 +271,32 @@ func emitFile(p *protogen.Plugin, f *protogen.File, pipelines []*pipelineDecl) {
 	g.P("package ", f.GoPackageName)
 	g.P()
 
+	if emitOptions {
+		emitConstructorOptions(g)
+	}
 	for _, pl := range pipelines {
 		emitPipeline(g, pl)
 	}
+}
+
+// emitConstructorOptions emits the package's constructor options: Option
+// is an alias of pipelinedef.Option and WithMiddleware forwards to
+// pipelinedef.WithMiddleware, so wiring code configures a generated
+// pipeline without importing pipelinedef.
+func emitConstructorOptions(g *protogen.GeneratedFile) {
+	g.P("// Option configures a pipeline of this package at construction,")
+	g.P("// NewXxx(h, opts...): the runtime knobs a proto cannot declare. It is")
+	g.P("// pipelinedef.Option, so the two are interchangeable.")
+	g.P("type Option = ", g.QualifiedGoIdent(defPkg.Ident("Option")))
+	g.P()
+	g.P("// WithMiddleware installs middleware on the constructed pipeline alone,")
+	g.P("// wrapping its operations, forward and unwind alike, inside any")
+	g.P("// engine-level middleware; the first listed is outermost. Repeated")
+	g.P("// options append.")
+	g.P("func WithMiddleware(mw ...", g.QualifiedGoIdent(durablePkg.Ident("Middleware")), ") Option {")
+	g.P("return ", g.QualifiedGoIdent(defPkg.Ident("WithMiddleware")), "(mw...)")
+	g.P("}")
+	g.P()
 }
 
 func emitPipeline(g *protogen.GeneratedFile, pl *pipelineDecl) {
@@ -478,9 +506,10 @@ func emitDefinition(g *protogen.GeneratedFile, pl *pipelineDecl) {
 	g.P()
 
 	g.P("// New", name, " assembles the ", strconv(pl.opts.GetId()), " pipeline definition")
-	g.P("// from its handlers.")
-	g.P("func New", name, "(h ", pl.handlersName(), ") *", name, "Definition {")
-	g.P("return &", name, "Definition{def: ", g.QualifiedGoIdent(defPkg.Ident("New")), "(", g.QualifiedGoIdent(defPkg.Ident("Config")), "{")
+	g.P("// from its handlers; opts (WithMiddleware) configure what the proto")
+	g.P("// cannot declare.")
+	g.P("func New", name, "(h ", pl.handlersName(), ", opts ...Option) *", name, "Definition {")
+	g.P("cfg := ", g.QualifiedGoIdent(defPkg.Ident("Config")), "{")
 	g.P("ID: ", strconv(pl.opts.GetId()), ",")
 	if ms := pl.opts.GetMutexes(); len(ms) > 0 {
 		quoted := make([]string, len(ms))
@@ -545,7 +574,11 @@ func emitDefinition(g *protogen.GeneratedFile, pl *pipelineDecl) {
 		g.P("},")
 	}
 	g.P("},")
-	g.P("})}")
+	g.P("}")
+	g.P("for _, o := range opts {")
+	g.P("o(&cfg)")
+	g.P("}")
+	g.P("return &", name, "Definition{def: ", g.QualifiedGoIdent(defPkg.Ident("New")), "(cfg)}")
 	g.P("}")
 	g.P()
 

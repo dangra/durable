@@ -35,6 +35,7 @@ func TestBindValidatesTheDefinition(t *testing.T) {
 		{"no run adapter", pipelinedef.Config{ID: "p", Steps: []pipelinedef.Step{{ID: "s/v1"}}}, "no Run adapter"},
 		{"unwind without adapter", pipelinedef.Config{ID: "p", Steps: []pipelinedef.Step{{ID: "s/v1", Run: run, Unwind: true}}}, "disagree"},
 		{"adapter without unwind", pipelinedef.Config{ID: "p", Steps: []pipelinedef.Step{{ID: "s/v1", Run: run, UnwindFunc: unwind}}}, "disagree"},
+		{"nil middleware", pipelinedef.Config{ID: "p", Middleware: []durable.Middleware{nil}, Steps: []pipelinedef.Step{ok}}, "middleware 0 is nil"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -63,11 +64,17 @@ func TestDefinitionNormalizesAndCopies(t *testing.T) {
 		{ID: "a/v1"},
 		{ID: "b/v1", ConcurrencyClass: "own"},
 	}
-	def := pipelinedef.New(pipelinedef.Config{ID: "p", ConcurrencyClass: "default", Steps: steps})
+	passthrough := func(next durable.Handler) durable.Handler { return next }
+	mws := []durable.Middleware{passthrough}
+	def := pipelinedef.New(pipelinedef.Config{ID: "p", ConcurrencyClass: "default", Steps: steps, Middleware: mws})
 	steps[0].ID = "mutated"
+	mws[0] = nil
 	got := def.Config().Steps
 	if got[0].ID != "a/v1" {
 		t.Fatal("New must copy the Steps slice")
+	}
+	if got := def.Config().Middleware; len(got) != 1 || got[0] == nil {
+		t.Fatal("New must copy the Middleware slice")
 	}
 	if got[0].ConcurrencyClass != "default" || got[1].ConcurrencyClass != "own" {
 		t.Fatalf("class defaulting: %+v", got)

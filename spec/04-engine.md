@@ -647,6 +647,29 @@ engine.WithMiddleware(logging, metrics)
 The first middleware is outermost. `Invocation.Phase()` distinguishes
 forward from unwind operations.
 
+**Pipeline-level middleware.** A definition MAY carry its own chain,
+`pipelinedef.Config.Middleware`, set on a generated constructor with the
+package's generated `WithMiddleware` option: `NewXxx(h, WithMiddleware(mw...))`
+(an alias of `pipelinedef.WithMiddleware`, so wiring code imports only
+the generated package).
+It wraps only that pipeline's
+operations, forward and unwind alike, and composes inside the
+engine-level chain:
+
+```text
+engine[0](… engine[n](pipeline[0](… pipeline[m](handler))))
+```
+
+Engine middleware is outermost; within each chain the first listed is
+outermost. A concern that belongs to one pipeline — treating a store's
+not-found error as a permanent failure of any forward operation of that
+pipeline, say — is declared on that pipeline and never reaches another
+bound to the same Engine.
+
+Composition is fixed at `Engine.Bind`: the wrapper functions run once
+per Step and phase, and the composed operation runs once per attempt.
+Bind rejects a nil middleware entry.
+
 Middleware contract:
 
 - Middleware runs once per attempt, inside the durable attempt
@@ -662,7 +685,8 @@ Middleware contract:
   operation unresolved.
 - The Reducer is pure, not an operation, and is never wrapped.
 
-Per-Step middleware composition is outside v1.1.
+Per-Step middleware composition is outside v1.1; a pipeline-level
+middleware that switches on `Invocation.StepID()` covers the need.
 
 See the non-normative [net/http analogy note](http-analogy.md) for the
 design rationale.

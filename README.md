@@ -160,7 +160,9 @@ packages the OpenTelemetry integration: a span per attempt linked (not
 parented) to the trace that scheduled the Run, metrics with
 durable-scale histogram buckets, `trace_id`/`span_id` log correlation,
 and an opt-in W3C Baggage relay. Everything is declared once, at engine
-construction:
+construction; a concern that belongs to one pipeline is declared once
+on that pipeline's constructor instead, as
+`machinespb.NewProvisionMachine(h, machinespb.WithMiddleware(notFoundIsPermanent))`:
 
 ```go
 obs, _ := durableotel.NewObserver()

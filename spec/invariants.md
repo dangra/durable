@@ -237,3 +237,5 @@ Part of the [`durable` specification](README.md). This list is append-only; inva
 117. The operation a cancellation resolves keeps the attempts it had reserved and carries the cancellation on its record; the Run's Failure names its Step.
 
 118. An unwind attempt's context is never canceled for a cancellation request; a request on a Run in unwind is recorded and changes nothing.
+
+119. Pipeline-level middleware wraps only its own pipeline's operations, forward and unwind alike, and composes inside the engine-level chain — engine middleware outermost, then the pipeline's own in declaration order, then the handler; composition is fixed at Bind.

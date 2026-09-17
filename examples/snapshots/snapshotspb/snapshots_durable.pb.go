@@ -14,6 +14,19 @@ import (
 	sync "sync"
 )
 
+// Option configures a pipeline of this package at construction,
+// NewXxx(h, opts...): the runtime knobs a proto cannot declare. It is
+// pipelinedef.Option, so the two are interchangeable.
+type Option = pipelinedef.Option
+
+// WithMiddleware installs middleware on the constructed pipeline alone,
+// wrapping its operations, forward and unwind alike, inside any
+// engine-level middleware; the first listed is outermost. Repeated
+// options append.
+func WithMiddleware(mw ...durable.Middleware) Option {
+	return pipelinedef.WithMiddleware(mw...)
+}
+
 // CreateSnapshot_FreezeVolumeStep is the typed reference to the state-producing step "freeze-volume/v1".
 var CreateSnapshot_FreezeVolumeStep = pipelinedef.StateStepRef("freeze-volume/v1", func() *CreateSnapshot_FreezeVolume { return &CreateSnapshot_FreezeVolume{} })
 
@@ -128,9 +141,10 @@ type CreateSnapshotDefinition struct {
 }
 
 // NewCreateSnapshot assembles the "create-snapshot" pipeline definition
-// from its handlers.
-func NewCreateSnapshot(h CreateSnapshotHandlers) *CreateSnapshotDefinition {
-	return &CreateSnapshotDefinition{def: pipelinedef.New(pipelinedef.Config{
+// from its handlers; opts (WithMiddleware) configure what the proto
+// cannot declare.
+func NewCreateSnapshot(h CreateSnapshotHandlers, opts ...Option) *CreateSnapshotDefinition {
+	cfg := pipelinedef.Config{
 		ID:       "create-snapshot",
 		NewInput: func() proto.Message { return &CreateSnapshotInput{} },
 		Reduce: func(view durable.ReduceView) proto.Message {
@@ -188,7 +202,11 @@ func NewCreateSnapshot(h CreateSnapshotHandlers) *CreateSnapshotDefinition {
 				},
 			},
 		},
-	})}
+	}
+	for _, o := range opts {
+		o(&cfg)
+	}
+	return &CreateSnapshotDefinition{def: pipelinedef.New(cfg)}
 }
 
 // Bind registers the definition with an engine. It is allowed only before

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/dangra/durable/engine"
 	"github.com/dangra/durable/examples/machines/machinespb"
 	"github.com/dangra/durable/store/mem"
+	"google.golang.org/protobuf/proto"
 )
 
 func startProvision(t *testing.T, c *cloud) *machinespb.ProvisionMachinePipeline {
@@ -203,5 +205,37 @@ func TestLifecycleMutex(t *testing.T) {
 	defer c.mu.Unlock()
 	if len(c.released) == 0 || c.released[len(c.released)-1] != "machine-9" {
 		t.Fatalf("released = %v, want machine-9", c.released)
+	}
+}
+
+// TestPipelineMiddleware passes a middleware through the generated
+// constructor: it wraps this pipeline's operations alone.
+func TestPipelineMiddleware(t *testing.T) {
+	var wrapped atomic.Int32
+	counting := func(next durable.Handler) durable.Handler {
+		return func(ctx context.Context, inv durable.Invocation) (proto.Message, error) {
+			wrapped.Add(1)
+			return next(ctx, inv)
+		}
+	}
+	c := newCloud()
+	eng := engine.New(mem.New())
+	provision, err := machinespb.NewProvisionMachine(&handlers{cloud: c}, counting).Bind(eng)
+	if err != nil {
+		t.Fatalf("Bind: %v", err)
+	}
+	if err := eng.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer eng.Stop(context.Background())
+	run, _, err := provision.Schedule(context.Background(), "machine-mw", &machinespb.ProvisionMachineInput{Region: "ams", MemoryMb: 1024, Cpus: 1})
+	if err != nil {
+		t.Fatalf("Schedule: %v", err)
+	}
+	if res, err := run.Wait(context.Background()); err != nil || !res.Succeeded() {
+		t.Fatalf("Wait = %+v, %v; want success", res, err)
+	}
+	if n := wrapped.Load(); n != 4 {
+		t.Fatalf("middleware wrapped %d operations, want the pipeline's 4 steps", n)
 	}
 }

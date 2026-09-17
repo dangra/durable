@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"github.com/dangra/durable"
 	"github.com/dangra/durable/observe"
-	"github.com/dangra/durable/pipelinedef"
 	"github.com/dangra/durable/store/driver"
 	"log/slog"
 	"math"
@@ -1388,7 +1387,7 @@ func (e *Engine) runForward(rec *driver.RunRecord, def *boundDef, stepID durable
 	inv := e.invocation(rec, def, stepID, sr.Forward.Attempts, durable.PhaseForward)
 	inv.awaited = rec.Awaited.Clone()
 	opStart := e.clock.Now()
-	state, panicked, interrupted, preempted, err := e.invokeForward(sc, inv)
+	state, panicked, interrupted, preempted, err := e.invokeForward(sc.forward, inv)
 
 	if v := inv.takeViolation(); v != nil {
 		e.markInvalid(rec, stepID, v.Error())
@@ -1507,7 +1506,7 @@ func (e *Engine) runUnwind(rec *driver.RunRecord, def *boundDef, stepID durable.
 		inv.failure = &f
 	}
 	opStart := e.clock.Now()
-	panicked, interrupted, err := e.invokeUnwind(sc, inv)
+	panicked, interrupted, err := e.invokeUnwind(sc.unwind, inv)
 
 	if v := inv.takeViolation(); v != nil {
 		e.markInvalid(rec, stepID, v.Error())
@@ -1687,11 +1686,11 @@ func committedStates(rec *driver.RunRecord) map[durable.StepID][]byte {
 	return states
 }
 
-// invokeForward runs the forward handler under a fresh attempt context.
-// interrupted reports that shutdown killed that context before the
-// handler returned; the resolution treats an ordinary error from such an
-// attempt as an interruption, not a failure.
-func (e *Engine) invokeForward(sc *pipelinedef.Step, inv *attemptInvocation) (state proto.Message, panicked, interrupted bool, preempted *durable.PreemptedError, err error) {
+// invokeForward runs a step's composed forward operation under a fresh
+// attempt context. interrupted reports that shutdown killed that context
+// before the handler returned; the resolution treats an ordinary error
+// from such an attempt as an interruption, not a failure.
+func (e *Engine) invokeForward(h durable.Handler, inv *attemptInvocation) (state proto.Message, panicked, interrupted bool, preempted *durable.PreemptedError, err error) {
 	defer func() {
 		if p := recover(); p != nil {
 			panicked = true
@@ -1703,11 +1702,13 @@ func (e *Engine) invokeForward(sc *pipelinedef.Step, inv *attemptInvocation) (st
 	}()
 	ctx, done := e.attemptContext(inv.runID, durable.PhaseForward)
 	defer done()
-	state, err = e.wrap(durable.Handler(sc.Run))(ctx, inv)
+	state, err = h(ctx, inv)
 	return state, false, stoppedBy(ctx), preemptedBy(ctx), err
 }
 
-func (e *Engine) invokeUnwind(sc *pipelinedef.Step, inv *attemptInvocation) (panicked, interrupted bool, err error) {
+// invokeUnwind runs a step's composed unwind operation under a fresh
+// attempt context.
+func (e *Engine) invokeUnwind(h durable.Handler, inv *attemptInvocation) (panicked, interrupted bool, err error) {
 	defer func() {
 		if p := recover(); p != nil {
 			panicked = true
@@ -1717,9 +1718,6 @@ func (e *Engine) invokeUnwind(sc *pipelinedef.Step, inv *attemptInvocation) (pan
 				"panic", p, "stack", string(debug.Stack()))
 		}
 	}()
-	h := e.wrap(func(ctx context.Context, in durable.Invocation) (proto.Message, error) {
-		return nil, sc.UnwindFunc(ctx, in)
-	})
 	ctx, done := e.attemptContext(inv.runID, durable.PhaseUnwind)
 	defer done()
 	_, err = h(ctx, inv)

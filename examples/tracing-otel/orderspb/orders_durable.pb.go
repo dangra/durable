@@ -108,11 +108,13 @@ type FulfillOrderDefinition struct {
 }
 
 // NewFulfillOrder assembles the "fulfill-order" pipeline definition
-// from its handlers.
-func NewFulfillOrder(h FulfillOrderHandlers) *FulfillOrderDefinition {
+// from its handlers. mw wraps this pipeline's operations alone, forward and
+// unwind alike, inside any engine-level middleware; the first is outermost.
+func NewFulfillOrder(h FulfillOrderHandlers, mw ...durable.Middleware) *FulfillOrderDefinition {
 	return &FulfillOrderDefinition{def: pipelinedef.New(pipelinedef.Config{
-		ID:       "fulfill-order",
-		NewInput: func() proto.Message { return &FulfillOrderInput{} },
+		ID:         "fulfill-order",
+		Middleware: mw,
+		NewInput:   func() proto.Message { return &FulfillOrderInput{} },
 		Reduce: func(view durable.ReduceView) proto.Message {
 			return ReduceFulfillOrderOutput(h, view)
 		},

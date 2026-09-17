@@ -44,8 +44,9 @@
 // this package.
 //
 // Middleware. Handler and Middleware are the net/http-shaped operation
-// layer every attempt passes through (installed with
-// engine.WithMiddleware). AwaitRequest, AwaitTimeout, FailureInfo,
+// layer every attempt passes through (installed engine-wide with
+// engine.WithMiddleware, or on one pipeline through its generated
+// constructor). AwaitRequest, AwaitTimeout, FailureInfo,
 // FailureCause, and FailureReason classify a handler's return the way
 // the engine will; PreemptedError and ErrEngineStopping name why an
 // attempt ctx died, for middleware that labels spans.

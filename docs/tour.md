@@ -593,7 +593,9 @@ lifecycle events (`observe.Observer`), and snapshots occupancy
 [contrib/durableotel](../contrib/durableotel/) module packages the
 OpenTelemetry integration (per-attempt spans linked to the scheduling
 trace, metrics, log correlation, W3C Baggage relay), declared once at
-engine construction; [examples/tracing-otel](../examples/tracing-otel/)
+engine construction — or, for a concern that belongs to one pipeline,
+on that pipeline's constructor (`deploypb.NewDeployService(h, mw...)`),
+composed inside the engine's chain; [examples/tracing-otel](../examples/tracing-otel/)
 demonstrates it end to end.
 
 ## Where next

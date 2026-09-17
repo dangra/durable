@@ -114,11 +114,13 @@ type DeployServiceDefinition struct {
 }
 
 // NewDeployService assembles the "deploy-service" pipeline definition
-// from its handlers.
-func NewDeployService(h DeployServiceHandlers) *DeployServiceDefinition {
+// from its handlers. mw wraps this pipeline's operations alone, forward and
+// unwind alike, inside any engine-level middleware; the first is outermost.
+func NewDeployService(h DeployServiceHandlers, mw ...durable.Middleware) *DeployServiceDefinition {
 	return &DeployServiceDefinition{def: pipelinedef.New(pipelinedef.Config{
-		ID:       "deploy-service",
-		NewInput: func() proto.Message { return &DeployServiceInput{} },
+		ID:         "deploy-service",
+		Middleware: mw,
+		NewInput:   func() proto.Message { return &DeployServiceInput{} },
 		Reduce: func(view durable.ReduceView) proto.Message {
 			return ReduceDeployServiceOutput(h, view)
 		},
@@ -370,11 +372,13 @@ type ReleaseTrainDefinition struct {
 }
 
 // NewReleaseTrain assembles the "release-train" pipeline definition
-// from its handlers.
-func NewReleaseTrain(h ReleaseTrainHandlers) *ReleaseTrainDefinition {
+// from its handlers. mw wraps this pipeline's operations alone, forward and
+// unwind alike, inside any engine-level middleware; the first is outermost.
+func NewReleaseTrain(h ReleaseTrainHandlers, mw ...durable.Middleware) *ReleaseTrainDefinition {
 	return &ReleaseTrainDefinition{def: pipelinedef.New(pipelinedef.Config{
-		ID:       "release-train",
-		NewInput: func() proto.Message { return &ReleaseTrainInput{} },
+		ID:         "release-train",
+		Middleware: mw,
+		NewInput:   func() proto.Message { return &ReleaseTrainInput{} },
 		Steps: []pipelinedef.Step{
 			{
 				ID: "plan/v1",

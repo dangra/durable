@@ -112,12 +112,14 @@ type ProvisionMachineDefinition struct {
 }
 
 // NewProvisionMachine assembles the "provision-machine" pipeline definition
-// from its handlers.
-func NewProvisionMachine(h ProvisionMachineHandlers) *ProvisionMachineDefinition {
+// from its handlers. mw wraps this pipeline's operations alone, forward and
+// unwind alike, inside any engine-level middleware; the first is outermost.
+func NewProvisionMachine(h ProvisionMachineHandlers, mw ...durable.Middleware) *ProvisionMachineDefinition {
 	return &ProvisionMachineDefinition{def: pipelinedef.New(pipelinedef.Config{
-		ID:       "provision-machine",
-		Mutexes:  []string{"machine-lifecycle"},
-		NewInput: func() proto.Message { return &ProvisionMachineInput{} },
+		ID:         "provision-machine",
+		Mutexes:    []string{"machine-lifecycle"},
+		Middleware: mw,
+		NewInput:   func() proto.Message { return &ProvisionMachineInput{} },
 		Reduce: func(view durable.ReduceView) proto.Message {
 			return ReduceProvisionMachineOutput(h, view)
 		},
@@ -338,11 +340,13 @@ type DecommissionMachineDefinition struct {
 }
 
 // NewDecommissionMachine assembles the "decommission-machine" pipeline definition
-// from its handlers.
-func NewDecommissionMachine(h DecommissionMachineHandlers) *DecommissionMachineDefinition {
+// from its handlers. mw wraps this pipeline's operations alone, forward and
+// unwind alike, inside any engine-level middleware; the first is outermost.
+func NewDecommissionMachine(h DecommissionMachineHandlers, mw ...durable.Middleware) *DecommissionMachineDefinition {
 	return &DecommissionMachineDefinition{def: pipelinedef.New(pipelinedef.Config{
-		ID:      "decommission-machine",
-		Mutexes: []string{"machine-lifecycle"},
+		ID:         "decommission-machine",
+		Mutexes:    []string{"machine-lifecycle"},
+		Middleware: mw,
 		Steps: []pipelinedef.Step{
 			{
 				ID: "release-machine/v1",

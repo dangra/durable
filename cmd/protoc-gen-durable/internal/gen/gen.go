@@ -478,8 +478,9 @@ func emitDefinition(g *protogen.GeneratedFile, pl *pipelineDecl) {
 	g.P()
 
 	g.P("// New", name, " assembles the ", strconv(pl.opts.GetId()), " pipeline definition")
-	g.P("// from its handlers.")
-	g.P("func New", name, "(h ", pl.handlersName(), ") *", name, "Definition {")
+	g.P("// from its handlers. mw wraps this pipeline's operations alone, forward and")
+	g.P("// unwind alike, inside any engine-level middleware; the first is outermost.")
+	g.P("func New", name, "(h ", pl.handlersName(), ", mw ...", g.QualifiedGoIdent(durablePkg.Ident("Middleware")), ") *", name, "Definition {")
 	g.P("return &", name, "Definition{def: ", g.QualifiedGoIdent(defPkg.Ident("New")), "(", g.QualifiedGoIdent(defPkg.Ident("Config")), "{")
 	g.P("ID: ", strconv(pl.opts.GetId()), ",")
 	if ms := pl.opts.GetMutexes(); len(ms) > 0 {
@@ -495,6 +496,7 @@ func emitDefinition(g *protogen.GeneratedFile, pl *pipelineDecl) {
 	if rc := pl.opts.GetRunClass(); rc != "" {
 		g.P("RunClass: ", strconv(rc), ",")
 	}
+	g.P("Middleware: mw,")
 	if pl.input != nil {
 		g.P("NewInput: func() ", protoMsg, " { return &", g.QualifiedGoIdent(pl.input.GoIdent), "{} },")
 	}

@@ -576,33 +576,33 @@ const file_release_v1_release_proto_rawDesc = "" +
 	"\aservice\x18\x01 \x01(\tR\aservice\x12\x14\n" +
 	"\x05image\x18\x02 \x01(\tR\x05image\"'\n" +
 	"\x13DeployServiceOutput\x12\x10\n" +
-	"\x03url\x18\x01 \x01(\tR\x03url\"\x89\x03\n" +
-	"\rDeployService\x1a?\n" +
+	"\x03url\x18\x01 \x01(\tR\x03url\"\x84\x03\n" +
+	"\rDeployService\x1a>\n" +
 	"\fProvisionEnv\x12\x15\n" +
-	"\x06env_id\x18\x01 \x01(\tR\x05envId:\x18\x8a\xa8\x19\x14\n" +
-	"\x10provision-env/v1\x10\x01\x1aQ\n" +
+	"\x06env_id\x18\x01 \x01(\tR\x05envId:\x17\xf2U\x14\n" +
+	"\x10provision-env/v1\x10\x01\x1aP\n" +
 	"\rRunMigrations\x12%\n" +
-	"\x0eschema_version\x18\x01 \x01(\tR\rschemaVersion:\x19\x8a\xa8\x19\x15\n" +
-	"\x11run-migrations/v1\x10\x01\x1a@\n" +
+	"\x0eschema_version\x18\x01 \x01(\tR\rschemaVersion:\x18\xf2U\x15\n" +
+	"\x11run-migrations/v1\x10\x01\x1a?\n" +
 	"\x0eCanaryAnalysis\x12\x14\n" +
-	"\x05score\x18\x01 \x01(\rR\x05score:\x18\x8a\xa8\x19\x14\n" +
-	"\x12canary-analysis/v1\x1aK\n" +
+	"\x05score\x18\x01 \x01(\rR\x05score:\x17\xf2U\x14\n" +
+	"\x12canary-analysis/v1\x1aJ\n" +
 	"\fShiftTraffic\x12#\n" +
-	"\rlb_generation\x18\x01 \x01(\tR\flbGeneration:\x16\x8a\xa8\x19\x12\n" +
-	"\x10shift-traffic/v1:U\x92\xa8\x19Q\n" +
+	"\rlb_generation\x18\x01 \x01(\tR\flbGeneration:\x15\xf2U\x12\n" +
+	"\x10shift-traffic/v1:T\xfaUQ\n" +
 	"\x0edeploy-service\x12\x1e.release.v1.DeployServiceInput\x1a\x1f.release.v1.DeployServiceOutput\"0\n" +
 	"\x11ReleaseTrainInput\x12\x1b\n" +
-	"\timage_tag\x18\x01 \x01(\tR\bimageTag\"\xe0\x01\n" +
-	"\fReleaseTrain\x1a\x1c\n" +
-	"\vPlanRelease:\r\x8a\xa8\x19\t\n" +
-	"\aplan/v1\x1a\x1c\n" +
-	"\aShipWeb:\x11\x8a\xa8\x19\r\n" +
-	"\vship-web/v1\x1a\x1c\n" +
-	"\aShipApi:\x11\x8a\xa8\x19\r\n" +
-	"\vship-api/v1\x1aB\n" +
+	"\timage_tag\x18\x01 \x01(\tR\bimageTag\"\xdb\x01\n" +
+	"\fReleaseTrain\x1a\x1b\n" +
+	"\vPlanRelease:\f\xf2U\t\n" +
+	"\aplan/v1\x1a\x1b\n" +
+	"\aShipWeb:\x10\xf2U\r\n" +
+	"\vship-web/v1\x1a\x1b\n" +
+	"\aShipApi:\x10\xf2U\r\n" +
+	"\vship-api/v1\x1aA\n" +
 	"\bAnnounce\x12#\n" +
-	"\rchangelog_url\x18\x01 \x01(\tR\fchangelogUrl:\x11\x8a\xa8\x19\r\n" +
-	"\vannounce/v1:2\x92\xa8\x19.\n" +
+	"\rchangelog_url\x18\x01 \x01(\tR\fchangelogUrl:\x10\xf2U\r\n" +
+	"\vannounce/v1:1\xfaU.\n" +
 	"\rrelease-train\x12\x1d.release.v1.ReleaseTrainInputB<Z:github.com/dangra/durable/examples/release-train/releasepbb\x06proto3"
 
 var (

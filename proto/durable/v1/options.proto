@@ -69,10 +69,9 @@ message PipelineOptions {
 }
 
 extend google.protobuf.MessageOptions {
-  // NOTE: these numbers are in the 50000-99999 range reserved for
-  // organization-internal use. Before publishing, replace them with
-  // globally allocated extension numbers from the protobuf global
-  // extension registry.
-  StepOptions step = 51841;
-  PipelineOptions pipeline = 51842;
+  // 1374 and 1375 are durable's globally allocated extension numbers,
+  // registered in the protobuf global extension registry
+  // (docs/options.md in protocolbuffers/protobuf).
+  StepOptions step = 1374;
+  PipelineOptions pipeline = 1375;
 }

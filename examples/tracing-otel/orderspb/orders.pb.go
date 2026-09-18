@@ -319,18 +319,18 @@ const file_orders_v1_orders_proto_rawDesc = "" +
 	"\aship_to\x18\x04 \x01(\tR\x06shipTo\"5\n" +
 	"\x12FulfillOrderOutput\x12\x1f\n" +
 	"\vshipment_id\x18\x01 \x01(\tR\n" +
-	"shipmentId\"\xb2\x02\n" +
-	"\fFulfillOrder\x1aO\n" +
+	"shipmentId\"\xae\x02\n" +
+	"\fFulfillOrder\x1aN\n" +
 	"\fReserveStock\x12%\n" +
-	"\x0ereservation_id\x18\x01 \x01(\tR\rreservationId:\x18\x8a\xa8\x19\x14\n" +
-	"\x10reserve-stock/v1\x10\x01\x1aG\n" +
+	"\x0ereservation_id\x18\x01 \x01(\tR\rreservationId:\x17\xf2U\x14\n" +
+	"\x10reserve-stock/v1\x10\x01\x1aF\n" +
 	"\rChargePayment\x12\x1b\n" +
-	"\tcharge_id\x18\x01 \x01(\tR\bchargeId:\x19\x8a\xa8\x19\x15\n" +
-	"\x11charge-payment/v1\x10\x01\x1a6\n" +
+	"\tcharge_id\x18\x01 \x01(\tR\bchargeId:\x18\xf2U\x15\n" +
+	"\x11charge-payment/v1\x10\x01\x1a5\n" +
 	"\x04Ship\x12\x1f\n" +
 	"\vshipment_id\x18\x01 \x01(\tR\n" +
-	"shipmentId:\r\x8a\xa8\x19\t\n" +
-	"\aship/v1:P\x92\xa8\x19L\n" +
+	"shipmentId:\f\xf2U\t\n" +
+	"\aship/v1:O\xfaUL\n" +
 	"\rfulfill-order\x12\x1c.orders.v1.FulfillOrderInput\x1a\x1d.orders.v1.FulfillOrderOutputBCZAgithub.com/dangra/durable/examples/tracing-otel/orderspb;orderspbb\x06proto3"
 
 var (

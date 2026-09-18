@@ -301,17 +301,17 @@ const file_legacy_v1_legacy_proto_rawDesc = "" +
 	"\aservice\x18\x01 \x01(\tR\aservice\x12\x14\n" +
 	"\x05image\x18\x02 \x01(\tR\x05image\"'\n" +
 	"\x13DeployServiceOutput\x12\x10\n" +
-	"\x03url\x18\x01 \x01(\tR\x03url\"\xc5\x02\n" +
-	"\rDeployService\x1a?\n" +
+	"\x03url\x18\x01 \x01(\tR\x03url\"\xc1\x02\n" +
+	"\rDeployService\x1a>\n" +
 	"\fProvisionEnv\x12\x15\n" +
-	"\x06env_id\x18\x01 \x01(\tR\x05envId:\x18\x8a\xa8\x19\x14\n" +
-	"\x10provision-env/v1\x10\x01\x1aQ\n" +
+	"\x06env_id\x18\x01 \x01(\tR\x05envId:\x17\xf2U\x14\n" +
+	"\x10provision-env/v1\x10\x01\x1aP\n" +
 	"\rRunMigrations\x12%\n" +
-	"\x0eschema_version\x18\x01 \x01(\tR\rschemaVersion:\x19\x8a\xa8\x19\x15\n" +
-	"\x11run-migrations/v1\x10\x01\x1aK\n" +
+	"\x0eschema_version\x18\x01 \x01(\tR\rschemaVersion:\x18\xf2U\x15\n" +
+	"\x11run-migrations/v1\x10\x01\x1aJ\n" +
 	"\fShiftTraffic\x12#\n" +
-	"\rlb_generation\x18\x01 \x01(\tR\flbGeneration:\x16\x8a\xa8\x19\x12\n" +
-	"\x10shift-traffic/v1:S\x92\xa8\x19O\n" +
+	"\rlb_generation\x18\x01 \x01(\tR\flbGeneration:\x15\xf2U\x12\n" +
+	"\x10shift-traffic/v1:R\xfaUO\n" +
 	"\x0edeploy-service\x12\x1d.legacy.v1.DeployServiceInput\x1a\x1e.legacy.v1.DeployServiceOutputB;Z9github.com/dangra/durable/examples/release-train/legacypbb\x06proto3"
 
 var (

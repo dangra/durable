@@ -223,31 +223,30 @@ var file_durable_v1_options_proto_extTypes = []protoimpl.ExtensionInfo{
 	{
 		ExtendedType:  (*descriptorpb.MessageOptions)(nil),
 		ExtensionType: (*StepOptions)(nil),
-		Field:         51841,
+		Field:         1374,
 		Name:          "durable.v1.step",
-		Tag:           "bytes,51841,opt,name=step",
+		Tag:           "bytes,1374,opt,name=step",
 		Filename:      "durable/v1/options.proto",
 	},
 	{
 		ExtendedType:  (*descriptorpb.MessageOptions)(nil),
 		ExtensionType: (*PipelineOptions)(nil),
-		Field:         51842,
+		Field:         1375,
 		Name:          "durable.v1.pipeline",
-		Tag:           "bytes,51842,opt,name=pipeline",
+		Tag:           "bytes,1375,opt,name=pipeline",
 		Filename:      "durable/v1/options.proto",
 	},
 }
 
 // Extension fields to descriptorpb.MessageOptions.
 var (
-	// NOTE: these numbers are in the 50000-99999 range reserved for
-	// organization-internal use. Before publishing, replace them with
-	// globally allocated extension numbers from the protobuf global
-	// extension registry.
+	// 1374 and 1375 are durable's globally allocated extension numbers,
+	// registered in the protobuf global extension registry
+	// (docs/options.md in protocolbuffers/protobuf).
 	//
-	// optional durable.v1.StepOptions step = 51841;
+	// optional durable.v1.StepOptions step = 1374;
 	E_Step = &file_durable_v1_options_proto_extTypes[0]
-	// optional durable.v1.PipelineOptions pipeline = 51842;
+	// optional durable.v1.PipelineOptions pipeline = 1375;
 	E_Pipeline = &file_durable_v1_options_proto_extTypes[1]
 )
 
@@ -269,9 +268,11 @@ const file_durable_v1_options_proto_rawDesc = "" +
 	"\x11concurrency_class\x18\x06 \x01(\tR\x10concurrencyClass\x12\x18\n" +
 	"\amutexes\x18\a \x03(\tR\amutexes\x12\x1b\n" +
 	"\trun_class\x18\t \x01(\tR\brunClass\x12%\n" +
-	"\x0efailure_output\x18\b \x01(\tR\rfailureOutput:N\n" +
-	"\x04step\x12\x1f.google.protobuf.MessageOptions\x18\x81\x95\x03 \x01(\v2\x17.durable.v1.StepOptionsR\x04step:Z\n" +
-	"\bpipeline\x12\x1f.google.protobuf.MessageOptions\x18\x82\x95\x03 \x01(\v2\x1b.durable.v1.PipelineOptionsR\bpipelineB/Z-github.com/dangra/durable/durablepb;durablepbb\x06proto3"
+	"\x0efailure_output\x18\b \x01(\tR\rfailureOutput:M\n" +
+	"\x04step\x12\x1f.google.protobuf.MessageOptions\x18\xde\n" +
+	" \x01(\v2\x17.durable.v1.StepOptionsR\x04step:Y\n" +
+	"\bpipeline\x12\x1f.google.protobuf.MessageOptions\x18\xdf\n" +
+	" \x01(\v2\x1b.durable.v1.PipelineOptionsR\bpipelineB/Z-github.com/dangra/durable/durablepb;durablepbb\x06proto3"
 
 var (
 	file_durable_v1_options_proto_rawDescOnce sync.Once

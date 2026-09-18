@@ -427,25 +427,25 @@ const file_machines_v1_machines_proto_rawDesc = "" +
 	"\x16ProvisionMachineOutput\x12\x1d\n" +
 	"\n" +
 	"machine_id\x18\x01 \x01(\tR\tmachineId\x12\x17\n" +
-	"\ahost_id\x18\x02 \x01(\tR\x06hostId\"\x96\x03\n" +
-	"\x10ProvisionMachine\x1a\x1d\n" +
-	"\bValidate:\x11\x8a\xa8\x19\r\n" +
-	"\vvalidate/v1\x1a;\n" +
+	"\ahost_id\x18\x02 \x01(\tR\x06hostId\"\x91\x03\n" +
+	"\x10ProvisionMachine\x1a\x1c\n" +
+	"\bValidate:\x10\xf2U\r\n" +
+	"\vvalidate/v1\x1a:\n" +
 	"\n" +
 	"SelectHost\x12\x17\n" +
-	"\ahost_id\x18\x01 \x01(\tR\x06hostId:\x14\x8a\xa8\x19\x10\n" +
-	"\x0eselect-host/v1\x1ah\n" +
+	"\ahost_id\x18\x01 \x01(\tR\x06hostId:\x13\xf2U\x10\n" +
+	"\x0eselect-host/v1\x1ag\n" +
 	"\x0fReserveCapacity\x12%\n" +
-	"\x0ereservation_id\x18\x01 \x01(\tR\rreservationId:.\x8a\xa8\x19*\n" +
-	"\x13reserve-capacity/v1\x10\x01\"\x11host-capacity-api\x1aG\n" +
+	"\x0ereservation_id\x18\x01 \x01(\tR\rreservationId:-\xf2U*\n" +
+	"\x13reserve-capacity/v1\x10\x01\"\x11host-capacity-api\x1aF\n" +
 	"\rCreateMachine\x12\x1d\n" +
 	"\n" +
-	"machine_id\x18\x01 \x01(\tR\tmachineId:\x17\x8a\xa8\x19\x13\n" +
-	"\x11create-machine/v1:s\x92\xa8\x19o\n" +
-	"\x11provision-machine\x12\".machines.v1.ProvisionMachineInput\x1a#.machines.v1.ProvisionMachineOutput:\x11machine-lifecycle\"p\n" +
-	"\x13DecommissionMachine\x1a*\n" +
-	"\x0eReleaseMachine:\x18\x8a\xa8\x19\x14\n" +
-	"\x12release-machine/v1:-\x92\xa8\x19)\n" +
+	"machine_id\x18\x01 \x01(\tR\tmachineId:\x16\xf2U\x13\n" +
+	"\x11create-machine/v1:r\xfaUo\n" +
+	"\x11provision-machine\x12\".machines.v1.ProvisionMachineInput\x1a#.machines.v1.ProvisionMachineOutput:\x11machine-lifecycle\"n\n" +
+	"\x13DecommissionMachine\x1a)\n" +
+	"\x0eReleaseMachine:\x17\xf2U\x14\n" +
+	"\x12release-machine/v1:,\xfaU)\n" +
 	"\x14decommission-machine:\x11machine-lifecycleBCZAgithub.com/dangra/durable/examples/machines/machinespb;machinespbb\x06proto3"
 
 var (

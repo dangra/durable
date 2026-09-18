@@ -423,23 +423,23 @@ const file_snapshots_v1_snapshots_proto_rawDesc = "" +
 	"failedStep\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\x12*\n" +
 	"\x11leaked_object_key\x18\x03 \x01(\tR\x0fleakedObjectKey\x12,\n" +
-	"\x12volume_left_frozen\x18\x04 \x01(\bR\x10volumeLeftFrozen\"\xb9\x03\n" +
-	"\x0eCreateSnapshot\x1aK\n" +
+	"\x12volume_left_frozen\x18\x04 \x01(\bR\x10volumeLeftFrozen\"\xb4\x03\n" +
+	"\x0eCreateSnapshot\x1aJ\n" +
 	"\fFreezeVolume\x12!\n" +
-	"\ffreeze_token\x18\x01 \x01(\tR\vfreezeToken:\x18\x8a\xa8\x19\x14\n" +
-	"\x10freeze-volume/v1\x10\x01\x1aa\n" +
+	"\ffreeze_token\x18\x01 \x01(\tR\vfreezeToken:\x17\xf2U\x14\n" +
+	"\x10freeze-volume/v1\x10\x01\x1a`\n" +
 	"\x0eUploadSnapshot\x12\x1d\n" +
 	"\n" +
 	"object_key\x18\x01 \x01(\tR\tobjectKey\x12\x14\n" +
-	"\x05bytes\x18\x02 \x01(\x04R\x05bytes:\x1a\x8a\xa8\x19\x16\n" +
-	"\x12upload-snapshot/v1\x10\x01\x1a\"\n" +
+	"\x05bytes\x18\x02 \x01(\x04R\x05bytes:\x19\xf2U\x16\n" +
+	"\x12upload-snapshot/v1\x10\x01\x1a!\n" +
 	"\n" +
-	"ThawVolume:\x14\x8a\xa8\x19\x10\n" +
-	"\x0ethaw-volume/v1\x1aO\n" +
+	"ThawVolume:\x13\xf2U\x10\n" +
+	"\x0ethaw-volume/v1\x1aN\n" +
 	"\x10RegisterSnapshot\x12\x1f\n" +
 	"\vsnapshot_id\x18\x01 \x01(\tR\n" +
-	"snapshotId:\x1a\x8a\xa8\x19\x16\n" +
-	"\x14register-snapshot/v1:\x81\x01\x92\xa8\x19}\n" +
+	"snapshotId:\x19\xf2U\x16\n" +
+	"\x14register-snapshot/v1:\x80\x01\xfaU}\n" +
 	"\x0fcreate-snapshot\x12!.snapshots.v1.CreateSnapshotInput\x1a\".snapshots.v1.CreateSnapshotOutputB#.snapshots.v1.CreateSnapshotFailureBFZDgithub.com/dangra/durable/examples/snapshots/snapshotspb;snapshotspbb\x06proto3"
 
 var (

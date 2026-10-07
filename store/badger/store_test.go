@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -523,9 +525,10 @@ func TestTerminalityCompactsRun(t *testing.T) {
 	if got, err := s.GetRun(ctx, "run-t"); err != nil || !bytes.Equal(got.Input, input) || !bytes.Equal(got.Steps["a/v1"].Forward.State, state) {
 		t.Fatalf("GetRun nonterminal = %+v, %v", got, err)
 	}
-	// Six active rows: meta, cancel, failure, input, two operations.
-	if rows := keys(t, s, runPrefix("run-t")); len(rows) != 6 {
-		t.Fatalf("active rows = %q; want 6", rows)
+	// Seven active rows: meta, cancel, failure, input, two operations,
+	// and the committed state beside a/v1's.
+	if rows := keys(t, s, runPrefix("run-t")); len(rows) != 7 {
+		t.Fatalf("active rows = %q; want 7", rows)
 	}
 
 	committed := now.Add(time.Minute)
@@ -729,5 +732,86 @@ func TestCancelRacingTerminalityIsKept(t *testing.T) {
 	got, err := s.GetRun(ctx, "run-r")
 	if err != nil || !got.Terminal() || got.Cancel == nil || got.Cancel.Cause != "late" {
 		t.Fatalf("terminal record = %+v, %v; want the accepted cancel in it", got, err)
+	}
+}
+
+// Writes that arrive together share a transaction; one that fails runs
+// alone and returns its own error, and the others commit regardless.
+func TestBatchIsolatesFailures(t *testing.T) {
+	ctx := context.Background()
+	s := open(t, filepath.Join(t.TempDir(), "batch"))
+	const n = 200
+	var wg sync.WaitGroup
+	errs := make([]error, 2*n)
+	for i := 0; i < n; i++ {
+		wg.Add(2)
+		go func(i int) {
+			defer wg.Done()
+			rec := &driver.RunRecord{RunID: durable.RunID(fmt.Sprintf("run-%03d", i)), PipelineID: "p", ResourceID: durable.ResourceID(fmt.Sprintf("r-%d", i)), Phase: durable.PhaseForward}
+			_, created, err := s.CreateRun(ctx, rec, nil)
+			if err == nil && !created {
+				err = errors.New("not created")
+			}
+			errs[i] = err
+		}(i)
+		go func(i int) {
+			defer wg.Done()
+			_, errs[n+i] = s.RequestCancel(ctx, durable.RunID(fmt.Sprintf("missing-%03d", i)), driver.CancelRequest{Cause: "x"})
+		}(i)
+	}
+	wg.Wait()
+	for i := 0; i < n; i++ {
+		if errs[i] != nil {
+			t.Fatalf("CreateRun %d: %v", i, errs[i])
+		}
+		if !errors.Is(errs[n+i], durable.ErrRunNotFound) {
+			t.Fatalf("RequestCancel(missing) %d = %v; want ErrRunNotFound", i, errs[n+i])
+		}
+	}
+	if runs, err := s.ListNonterminal(ctx); err != nil || len(runs) != n {
+		t.Fatalf("ListNonterminal = %d runs, %v; want %d", len(runs), err, n)
+	}
+}
+
+// Reads of a run in flight take its input and states from the blob
+// cache, shown by planting other bytes there; a run that leaves the
+// cache reads them from the tree and comes back.
+func TestBlobCacheServesReads(t *testing.T) {
+	ctx := context.Background()
+	s := open(t, filepath.Join(t.TempDir(), "blobs"))
+	input, state := bytes.Repeat([]byte{1}, 4096), bytes.Repeat([]byte{2}, 1024)
+	rec := &driver.RunRecord{RunID: "run-c", PipelineID: "p", ResourceID: "r", Phase: durable.PhaseForward, Input: input}
+	if _, created, err := s.CreateRun(ctx, rec, nil); err != nil || !created {
+		t.Fatal(err)
+	}
+	if err := s.ApplyTransition(ctx, "run-c", driver.Transition{Cursor: driver.Cursor{Phase: durable.PhaseForward},
+		Ops: []driver.OpWrite{{StepID: "a/v1", Phase: durable.PhaseForward, Record: driver.OperationRecord{Status: driver.OpSucceeded, Attempts: 1, State: state, Order: 1}}}}); err != nil {
+		t.Fatal(err)
+	}
+	plantedInput, plantedState := []byte("planted input"), []byte("planted state")
+	s.blobs.SetInput("run-c", plantedInput)
+	s.blobs.SetState("run-c", "a/v1", plantedState)
+	got, err := s.GetRun(ctx, "run-c")
+	if err != nil || !bytes.Equal(got.Input, plantedInput) || !bytes.Equal(got.Steps["a/v1"].Forward.State, plantedState) {
+		t.Fatalf("GetRun = input %q state %q, %v; want the cached bytes", got.Input, got.Steps["a/v1"].Forward.State, err)
+	}
+	if got.Steps["a/v1"].Forward.Status != driver.OpSucceeded || got.Steps["a/v1"].Forward.Order != 1 {
+		t.Fatalf("operation record = %+v", got.Steps["a/v1"].Forward)
+	}
+	s.blobs.Drop("run-c")
+	got, err = s.GetRun(ctx, "run-c")
+	if err != nil || !bytes.Equal(got.Input, input) || !bytes.Equal(got.Steps["a/v1"].Forward.State, state) {
+		t.Fatalf("GetRun after drop = %d/%d bytes, %v; want the tree's", len(got.Input), len(got.Steps["a/v1"].Forward.State), err)
+	}
+	if !s.blobs.Has("run-c") {
+		t.Fatal("a read from the tree must refill the cache")
+	}
+	// Terminality drops the run.
+	oc := durable.OutcomeSuccess
+	if err := s.ApplyTransition(ctx, "run-c", driver.Transition{Cursor: driver.Cursor{Phase: durable.PhaseDone}, Outcome: &oc}); err != nil {
+		t.Fatal(err)
+	}
+	if s.blobs.Has("run-c") {
+		t.Fatal("a terminal run must leave the cache")
 	}
 }

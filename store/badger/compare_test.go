@@ -186,10 +186,18 @@ func (v *cmpEnv) stop(b *testing.B, runs int) {
 	if err := v.eng.Stop(ctx); err != nil {
 		b.Fatal(err)
 	}
+	// Disk is measured twice: while the store is open, which is what a
+	// running daemon holds, and after Close, which compacts or drains
+	// what each store defers.
+	var open int64
+	if v.kind.persistent {
+		open = diskUse(b, v.dir)
+	}
 	if err := v.store.Close(); err != nil {
 		b.Fatal(err)
 	}
 	if v.kind.persistent && runs > 0 {
+		b.ReportMetric(float64(open)/float64(runs), "disk-open-B/run")
 		b.ReportMetric(float64(diskUse(b, v.dir))/float64(runs), "disk-B/run")
 	}
 }
@@ -307,6 +315,10 @@ func forEachStore(b *testing.B, body func(b *testing.B, kind cmpStore)) {
 func BenchmarkCompare(b *testing.B) {
 	if testing.Short() {
 		b.Skip("the store comparison takes about a minute per pass; run it without -short")
+	}
+	// Say so loudly rather than publish fsync-free numbers.
+	if dir := os.TempDir(); isTmpfs(dir) {
+		fmt.Fprintf(os.Stderr, "compare: %s is tmpfs; fsync is free there, set TMPDIR to a directory on the disk under test\n", dir)
 	}
 	// machine_start: the flyd start shape, one run at a time — every
 	// transition waits for its own commit.
@@ -575,6 +587,9 @@ func BenchmarkCompare(b *testing.B) {
 				b.Fatalf("reaped %d of %d", total, terminal)
 			}
 			b.ReportMetric(float64(terminal)/time.Since(start).Seconds(), "reaped/sec")
+			if kind.persistent {
+				b.ReportMetric(float64(diskUse(b, dir)), "disk-open-B-after")
+			}
 			if err := st.Close(); err != nil {
 				b.Fatal(err)
 			}
@@ -589,7 +604,7 @@ func BenchmarkCompare(b *testing.B) {
 // before their last step with seven committed states, and terminal ones
 // complete. Writes go 64 at a time so the stores batch their commits.
 // It returns the nonterminal ids.
-func seedCmp(b *testing.B, st driver.Store, nonterminal, terminal int) []durable.RunID {
+func seedCmp(b testing.TB, st driver.Store, nonterminal, terminal int) []durable.RunID {
 	b.Helper()
 	state := randomBytes(cmpStateSize, 3)
 	input, _ := proto.Marshal(cmpFatInput)
@@ -651,14 +666,6 @@ func seedCmp(b *testing.B, st driver.Store, nonterminal, terminal int) []durable
 		b.FailNow()
 	}
 	return ids
-}
-
-func init() {
-	// Keep the comparison's temp dirs off tmpfs when the caller forgot:
-	// say so loudly rather than publish fsync-free numbers.
-	if dir := os.TempDir(); isTmpfs(dir) {
-		fmt.Fprintf(os.Stderr, "compare: %s is tmpfs; fsync is free there, set TMPDIR to a directory on the disk under test\n", dir)
-	}
 }
 
 func isTmpfs(dir string) bool {

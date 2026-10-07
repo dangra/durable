@@ -20,9 +20,13 @@
 //	a·R·c                    -> CancelRequest    write-once, first cancel wins
 //	a·R·f                    -> FailureRecord    write-once, refused twice
 //	a·R·i                    -> input            the blob is the value
-//	a·R·o·<step>·<phase>     -> OperationRecord  one row per step and phase,
-//	                                             state in it; phase byte
-//	                                             f forward, u unwind
+//	a·R·o·<step>·<phase>     -> flag, OperationRecord
+//	                                             one row per step and phase;
+//	                                             phase byte f forward, u unwind;
+//	                                             the flag byte says whether a
+//	                                             state row sits beside it
+//	a·R·s·<step>             -> state            a forward operation's
+//	                                             committed state
 //	c·R                      -> Cursor           the one mutable row,
 //	                                             rewritten on every attempt
 //	t·R                      -> Terminal         the whole of a terminal run,
@@ -34,46 +38,51 @@
 // A run moves through it like this. CreateRun writes the meta, the
 // input when there is one, the cursor, and the slot in one transaction.
 // Each attempt rewrites only the cursor. Each resolution upserts the
-// operation's one row. Cancel and failure land as their rows. The
-// terminality commit writes the terminal row and its expiry key and
-// deletes the run's active rows, its cursor, and its slot, all in one
-// transaction: from then on the run is one row, and the input and
-// states, folded into the output by then, are released when the run
-// ends rather than when retention reaps it. Reap walks the expiry index
-// from its oldest key, stops at the first run that has not expired,
-// and deletes each victim's terminal row and index key: proportional
-// to the victims, decoding nothing. A run's head — what status,
-// waiting, lookups, and recovery need — is the terminal row, or for a
-// nonterminal run five point reads (the missed terminal row, then
-// meta, cancel, failure, cursor): no operation row is decoded and no
-// blob is touched.
+// operation's one row and, for a forward operation with a state, its
+// state row. Cancel and failure land as their rows. The terminality
+// commit writes the terminal row and its expiry key and deletes the
+// run's active rows, its cursor, and its slot, all in one transaction:
+// from then on the run is one row, and the input and states, folded
+// into the output by then, are released when the run ends rather than
+// when retention reaps it. Reap walks the expiry index from its oldest
+// key, stops at the first run that has not expired, and deletes each
+// victim's terminal row and index key: proportional to the victims,
+// decoding nothing.
 //
-// What the engine changes against the bbolt driver. An LSM tree
-// appends: a write costs its bytes once in the log and again per
-// compaction, never a rewritten page, so nothing here keeps a large
-// value out of its row (Badger moves values past its threshold to the
-// value log by itself), defers a run's deletion to a batch, or orders
-// operation rows by resolution in the key — the record carries its
-// order, and a reader folds rows into a map. Transactions are
-// serializable with conflict detection at commit: two CreateRuns racing
-// for one slot both read it free, and the second to commit is refused
-// and retried, where it finds the occupant. Badger coalesces concurrent
-// commits into one write batch, which is the group commit the bbolt
-// driver does by hand. The cost is a read: a point lookup walks the
-// memtables and then the levels, with bloom filters and the block cache
-// in front of the disk, where bbolt follows a few pages of a B+ tree;
-// and compaction and value-log garbage collection run in the
-// background, where bbolt has no such work.
+// Reads. A run's head — what status, waiting, lookups, and recovery
+// need — is the terminal row, or for a nonterminal run five point reads
+// (the missed terminal row, then meta, cancel, failure, cursor),
+// decoded in place. A whole run adds a walk of its operation rows alone
+// and point reads of its input and states, which the blob cache serves
+// for the runs in flight (see WithBlobCache): Badger's iterator copies
+// every value it passes, so a walk over the whole run would copy the
+// input on every read, and the engine reads a run whole each time its
+// worker picks it up.
 //
-// Conflict detection sees what a transaction read: every point read,
-// a missing key included, but of a prefix walk only the seek key and
-// the rows it returned. A row another transaction inserts under a
-// walked prefix is invisible to it. The one row that can appear that
-// way under a run's stage while a transition runs is the cancel request
-// (RequestCancel is the only writer besides the run's own worker), so
-// the terminality commit point-reads it: a cancel committing first
-// forces the commit to retry and fold it in, instead of the commit
-// deleting an accepted request.
+// Writes. Every write goes through one batching goroutine that commits
+// whatever writes are queued in one transaction (see update): Badger in
+// sync-writes mode syncs per committed transaction and shares nothing
+// between concurrent ones, so this is the group commit bbolt's Batch
+// gives the bbolt driver. With one writer, Badger's conflict detection
+// has nothing left to catch. Prefix walks inside a write transaction
+// read a read-only snapshot instead, because Badger sorts every pending
+// write of the transaction — the whole batch — each time an iterator is
+// opened in one; of a run's rows, only a cancel request can be pending
+// in the same batch as its terminality commit, and that commit reads
+// and deletes it by key.
+//
+// What changes against the bbolt driver. An LSM tree appends: a write
+// costs its bytes once in the log and again per compaction, never a
+// rewritten page, so nothing here keeps a large value off its leaf
+// (Badger moves values past its threshold to the value log by itself),
+// defers a run's deletion to a batch, or orders operation rows by
+// resolution in the key — the record carries its order, and a reader
+// folds rows into a map. The costs are a read, where a point lookup
+// walks the memtables and then the levels behind bloom filters and the
+// block cache, and space: deleted rows stay on disk until compaction
+// rewrites the tables holding them, which level 0 does only once
+// several tables pile up there. The store compacts level 0 at Close, so
+// a store that has shed its history gives the space back at shutdown.
 package badger
 
 import (
@@ -91,6 +100,7 @@ import (
 
 	"github.com/dangra/durable/kernel"
 	"github.com/dangra/durable/store/driver"
+	"github.com/dangra/durable/store/internal/blobcache"
 	"github.com/dangra/durable/store/internal/storagepb"
 )
 
@@ -110,14 +120,21 @@ const (
 	tagFailure byte = 'f'
 	tagInput   byte = 'i'
 	tagOp      byte = 'o'
+	tagState   byte = 's'
 )
 
 // Store is a driver.Store backed by a Badger database directory.
 type Store struct {
-	db   *bdg.DB
-	stop chan struct{}
-	done chan struct{}
-	once sync.Once
+	db *bdg.DB
+	// writes feeds the batching writer (see update).
+	writes     chan *writeReq
+	writerDone chan struct{}
+	// blobs caches the immutable inputs and states of the runs in
+	// flight; see package blobcache.
+	blobs *blobcache.Cache
+	stop  chan struct{}
+	done  chan struct{}
+	once  sync.Once
 }
 
 // gcInterval is how often the value log is offered for garbage
@@ -136,14 +153,31 @@ type Option func(*config)
 type config struct {
 	syncWrites bool
 	memTable   int64
+	blobCache  int
 	logger     *slog.Logger
 }
 
-// WithSyncWrites controls whether every commit is fsynced before it
-// returns, the way the bbolt driver commits. On by default: a durable
-// fact is one the machine can lose power on. Off, a commit returns
-// once the write is in the OS, and the last moments before a power
-// loss can roll back — a process crash loses nothing either way.
+// DefaultBlobCache is the default limit, in bytes, of the cache of the
+// blobs of the runs in flight (see WithBlobCache).
+const DefaultBlobCache = 64 << 20
+
+// WithBlobCache bounds, in bytes, the in-memory cache of the inputs and
+// committed states of the runs in flight, which serves reads of a
+// nonterminal run without copying them out of the tree. A run is read
+// whole each time its worker picks it up — after every retry backoff,
+// every wake — so the cache is what keeps a retrying run with a large
+// input from paying for it on every attempt. Past the limit the least
+// recently used runs leave the cache. Zero disables it. The default is
+// DefaultBlobCache.
+func WithBlobCache(limit int) Option { return func(c *config) { c.blobCache = limit } }
+
+// WithSyncWrites controls whether every commit is synced to disk before
+// it returns, the way the bbolt driver commits. On by default: a
+// durable fact is one the machine can lose power on. Concurrent writes
+// share a commit and its syncs (see update), so the cost is per batch,
+// not per write. Off, a commit returns once the write is in the OS, and
+// the last moments before a power loss can roll back — a process crash
+// loses nothing either way.
 func WithSyncWrites(on bool) Option { return func(c *config) { c.syncWrites = on } }
 
 // WithMemTableSize sets, in bytes, Badger's in-memory write buffer,
@@ -163,7 +197,7 @@ func WithLogger(l *slog.Logger) Option { return func(c *config) { c.logger = l }
 // another process holds the directory lock, enforcing exclusive
 // ownership.
 func Open(dir string, opts ...Option) (*Store, error) {
-	cfg := config{syncWrites: true, memTable: DefaultMemTableSize}
+	cfg := config{syncWrites: true, memTable: DefaultMemTableSize, blobCache: DefaultBlobCache}
 	for _, opt := range opts {
 		opt(&cfg)
 	}
@@ -175,6 +209,13 @@ func Open(dir string, opts ...Option) (*Store, error) {
 		WithSyncWrites(cfg.syncWrites).
 		WithMemTableSize(cfg.memTable).
 		WithValueThreshold(threshold).
+		// A run's stage is deleted at terminality and its history at
+		// reap, but the space comes back only when compaction rewrites
+		// the tables holding them, and level 0 is compacted only once
+		// several tables pile up there, so a quiet store keeps what it
+		// deleted. Compacting level 0 at Close returns it at shutdown,
+		// at the cost of a slower Close.
+		WithCompactL0OnClose(true).
 		WithLogger(nil)
 	if cfg.logger != nil {
 		bo = bo.WithLogger(slogger{cfg.logger})
@@ -183,7 +224,9 @@ func Open(dir string, opts ...Option) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("badger: opening %s: %w", dir, err)
 	}
-	s := &Store{db: db, stop: make(chan struct{}), done: make(chan struct{})}
+	s := &Store{db: db, writes: make(chan *writeReq, maxBatch), writerDone: make(chan struct{}),
+		blobs: blobcache.New(cfg.blobCache), stop: make(chan struct{}), done: make(chan struct{})}
+	go s.writer()
 	go s.gc()
 	return s, nil
 }
@@ -214,18 +257,6 @@ func (s slogger) Warningf(f string, a ...any) {
 }
 func (s slogger) Infof(f string, a ...any)  { s.l.Info(strings.TrimRight(fmt.Sprintf(f, a...), "\n")) }
 func (s slogger) Debugf(f string, a ...any) { s.l.Debug(strings.TrimRight(fmt.Sprintf(f, a...), "\n")) }
-
-// update runs fn in a read-write transaction, retrying it when the
-// commit conflicts with another transaction's. fn must be re-runnable:
-// everything it decides it decides from what it reads.
-func (s *Store) update(fn func(txn *bdg.Txn) error) error {
-	for {
-		err := s.db.Update(fn)
-		if !errors.Is(err, bdg.ErrConflict) {
-			return err
-		}
-	}
-}
 
 // Keys.
 
@@ -262,6 +293,23 @@ func splitOpRest(rest []byte) (step kernel.StepID, phase kernel.Phase, ok bool) 
 		phase = kernel.PhaseUnwind
 	}
 	return kernel.StepID(rest[1 : len(rest)-2]), phase, true
+}
+
+// An operation row's value is one flag byte, telling whether a state row
+// sits beside it, then the encoded record. The flag is what lets a read
+// fetch states by point reads, from the blob cache when it has them,
+// instead of walking past rows: Badger's iterator copies every value it
+// passes.
+const (
+	opNoState  byte = 0
+	opHasState byte = 1
+)
+
+// stateKey addresses a forward operation's committed state, a row of
+// its own beside the operation's so a read can take it from the blob
+// cache instead of copying it: a·R·s·<step>.
+func stateKey(id kernel.RunID, step kernel.StepID) []byte {
+	return append(append(activeKey(id, tagState), 0), step...)
 }
 
 func cursorKey(id kernel.RunID) []byte   { return append([]byte{nsCursor}, id...) }
@@ -301,6 +349,20 @@ func get(txn *bdg.Txn, key []byte) ([]byte, error) {
 	return item.ValueCopy(nil)
 }
 
+// view hands the value under key to fn without copying it, reporting
+// whether the key is there. fn must not retain the slice; decoding it
+// into a fresh value is the use.
+func view(txn *bdg.Txn, key []byte, fn func([]byte) error) (bool, error) {
+	item, err := txn.Get(key)
+	if errors.Is(err, bdg.ErrKeyNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, item.Value(fn)
+}
+
 // exists reports whether key is present, without reading its value.
 func exists(txn *bdg.Txn, key []byte) (bool, error) {
 	_, err := txn.Get(key)
@@ -326,7 +388,7 @@ func keysWithPrefix(txn *bdg.Txn, prefix []byte, limit int) [][]byte {
 // dispatching on its stage: the terminal row alone, or a prefix walk of
 // the active rows and the cursor with its in-flight operation overlaid
 // as an unresolved step entry.
-func (s *Store) getRun(txn *bdg.Txn, id kernel.RunID) (*driver.RunRecord, error) {
+func (s *Store) getRun(txn *bdg.Txn, id kernel.RunID, fill bool) (*driver.RunRecord, error) {
 	tb, err := get(txn, terminalKey(id))
 	if err != nil {
 		return nil, err
@@ -338,61 +400,95 @@ func (s *Store) getRun(txn *bdg.Txn, id kernel.RunID) (*driver.RunRecord, error)
 		}
 		return rec, nil
 	}
-	return s.getNonterminal(txn, id)
+	return s.getNonterminal(txn, id, fill)
 }
 
-// getNonterminal reads a nonterminal run from one prefix walk of its
-// active rows — the meta row sorts first, so its absence is
-// ErrRunNotFound — and its cursor.
-func (s *Store) getNonterminal(txn *bdg.Txn, id kernel.RunID) (*driver.RunRecord, error) {
-	rec := &driver.RunRecord{}
-	prefix := runPrefix(id)
-	it := txn.NewIterator(bdg.IteratorOptions{Prefix: prefix})
-	defer it.Close()
-	it.Seek(prefix)
-	if !it.ValidForPrefix(prefix) || it.Item().Key()[len(prefix)] != tagMeta {
+// getNonterminal reads a nonterminal run: its head rows by point reads
+// — no meta row is ErrRunNotFound — its operation rows by a walk of
+// their own prefix, and its input and states by point reads, from the
+// blob cache when the run is in it. The walk passes only operation
+// rows: Badger's iterator copies every value it passes, so walking past
+// the input would copy it even on a cache hit. A read that finds blobs
+// in the tree fills the cache only when fill is set, which callers
+// inside a write transaction leave off, since what they read may not
+// commit.
+func (s *Store) getNonterminal(txn *bdg.Txn, id kernel.RunID, fill bool) (*driver.RunRecord, error) {
+	meta, err := get(txn, activeKey(id, tagMeta))
+	if err != nil {
+		return nil, err
+	}
+	if meta == nil {
 		return nil, kernel.ErrRunNotFound
 	}
-	for ; it.ValidForPrefix(prefix); it.Next() {
-		item := it.Item()
-		k := item.Key()
-		tag, rest := k[len(prefix)], k[len(prefix)+1:]
-		v, err := item.ValueCopy(nil)
-		if err != nil {
+	rec := &driver.RunRecord{}
+	if err := storagepb.UnmarshalRunMetaInto(meta, rec); err != nil {
+		return nil, err
+	}
+	if err := readHeadRows(txn, rec); err != nil {
+		return nil, err
+	}
+	cachedInput, cached := s.blobs.Input(id)
+	var miss *blobcache.Blobs
+	if !cached && fill {
+		miss = &blobcache.Blobs{}
+	}
+	if cachedInput != nil {
+		rec.Input = cachedInput
+	} else if !cached {
+		if rec.Input, err = get(txn, activeKey(id, tagInput)); err != nil {
 			return nil, err
 		}
-		switch tag {
-		case tagMeta:
-			if err := storagepb.UnmarshalRunMetaInto(v, rec); err != nil {
-				return nil, err
-			}
-		case tagInput:
-			rec.Input = v
-		case tagCancel:
-			cr, err := storagepb.UnmarshalCancel(v)
-			if err != nil {
-				return nil, err
-			}
-			rec.Cancel = cr
-		case tagFailure:
-			f, err := storagepb.UnmarshalFailureRecord(v)
-			if err != nil {
-				return nil, err
-			}
-			rec.Failure = &f
-		case tagOp:
-			step, phase, ok := splitOpRest(rest)
-			if !ok {
-				return nil, fmt.Errorf("badger: malformed operation key %q", k)
-			}
-			op, err := storagepb.UnmarshalOperationRecord(v)
-			if err != nil {
-				return nil, err
-			}
-			*rec.Step(step).Op(phase) = op
-		default:
-			return nil, fmt.Errorf("badger: unknown active row tag %q in key %q", tag, k)
+		if miss != nil {
+			miss.Input = rec.Input
 		}
+	}
+	var withState []kernel.StepID
+	prefix := opPrefix(id)
+	it := txn.NewIterator(bdg.IteratorOptions{Prefix: prefix})
+	for it.Seek(prefix); it.ValidForPrefix(prefix); it.Next() {
+		item := it.Item()
+		k := item.Key()
+		step, phase, ok := splitOpRest(k[len(prefix)-1:])
+		if !ok {
+			it.Close()
+			return nil, fmt.Errorf("badger: malformed operation key %q", k)
+		}
+		var op driver.OperationRecord
+		err := item.Value(func(v []byte) error {
+			if len(v) == 0 {
+				return fmt.Errorf("badger: empty operation row %q", k)
+			}
+			if v[0] == opHasState {
+				withState = append(withState, step)
+			}
+			var err error
+			op, err = storagepb.UnmarshalOperationRecord(v[1:])
+			return err
+		})
+		if err != nil {
+			it.Close()
+			return nil, err
+		}
+		*rec.Step(step).Op(phase) = op
+	}
+	it.Close()
+	for _, step := range withState {
+		st := s.blobs.State(id, step)
+		if st == nil {
+			if st, err = get(txn, stateKey(id, step)); err != nil {
+				return nil, err
+			}
+			if miss != nil && st != nil {
+				if miss.States == nil {
+					miss.States = make(map[kernel.StepID][]byte)
+				}
+				miss.States[step] = st
+			}
+		}
+		rec.Step(step).Forward.State = st
+	}
+	if miss != nil {
+		s.blobs.Fill(id, miss)
 	}
 	if err := overlayCursor(txn, rec); err != nil {
 		return nil, err
@@ -400,21 +496,37 @@ func (s *Store) getNonterminal(txn *bdg.Txn, id kernel.RunID) (*driver.RunRecord
 	return rec, nil
 }
 
+// readHeadRows reads the run's cancel and failure rows onto rec.
+func readHeadRows(txn *bdg.Txn, rec *driver.RunRecord) error {
+	if _, err := view(txn, activeKey(rec.RunID, tagCancel), func(v []byte) (err error) {
+		rec.Cancel, err = storagepb.UnmarshalCancel(v)
+		return err
+	}); err != nil {
+		return err
+	}
+	_, err := view(txn, activeKey(rec.RunID, tagFailure), func(v []byte) error {
+		f, err := storagepb.UnmarshalFailureRecord(v)
+		rec.Failure = &f
+		return err
+	})
+	return err
+}
+
 // overlayCursor reads the run's cursor onto rec: its scheduling fields,
 // and its in-flight operation as an unresolved step entry — the forward
 // operation in PhaseForward, the unwind one in PhaseUnwind (the Cursor
 // contract).
 func overlayCursor(txn *bdg.Txn, rec *driver.RunRecord) error {
-	cb, err := get(txn, cursorKey(rec.RunID))
+	var cur driver.Cursor
+	found, err := view(txn, cursorKey(rec.RunID), func(v []byte) (err error) {
+		cur, err = storagepb.UnmarshalCursor(v)
+		return err
+	})
 	if err != nil {
 		return err
 	}
-	if cb == nil {
+	if !found {
 		return fmt.Errorf("badger: run %s has no cursor", rec.RunID)
-	}
-	cur, err := storagepb.UnmarshalCursor(cb)
-	if err != nil {
-		return err
 	}
 	rec.Phase = cur.Phase
 	rec.NextAttemptAt = cur.NextAttemptAt
@@ -435,46 +547,31 @@ func overlayCursor(txn *bdg.Txn, rec *driver.RunRecord) error {
 // meta, cancel, and failure rows and the cursor. No operation row is
 // decoded and no blob is touched.
 func (s *Store) getHead(txn *bdg.Txn, id kernel.RunID) (*driver.RunRecord, error) {
-	tb, err := get(txn, terminalKey(id))
+	// Rows are decoded in place (see view): protobuf decoding copies
+	// what it keeps, so the copies a get would make buy nothing here.
+	rec := &driver.RunRecord{}
+	terminal, err := view(txn, terminalKey(id), func(v []byte) error {
+		_, err := storagepb.UnmarshalTerminalInto(v, rec)
+		return err
+	})
 	if err != nil {
 		return nil, err
 	}
-	if tb != nil {
-		rec := &driver.RunRecord{}
-		if _, err := storagepb.UnmarshalTerminalInto(tb, rec); err != nil {
-			return nil, err
-		}
+	if terminal {
 		rec.Output = nil
 		return rec, nil
 	}
-	meta, err := get(txn, activeKey(id, tagMeta))
+	found, err := view(txn, activeKey(id, tagMeta), func(v []byte) error {
+		return storagepb.UnmarshalRunMetaInto(v, rec)
+	})
 	if err != nil {
 		return nil, err
 	}
-	if meta == nil {
+	if !found {
 		return nil, kernel.ErrRunNotFound
 	}
-	rec := &driver.RunRecord{}
-	if err := storagepb.UnmarshalRunMetaInto(meta, rec); err != nil {
+	if err := readHeadRows(txn, rec); err != nil {
 		return nil, err
-	}
-	if v, err := get(txn, activeKey(id, tagCancel)); err != nil {
-		return nil, err
-	} else if v != nil {
-		cr, err := storagepb.UnmarshalCancel(v)
-		if err != nil {
-			return nil, err
-		}
-		rec.Cancel = cr
-	}
-	if v, err := get(txn, activeKey(id, tagFailure)); err != nil {
-		return nil, err
-	} else if v != nil {
-		f, err := storagepb.UnmarshalFailureRecord(v)
-		if err != nil {
-			return nil, err
-		}
-		rec.Failure = &f
 	}
 	if err := overlayCursor(txn, rec); err != nil {
 		return nil, err
@@ -558,13 +655,34 @@ func putRun(txn *bdg.Txn, rec *driver.RunRecord) error {
 	return nil
 }
 
-// putOp upserts the run's one row for the operation, state included.
+// putOp upserts the run's one row for the operation and, for a forward
+// operation, its state row: written when the record carries a state,
+// deleted when it does not and one is there.
 func putOp(txn *bdg.Txn, id kernel.RunID, step kernel.StepID, phase kernel.Phase, op *driver.OperationRecord) error {
-	b, err := storagepb.MarshalOperationRecord(op)
+	row := *op
+	row.State = nil
+	b, err := storagepb.MarshalOperationRecord(&row)
 	if err != nil {
 		return err
 	}
-	return txn.Set(opKey(id, step, phase), b)
+	flag := opNoState
+	if phase == kernel.PhaseForward && len(op.State) > 0 {
+		flag = opHasState
+	}
+	if err := txn.Set(opKey(id, step, phase), append([]byte{flag}, b...)); err != nil {
+		return err
+	}
+	if phase != kernel.PhaseForward {
+		return nil
+	}
+	sk := stateKey(id, step)
+	if len(op.State) > 0 {
+		return txn.Set(sk, op.State)
+	}
+	if ok, err := exists(txn, sk); err != nil || !ok {
+		return err
+	}
+	return txn.Delete(sk)
 }
 
 func putRootFailure(txn *bdg.Txn, id kernel.RunID, rf *kernel.Failure) error {
@@ -589,14 +707,28 @@ func putTerminal(txn *bdg.Txn, rec *driver.RunRecord) error {
 }
 
 // deleteNonterminalStage removes a run's active rows and cursor. The
-// keys are collected before deletion; deleting nothing is fine.
-func deleteNonterminalStage(txn *bdg.Txn, id kernel.RunID) error {
-	for _, k := range keysWithPrefix(txn, runPrefix(id), 0) {
+// rows a run can have are known — meta, cancel, failure, input, its
+// operation rows and their states — so only the operation rows are
+// walked, in snap, a read-only snapshot of what is committed, and the
+// rest are deleted by key: walking past the input would copy it.
+// Deleting a key that is not there writes a tombstone and is fine. Of a
+// run's rows, only the cancel request can have been added by another
+// write in the same batch, and it is deleted by key.
+func deleteNonterminalStage(txn, snap *bdg.Txn, id kernel.RunID) error {
+	keys := [][]byte{activeKey(id, tagMeta), activeKey(id, tagCancel), activeKey(id, tagFailure), activeKey(id, tagInput), cursorKey(id)}
+	prefix := opPrefix(id)
+	for _, k := range keysWithPrefix(snap, prefix, 0) {
+		keys = append(keys, k)
+		if step, phase, ok := splitOpRest(k[len(prefix)-1:]); ok && phase == kernel.PhaseForward {
+			keys = append(keys, stateKey(id, step))
+		}
+	}
+	for _, k := range keys {
 		if err := txn.Delete(k); err != nil {
 			return err
 		}
 	}
-	return txn.Delete(cursorKey(id))
+	return nil
 }
 
 // The Store interface.
@@ -624,7 +756,14 @@ func (s *Store) CreateRun(_ context.Context, rec *driver.RunRecord, excluding []
 			}
 		}
 		if activeID != nil {
-			existing, err = s.getRun(txn, kernel.RunID(activeID))
+			// The occupant is read from a snapshot, as at terminality;
+			// one created earlier in this same batch is only in txn.
+			snap := s.db.NewTransaction(false)
+			defer snap.Discard()
+			existing, err = s.getRun(snap, kernel.RunID(activeID), false)
+			if errors.Is(err, kernel.ErrRunNotFound) {
+				existing, err = s.getRun(txn, kernel.RunID(activeID), false)
+			}
 			return err
 		}
 		if err := putRun(txn, rec); err != nil {
@@ -639,11 +778,33 @@ func (s *Store) CreateRun(_ context.Context, rec *driver.RunRecord, excluding []
 	if err != nil {
 		return nil, false, err
 	}
+	if created {
+		s.blobs.SetInput(rec.RunID, rec.Input)
+		for sid, sr := range rec.Steps {
+			if len(sr.Forward.State) > 0 {
+				s.blobs.SetState(rec.RunID, sid, sr.Forward.State)
+			}
+		}
+	}
 	return existing, created, nil
 }
 
 func (s *Store) ApplyTransition(_ context.Context, id kernel.RunID, t driver.Transition) error {
-	return s.update(func(txn *bdg.Txn) error { return s.applyTransition(txn, id, t) })
+	if err := s.update(func(txn *bdg.Txn) error { return s.applyTransition(txn, id, t) }); err != nil {
+		return err
+	}
+	if t.Outcome != nil {
+		s.blobs.Drop(id)
+		return nil
+	}
+	// A forward row written with a state caches it; one written without
+	// drops whatever the step had.
+	for _, ow := range t.Ops {
+		if ow.Phase == kernel.PhaseForward {
+			s.blobs.SetState(id, ow.StepID, ow.Record.State)
+		}
+	}
+	return nil
 }
 
 // applyTransition is ApplyTransition's body in a caller's transaction.
@@ -671,12 +832,25 @@ func (s *Store) applyTransition(txn *bdg.Txn, id kernel.RunID, t driver.Transiti
 			// deleted with it. The cancel row is point-read first so a
 			// concurrent RequestCancel conflicts with this commit (see
 			// the package doc): the prefix walk alone would not see it.
-			if _, err := exists(txn, activeKey(id, tagCancel)); err != nil {
-				return err
-			}
-			rec, err := s.getNonterminal(txn, id)
+			cancelRow, err := get(txn, activeKey(id, tagCancel))
 			if err != nil {
 				return err
+			}
+			// The stage is walked in a read-only snapshot: an iterator
+			// in a write transaction sorts every pending write of the
+			// batch, so walking there costs the batch, not the run (see
+			// readSnapshot). Of the run's rows, only a cancel request
+			// can be pending in this batch, and it was point-read above.
+			snap := s.db.NewTransaction(false)
+			defer snap.Discard()
+			rec, err := s.getNonterminal(snap, id, false)
+			if err != nil {
+				return err
+			}
+			if rec.Cancel == nil && cancelRow != nil {
+				if rec.Cancel, err = storagepb.UnmarshalCancel(cancelRow); err != nil {
+					return err
+				}
 			}
 			if t.Failure != nil {
 				f := *t.Failure
@@ -703,7 +877,7 @@ func (s *Store) applyTransition(txn *bdg.Txn, id kernel.RunID, t driver.Transiti
 			if err := putTerminal(txn, rec); err != nil {
 				return err
 			}
-			if err := deleteNonterminalStage(txn, id); err != nil {
+			if err := deleteNonterminalStage(txn, snap, id); err != nil {
 				return err
 			}
 			key := slotKey(rec.PipelineID, rec.ResourceID)
@@ -740,7 +914,7 @@ func (s *Store) GetRun(_ context.Context, id kernel.RunID) (*driver.RunRecord, e
 	var rec *driver.RunRecord
 	err := s.db.View(func(txn *bdg.Txn) error {
 		var err error
-		rec, err = s.getRun(txn, id)
+		rec, err = s.getRun(txn, id, true)
 		return err
 	})
 	return rec, err
@@ -879,6 +1053,7 @@ func (s *Store) Close() error {
 	s.once.Do(func() {
 		close(s.stop)
 		<-s.done
+		<-s.writerDone
 		err = s.db.Close()
 	})
 	return err

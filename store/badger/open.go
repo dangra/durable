@@ -26,6 +26,7 @@ import (
 //	sync_writes  WithSyncWrites: true or false
 //	memtable     WithMemTableSize: a byte count with an optional binary
 //	             unit (K, M, G, or KiB, MiB, GiB)
+//	blob_cache   WithBlobCache: a byte count, as memtable
 const Scheme = "badger"
 
 func init() {
@@ -52,6 +53,12 @@ func init() {
 					return nil, fmt.Errorf("badger: %q: option %q: %q is not a boolean", u, key, values[0])
 				}
 				opts = append(opts, WithSyncWrites(on))
+			case "blob_cache":
+				n, err := parseBytes(values[0])
+				if err != nil {
+					return nil, fmt.Errorf("badger: %q: option %q: %w", u, key, err)
+				}
+				opts = append(opts, WithBlobCache(int(n)))
 			case "memtable":
 				n, err := parseBytes(values[0])
 				if err != nil {

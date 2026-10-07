@@ -1,4 +1,8 @@
-package bbolt
+// Package blobcache is the in-memory cache of the immutable blobs of
+// runs — inputs, committed step states, outputs — that the persistent
+// store drivers keep in front of their files. It is internal to the
+// store tree: drivers share it, users never see it.
+package blobcache
 
 import (
 	"container/list"
@@ -7,15 +11,7 @@ import (
 	"github.com/dangra/durable/kernel"
 )
 
-// DefaultBlobCache is the default limit, in bytes, of the cache of the
-// blobs of the runs in flight (see WithBlobCache).
-const DefaultBlobCache = 64 << 20
-
-// DefaultOutputCache is the default limit, in bytes, of the cache of the
-// outputs of terminal runs (see WithOutputCache).
-const DefaultOutputCache = 16 << 20
-
-// blobCache is an in-memory, least-recently-used cache of the immutable
+// Cache is an in-memory, least-recently-used cache of the immutable
 // blobs of runs, keyed by run: a run's input and the states kept beside
 // their rows, or its output. The store keeps two, with their own budgets
 // and their own drop events, because their populations differ in what
@@ -23,8 +19,8 @@ const DefaultOutputCache = 16 << 20
 //
 //   - the blobs of the runs in flight, filled by the writes that store
 //     them and dropped when the run's terminality commit succeeds. A
-//     read of a nonterminal run then never seeks bbolt for them, never
-//     opens a nested bucket, and pays no copy. Runs live for hours or
+//     read of a nonterminal run then never reads them from the file
+//     and pays no copy. Runs live for hours or
 //     days when they retry, park on other runs, or block in a step, and
 //     such runs are read rarely, so the cache evicts the least recently
 //     used past its limit rather than pinning every run in flight; an
@@ -38,7 +34,7 @@ const DefaultOutputCache = 16 << 20
 // keeps a cache coherent by construction; a restart starts cold and the
 // first read of a run fills its entry from the file. Slices are shared,
 // in and out: the store contract declares these blobs immutable.
-type blobCache struct {
+type Cache struct {
 	mu    sync.Mutex
 	order *list.List // front is most recently used
 	byID  map[kernel.RunID]*list.Element
@@ -56,13 +52,14 @@ type runBlobs struct {
 	size   int
 }
 
-func newBlobCache(limit int) *blobCache {
-	return &blobCache{order: list.New(), byID: make(map[kernel.RunID]*list.Element), limit: limit}
+// New returns a cache bounded to limit bytes; zero admits nothing.
+func New(limit int) *Cache {
+	return &Cache{order: list.New(), byID: make(map[kernel.RunID]*list.Element), limit: limit}
 }
 
 // touch returns the run's entry, most recently used, creating it when
 // absent; nil when the cache admits nothing (a zero limit).
-func (c *blobCache) touch(id kernel.RunID) *runBlobs {
+func (c *Cache) touch(id kernel.RunID) *runBlobs {
 	if c.limit <= 0 {
 		return nil
 	}
@@ -77,7 +74,7 @@ func (c *blobCache) touch(id kernel.RunID) *runBlobs {
 
 // evict drops least recently used entries until the cache fits its
 // limit, never the entry passed in, which is the one being written.
-func (c *blobCache) evict(keep *runBlobs) {
+func (c *Cache) evict(keep *runBlobs) {
 	for c.size > c.limit {
 		last := c.order.Back()
 		if last == nil {
@@ -93,15 +90,15 @@ func (c *blobCache) evict(keep *runBlobs) {
 	}
 }
 
-func (c *blobCache) remove(el *list.Element) {
+func (c *Cache) remove(el *list.Element) {
 	rb := el.Value.(*runBlobs)
 	c.size -= rb.size
 	c.order.Remove(el)
 	delete(c.byID, rb.id)
 }
 
-// setInput caches the run's input, retaining the slice.
-func (c *blobCache) setInput(id kernel.RunID, input []byte) {
+// SetInput caches the run's input, retaining the slice.
+func (c *Cache) SetInput(id kernel.RunID, input []byte) {
 	if len(input) == 0 {
 		return
 	}
@@ -119,9 +116,9 @@ func (c *blobCache) setInput(id kernel.RunID, input []byte) {
 	c.evict(rb)
 }
 
-// setState caches a step's committed state, retaining the slice; an
+// SetState caches a step's committed state, retaining the slice; an
 // empty state drops the entry (the row was replaced without one).
-func (c *blobCache) setState(id kernel.RunID, step kernel.StepID, state []byte) {
+func (c *Cache) SetState(id kernel.RunID, step kernel.StepID, state []byte) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	rb := c.touch(id)
@@ -145,8 +142,8 @@ func (c *blobCache) setState(id kernel.RunID, step kernel.StepID, state []byte) 
 	c.evict(rb)
 }
 
-// setOutput caches the run's output, retaining the slice.
-func (c *blobCache) setOutput(id kernel.RunID, output []byte) {
+// SetOutput caches the run's output, retaining the slice.
+func (c *Cache) SetOutput(id kernel.RunID, output []byte) {
 	if len(output) == 0 {
 		return
 	}
@@ -164,11 +161,18 @@ func (c *blobCache) setOutput(id kernel.RunID, output []byte) {
 	c.evict(rb)
 }
 
-// fill caches a run read from the file on a miss — the slices the read
+// Blobs is what a read found of a run's blobs on a miss, for Fill.
+type Blobs struct {
+	Input  []byte
+	States map[kernel.StepID][]byte
+	Output []byte
+}
+
+// Fill caches a run read from the file on a miss — the slices the read
 // cloned out of the file's pages — when the run is not cached.
-func (c *blobCache) fill(id kernel.RunID, rb *runBlobs) {
-	need := len(rb.input) + len(rb.output)
-	for _, st := range rb.states {
+func (c *Cache) Fill(id kernel.RunID, rb *Blobs) {
+	need := len(rb.Input) + len(rb.Output)
+	for _, st := range rb.States {
 		need += len(st)
 	}
 	if need == 0 || c.limit <= 0 {
@@ -179,14 +183,14 @@ func (c *blobCache) fill(id kernel.RunID, rb *runBlobs) {
 	if _, ok := c.byID[id]; ok {
 		return
 	}
-	entry := &runBlobs{id: id, input: rb.input, states: rb.states, output: rb.output, size: need}
+	entry := &runBlobs{id: id, input: rb.Input, states: rb.States, output: rb.Output, size: need}
 	c.byID[id] = c.order.PushFront(entry)
 	c.size += need
 	c.evict(entry)
 }
 
-// drop forgets the run.
-func (c *blobCache) drop(id kernel.RunID) {
+// Drop forgets the run.
+func (c *Cache) Drop(id kernel.RunID) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if el, ok := c.byID[id]; ok {
@@ -196,7 +200,7 @@ func (c *blobCache) drop(id kernel.RunID) {
 
 // lookup returns the run's entry, marking it most recently used, and
 // whether the run is cached.
-func (c *blobCache) lookup(id kernel.RunID) (*runBlobs, bool) {
+func (c *Cache) lookup(id kernel.RunID) (*runBlobs, bool) {
 	el, ok := c.byID[id]
 	if !ok {
 		return nil, false
@@ -205,9 +209,9 @@ func (c *blobCache) lookup(id kernel.RunID) (*runBlobs, bool) {
 	return el.Value.(*runBlobs), true
 }
 
-// input returns the run's cached input, shared, and whether the run is
+// Input returns the run's cached input, shared, and whether the run is
 // cached at all.
-func (c *blobCache) input(id kernel.RunID) ([]byte, bool) {
+func (c *Cache) Input(id kernel.RunID) ([]byte, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	rb, ok := c.lookup(id)
@@ -217,8 +221,8 @@ func (c *blobCache) input(id kernel.RunID) ([]byte, bool) {
 	return rb.input, true
 }
 
-// state returns a step's cached state, shared; nil when none.
-func (c *blobCache) state(id kernel.RunID, step kernel.StepID) []byte {
+// State returns a step's cached state, shared; nil when none.
+func (c *Cache) State(id kernel.RunID, step kernel.StepID) []byte {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if rb, ok := c.lookup(id); ok {
@@ -227,8 +231,8 @@ func (c *blobCache) state(id kernel.RunID, step kernel.StepID) []byte {
 	return nil
 }
 
-// output returns the run's cached output, shared; nil when none.
-func (c *blobCache) output(id kernel.RunID) []byte {
+// Output returns the run's cached output, shared; nil when none.
+func (c *Cache) Output(id kernel.RunID) []byte {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if rb, ok := c.lookup(id); ok {
@@ -237,11 +241,21 @@ func (c *blobCache) output(id kernel.RunID) []byte {
 	return nil
 }
 
-// has reports whether the run is cached without marking it used; for
+// Has reports whether the run is cached without marking it used; for
 // tests, which must not reorder what they observe.
-func (c *blobCache) has(id kernel.RunID) bool {
+func (c *Cache) Has(id kernel.RunID) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	_, ok := c.byID[id]
 	return ok
+}
+
+// Limit is the cache's bound in bytes.
+func (c *Cache) Limit() int { return c.limit }
+
+// Size is the bytes the cache holds now.
+func (c *Cache) Size() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.size
 }

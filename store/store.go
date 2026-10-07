@@ -12,10 +12,12 @@
 //	st, err := store.Open("bbolt:///var/lib/app/durable.db")
 //	eng := engine.New(st)
 //
-// The in-tree drivers are store/bbolt (persistent, single process) and
-// store/mem (process-local; runs do not survive the process, which is
-// what a CLI with ephemeral runs wants). The caller that opened a store
-// closes it, after Engine.Stop.
+// The in-tree drivers are store/bbolt (persistent, single process),
+// store/badger (persistent, single process, on an LSM tree; its own
+// module, so its dependencies enter only the binaries that import it),
+// and store/mem (process-local; runs do not survive the process, which
+// is what a CLI with ephemeral runs wants). The caller that opened a
+// store closes it, after Engine.Stop.
 //
 // Implementers of a new backend implement driver.Store and call Register
 // from an init function; the URI conventions are theirs to define and

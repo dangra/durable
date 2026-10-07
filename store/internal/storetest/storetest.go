@@ -1,0 +1,399 @@
+// Package storetest is the differential test of the Store contract: a
+// driver under test is driven through the same operation sequence as
+// store/mem, the executable reference, and any observable divergence —
+// results, errors, record contents, list membership, or ordering —
+// fails. Each persistent driver's FuzzStoreContract calls Fuzz with a
+// fresh store per input; the engine's crash-restart test is the other
+// half of a driver's proof.
+package storetest
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"reflect"
+	"sort"
+	"testing"
+	"time"
+
+	"github.com/dangra/durable"
+	"github.com/dangra/durable/kernel"
+	"github.com/dangra/durable/store/driver"
+	"github.com/dangra/durable/store/mem"
+)
+
+// Record is a RunRecord flattened for comparison: times as
+// nanoseconds (a proto round trip drops monotonic clocks and locations),
+// empty byte slices normalized to nil, and the Steps map as a sorted
+// slice.
+type Record struct {
+	RunID, PipelineID, ResourceID string
+	Annotations                   map[string]string
+	Input                         []byte
+	Phase                         durable.Phase
+	Steps                         []canonStep
+	Root                          *durable.Failure
+	Output                        []byte
+	Outcome                       *durable.Outcome
+	NextAttemptAt, LastErrorAt    int64
+	Awaiting                      *canonAwait
+	Awaited                       *kernel.Wake
+	LastError, LastReason         string
+	Cancel                        *canonCancel
+	CreatedAt, UpdatedAt          int64
+	StartedAt                     int64
+}
+
+type canonStep struct {
+	ID     string
+	Record driver.StepRecord
+}
+
+type canonCancel struct {
+	Cause string
+	At    int64
+}
+
+type canonAwait struct {
+	Mode          kernel.AwaitMode
+	Targets       []durable.RunID
+	Deadline      int64
+	CancelCascade bool
+}
+
+func nanos(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.UnixNano()
+}
+
+func normBytes(b []byte) []byte {
+	if len(b) == 0 {
+		return nil
+	}
+	return b
+}
+
+func canonFailure(f durable.Failure) durable.Failure {
+	f.At = time.Unix(0, nanos(f.At)).UTC()
+	return f
+}
+
+func Canonicalize(rec *driver.RunRecord) *Record {
+	if rec == nil {
+		return nil
+	}
+	c := &Record{
+		RunID: string(rec.RunID), PipelineID: string(rec.PipelineID),
+		ResourceID: string(rec.ResourceID),
+		Input:      normBytes(rec.Input), Phase: rec.Phase,
+		Annotations:   rec.Annotations,
+		Output:        normBytes(rec.Output),
+		NextAttemptAt: nanos(rec.NextAttemptAt), LastErrorAt: nanos(rec.LastErrorAt),
+		Awaited:   rec.Awaited.Clone(),
+		LastError: rec.LastError, LastReason: rec.LastReason,
+		CreatedAt: nanos(rec.CreatedAt), UpdatedAt: nanos(rec.UpdatedAt),
+		StartedAt: nanos(rec.StartedAt),
+	}
+	if a := rec.Awaiting; a != nil {
+		c.Awaiting = &canonAwait{Mode: a.Mode, Targets: append([]durable.RunID(nil), a.Targets...), Deadline: nanos(a.Deadline), CancelCascade: a.CancelCascade}
+	}
+	if rec.Outcome != nil {
+		oc := *rec.Outcome
+		c.Outcome = &oc
+	}
+	if rec.Failure != nil {
+		f := canonFailure(*rec.Failure)
+		c.Root = &f
+	}
+	if rec.Cancel != nil {
+		c.Cancel = &canonCancel{Cause: rec.Cancel.Cause, At: nanos(rec.Cancel.At)}
+	}
+	canonOp := func(op driver.OperationRecord) driver.OperationRecord {
+		op.State = normBytes(op.State)
+		if op.Failure != nil {
+			f := canonFailure(*op.Failure)
+			op.Failure = &f
+		}
+		return op
+	}
+	for id, sr := range rec.Steps {
+		c.Steps = append(c.Steps, canonStep{ID: string(id), Record: driver.StepRecord{
+			Forward: canonOp(sr.Forward), Unwind: canonOp(sr.Unwind),
+		}})
+	}
+	sort.Slice(c.Steps, func(i, j int) bool { return c.Steps[i].ID < c.Steps[j].ID })
+	return c
+}
+
+// Seed adds the corpus every driver's FuzzStoreContract starts from.
+func Seed(f *testing.F) {
+	f.Add([]byte{0, 0, 1, 0, 3, 0, 0, 9, 1, 8, 4, 0, 2, 0, 5, 0, 3, 0})
+	f.Add([]byte{0, 5, 0, 13, 1, 21, 1, 42, 2, 5, 3, 5, 4, 13, 5, 200})
+}
+
+// Fuzz drives one operation sequence, decoded from data, against st
+// and against a fresh mem.Store, and fails on the first divergence. st
+// must be empty; the caller closes it.
+func Fuzz(t *testing.T, data []byte, st driver.Store) {
+	bs := st
+	ms := mem.New()
+	ctx := context.Background()
+	runIDs := []durable.RunID{
+		"01RUN000000000000000000001", "01RUN000000000000000000002",
+		"01RUN000000000000000000003", "01RUN000000000000000000004",
+	}
+	pipelines := []durable.PipelineID{"p1", "p2"}
+	resources := []durable.ResourceID{"r1", "r2"}
+	steps := []durable.StepID{"s1/v1", "s2/v1"}
+	outcomes := []durable.Outcome{durable.OutcomeSuccess, durable.OutcomeFailure}
+
+	base := time.Unix(1_700_000_000, 0).UTC()
+	tick := 0
+	next := func() time.Time { tick++; return base.Add(time.Duration(tick) * time.Millisecond) }
+
+	r := bytes.NewReader(data)
+	byteOr0 := func() byte {
+		b, err := r.ReadByte()
+		if err != nil {
+			return 0
+		}
+		return b
+	}
+
+	mustEqual := func(what string, a, b any) {
+		t.Helper()
+		if !reflect.DeepEqual(a, b) {
+			t.Fatalf("%s diverged:\ndriver: %+v\nmodel: %+v", what, a, b)
+		}
+	}
+	compareRun := func(id durable.RunID) {
+		t.Helper()
+		br, berr := bs.GetRun(ctx, id)
+		mr, merr := ms.GetRun(ctx, id)
+		mustEqual(fmt.Sprintf("GetRun(%s) error", id), berr, merr)
+		mustEqual(fmt.Sprintf("GetRun(%s)", id), Canonicalize(br), Canonicalize(mr))
+		// The head agrees between stores and is a projection of the
+		// full record: same identity and cursor fields, no blobs,
+		// and for a nonterminal run at most the cursor's operation.
+		bh, bherr := bs.GetRunHead(ctx, id)
+		mh, mherr := ms.GetRunHead(ctx, id)
+		mustEqual(fmt.Sprintf("GetRunHead(%s) error", id), bherr, mherr)
+		mustEqual(fmt.Sprintf("GetRunHead(%s)", id), Canonicalize(bh), Canonicalize(mh))
+		if bherr == nil {
+			mustEqual("head vs GetRun error", bherr, berr)
+			want, got := Canonicalize(br), Canonicalize(bh)
+			if got.Input != nil || got.Output != nil {
+				t.Fatalf("head of %s carries blobs: %+v", id, got)
+			}
+			want.Input, want.Output = nil, nil
+			if !br.Terminal() {
+				if len(bh.Steps) > 1 {
+					t.Fatalf("nonterminal head of %s has %d steps", id, len(bh.Steps))
+				}
+				for sid, sr := range bh.Steps {
+					op := sr.Op(br.Phase)
+					full := br.Steps[sid].Op(br.Phase)
+					if op.Status != driver.OpUnresolved || full.Status != driver.OpUnresolved || op.Attempts != full.Attempts {
+						t.Fatalf("head of %s step %s = %+v; full %+v", id, sid, *op, *full)
+					}
+				}
+				want.Steps, got.Steps = nil, nil
+			}
+			mustEqual(fmt.Sprintf("GetRunHead(%s) projection", id), got, want)
+		}
+	}
+	// The slot index is load-bearing twice over: CreateRun admits
+	// against it and ListNonterminal (recovery) walks it. The model
+	// derives the nonterminal set from record facts, so agreeing with
+	// it after every operation pins "slot keys == runs without an
+	// outcome" in both directions.
+	compareNonterminal := func() {
+		t.Helper()
+		bn, berr := bs.ListNonterminal(ctx)
+		mn, merr := ms.ListNonterminal(ctx)
+		mustEqual("ListNonterminal error", berr, merr)
+		key := func(rs []*driver.RunRecord) map[string]*Record {
+			out := map[string]*Record{}
+			for _, rr := range rs {
+				out[string(rr.RunID)] = Canonicalize(rr)
+			}
+			return out
+		}
+		mustEqual("ListNonterminal", key(bn), key(mn))
+	}
+
+	for op := byteOr0(); r.Len() > 0; op = byteOr0() {
+		arg := byteOr0()
+		id := runIDs[int(arg)%len(runIDs)]
+		switch op % 6 {
+		case 0: // CreateRun
+			now := next()
+			rec := &driver.RunRecord{
+				RunID:      id,
+				PipelineID: pipelines[int(arg/4)%len(pipelines)],
+				ResourceID: resources[int(arg/8)%len(resources)],
+				// Sizes on both sides of the blob row limit.
+				Input:     normBytes(bytes.Repeat([]byte{arg}, int(arg)*8)),
+				Phase:     durable.PhaseForward,
+				Steps:     map[durable.StepID]*driver.StepRecord{},
+				CreatedAt: now,
+				UpdatedAt: now,
+			}
+			if arg%3 == 0 {
+				rec.NextAttemptAt = now.Add(time.Hour)
+			}
+			if arg%2 == 0 {
+				rec.Annotations = map[string]string{"traceparent": fmt.Sprintf("00-%02x", arg), "tenant": "t1"}
+			}
+			// RunID freshness is a documented CreateRun precondition:
+			// reusing any existing id — terminal, or live under a
+			// different slot — is undefined. The one in-contract
+			// re-create is the dedup probe: a live id occupying the
+			// same (pipeline, resource) slot.
+			if prev, err := ms.GetRun(ctx, id); err == nil {
+				if prev.Terminal() || prev.PipelineID != rec.PipelineID || prev.ResourceID != rec.ResourceID {
+					continue
+				}
+			}
+			// Exclusion set: the pipeline alone, or every pipeline as
+			// one group — the two shapes an engine deployment produces.
+			var excluding []durable.PipelineID
+			if arg&0x10 != 0 {
+				excluding = pipelines
+			}
+			bex, bcreated, berr := bs.CreateRun(ctx, rec, excluding)
+			mex, mcreated, merr := ms.CreateRun(ctx, rec, excluding)
+			mustEqual("CreateRun error", berr, merr)
+			mustEqual("CreateRun created", bcreated, mcreated)
+			mustEqual("CreateRun existing", Canonicalize(bex), Canonicalize(mex))
+		case 1: // ApplyTransition
+			now := next()
+			phase := durable.PhaseForward
+			if arg%2 == 1 {
+				phase = durable.PhaseUnwind
+			}
+			tr := driver.Transition{Cursor: driver.Cursor{
+				Phase:     phase,
+				UpdatedAt: now,
+			}}
+			if arg%3 == 0 {
+				tr.Cursor.StepID = steps[int(arg/3)%len(steps)]
+				tr.Cursor.Attempts = uint64(arg%5) + 1
+				tr.Cursor.LastError = "boom"
+				tr.Cursor.LastReason = "reason"
+				tr.Cursor.LastErrorAt = now
+				tr.Cursor.NextAttemptAt = now.Add(time.Minute)
+				tr.Cursor.StartedAt = now
+			}
+			if arg%4 == 0 {
+				// One operation row: a failed status carries its
+				// failure, and a resolved one its order.
+				opPhase := durable.PhaseForward
+				if arg&0x20 != 0 {
+					opPhase = durable.PhaseUnwind
+				}
+				op := driver.OperationRecord{
+					// arg%4 is 0 here; the status comes from the
+					// next two bits so failed rows do occur.
+					Status:   driver.OpStatus((arg / 4) % 4),
+					Attempts: uint64(arg % 7),
+					Order:    uint32(arg % 5),
+				}
+				// State belongs to forward operations only (the
+				// contract); sizes land on both sides of the blob
+				// row limit.
+				if opPhase == durable.PhaseForward {
+					op.State = normBytes(bytes.Repeat([]byte{arg}, int(arg)*16))
+				}
+				if op.Status == driver.OpFailed {
+					op.Failure = &durable.Failure{
+						StepID: steps[int(arg/2)%len(steps)], Phase: opPhase,
+						Attempt: op.Attempts, Message: "op", At: now,
+						Kind: durable.FailureKind(arg % 3), Reason: "r",
+					}
+				}
+				tr.Ops = []driver.OpWrite{{StepID: steps[int(arg/2)%len(steps)], Phase: opPhase, Record: op}}
+			}
+			// The run failure is set at most once per Run (the
+			// Transition contract); a persistent store may refuse a
+			// second one, so the sequence never sends it.
+			if prev, err := ms.GetRun(ctx, id); arg%5 == 0 && (err != nil || prev.Failure == nil) {
+				tr.Failure = &durable.Failure{
+					StepID: steps[0], Phase: durable.PhaseForward,
+					Attempt: 1, Message: "root", At: now,
+					Kind: durable.FailureKindUser, Reason: "why",
+				}
+			}
+			if arg%7 == 0 {
+				oc := outcomes[int(arg)%len(outcomes)]
+				tr.Outcome = &oc
+				tr.Output = normBytes(bytes.Repeat([]byte{arg}, int(arg)*16))
+			}
+			// Uphold the engine's delta contract: every previously
+			// unresolved operation must be covered by the cursor or
+			// an explicit step write (engine.apply flushes them the
+			// same way). Raw sequences that abandon an in-flight
+			// reservation are outside the Store contract.
+			if prev, err := ms.GetRun(ctx, id); err == nil {
+				for sid, sr := range prev.Steps {
+					if sid == tr.Cursor.StepID {
+						continue
+					}
+					for _, ph := range []durable.Phase{durable.PhaseForward, durable.PhaseUnwind} {
+						op := sr.Op(ph)
+						if op.Status != driver.OpUnresolved {
+							continue
+						}
+						covered := false
+						for _, ow := range tr.Ops {
+							if ow.StepID == sid && ow.Phase == ph {
+								covered = true
+								break
+							}
+						}
+						if !covered {
+							tr.Ops = append(tr.Ops, driver.OpWrite{StepID: sid, Phase: ph, Record: *op})
+						}
+					}
+				}
+			}
+			berr := bs.ApplyTransition(ctx, id, tr)
+			merr := ms.ApplyTransition(ctx, id, tr)
+			mustEqual("ApplyTransition error", berr, merr)
+			compareRun(id)
+		case 2: // RequestCancel
+			req := driver.CancelRequest{Cause: "cause", At: next()}
+			bacc, berr := bs.RequestCancel(ctx, id, req)
+			macc, merr := ms.RequestCancel(ctx, id, req)
+			mustEqual("RequestCancel error", berr, merr)
+			mustEqual("RequestCancel accepted", bacc, macc)
+		case 3: // GetRun
+			compareRun(id)
+		case 4: // GetActiveRunID
+			res := resources[int(arg/2)%len(resources)]
+			// GetActiveRunID: the indexed slot read agrees with the
+			// reference for every pipeline on the resource.
+			for _, pp := range pipelines {
+				bid, bok, berr := bs.GetActiveRunID(ctx, pp, res)
+				mid, mok, merr := ms.GetActiveRunID(ctx, pp, res)
+				mustEqual("GetActiveRunID error", berr, merr)
+				mustEqual("GetActiveRunID ok", bok, mok)
+				mustEqual("GetActiveRunID id", bid, mid)
+			}
+		case 5: // ReapTerminal with a limit covering everything
+			before := base.Add(time.Duration(int(arg)) * 10 * time.Millisecond)
+			bn, berr := bs.ReapTerminal(ctx, before, 1000)
+			mn, merr := ms.ReapTerminal(ctx, before, 1000)
+			mustEqual("ReapTerminal error", berr, merr)
+			mustEqual("ReapTerminal count", bn, mn)
+		}
+		compareNonterminal()
+	}
+
+	// Final sweep: every run must agree.
+	for _, id := range runIDs {
+		compareRun(id)
+	}
+}

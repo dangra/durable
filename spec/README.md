@@ -119,7 +119,7 @@ durable       store/driver       observe
 pipelinedef        ^
    ^          store            Open(uri) + driver registry
 engine             ^
-   ^          store/bbolt, store/mem, store/sqlite (later)
+   ^          store/bbolt, store/badger, store/mem, store/sqlite (later)
 contrib/durableotel, generated code, applications
 ```
 

@@ -94,7 +94,7 @@
 //
 // The blobs a nonterminal run carries — its input and the states kept
 // beside their rows — never change once written, so the store keeps
-// copies of them in memory for the runs in flight (see blobCache) and a
+// copies of them in memory for the runs in flight (see package blobcache) and a
 // read of a run costs one copy per blob instead of a seek, a bucket
 // open, and a clone from the file. Entries are filled by the writes
 // that store the blobs, dropped at terminality, and refilled from the
@@ -121,6 +121,7 @@ import (
 
 	"github.com/dangra/durable/kernel"
 	"github.com/dangra/durable/store/driver"
+	"github.com/dangra/durable/store/internal/blobcache"
 	"github.com/dangra/durable/store/internal/storagepb"
 )
 
@@ -177,9 +178,9 @@ type Store struct {
 	// and rides alone through every later rewrite.
 	blobRowMax int
 	// blobs caches the immutable blobs of the runs in flight and outputs
-	// the large outputs of terminal runs; see blobCache.
-	blobs   *blobCache
-	outputs *blobCache
+	// the large outputs of terminal runs; see package blobcache.
+	blobs   *blobcache.Cache
+	outputs *blobcache.Cache
 	stop    chan struct{}
 	done    chan struct{}
 	once    sync.Once
@@ -263,7 +264,7 @@ func Open(path string, opts ...Option) (*Store, error) {
 		return nil, fmt.Errorf("bbolt: initializing buckets: %w", err)
 	}
 	db.MaxBatchDelay = 2 * time.Millisecond
-	s := &Store{db: db, stop: make(chan struct{}), done: make(chan struct{}), blobRowMax: blobRowMaxFor(db.Info().PageSize), blobs: newBlobCache(cfg.blobCache), outputs: newBlobCache(cfg.outputCache)}
+	s := &Store{db: db, stop: make(chan struct{}), done: make(chan struct{}), blobRowMax: blobRowMaxFor(db.Info().PageSize), blobs: blobcache.New(cfg.blobCache), outputs: blobcache.New(cfg.outputCache)}
 	// Whatever the previous process left staged is drained now; the
 	// counter starts at zero and the sweep sees the bucket empty after.
 	if err := s.Drain(); err != nil {
@@ -473,10 +474,10 @@ func (s *Store) CreateRun(_ context.Context, rec *driver.RunRecord, excluding []
 		return nil, false, err
 	}
 	if created {
-		s.blobs.setInput(rec.RunID, rec.Input)
+		s.blobs.SetInput(rec.RunID, rec.Input)
 		for sid, sr := range rec.Steps {
 			if len(sr.Forward.State) > s.blobRowMax {
-				s.blobs.setState(rec.RunID, sid, sr.Forward.State)
+				s.blobs.SetState(rec.RunID, sid, sr.Forward.State)
 			}
 		}
 	}
@@ -643,9 +644,9 @@ func (s *Store) ApplyTransition(_ context.Context, id kernel.RunID, t driver.Tra
 	}
 	if t.Outcome != nil {
 		s.staged.Add(1)
-		s.blobs.drop(id)
+		s.blobs.Drop(id)
 		if len(t.Output) > s.blobRowMax {
-			s.outputs.setOutput(id, t.Output)
+			s.outputs.SetOutput(id, t.Output)
 		}
 		return nil
 	}
@@ -656,9 +657,9 @@ func (s *Store) ApplyTransition(_ context.Context, id kernel.RunID, t driver.Tra
 			continue
 		}
 		if len(ow.Record.State) > s.blobRowMax {
-			s.blobs.setState(id, ow.StepID, ow.Record.State)
+			s.blobs.SetState(id, ow.StepID, ow.Record.State)
 		} else {
-			s.blobs.setState(id, ow.StepID, nil)
+			s.blobs.SetState(id, ow.StepID, nil)
 		}
 	}
 	return nil
@@ -877,11 +878,11 @@ func (s *Store) getRun(tx *bolt.Tx, id kernel.RunID) (*driver.RunRecord, error) 
 			return nil, err
 		}
 		if beside {
-			if out := s.outputs.output(id); out != nil {
+			if out := s.outputs.Output(id); out != nil {
 				rec.Output = out
 			} else {
 				rec.Output = getBlob(terminal, outputKey(id))
-				s.outputs.fill(id, &runBlobs{output: rec.Output})
+				s.outputs.Fill(id, &blobcache.Blobs{Output: rec.Output})
 			}
 		}
 		return rec, nil
@@ -897,10 +898,10 @@ func (s *Store) getNonterminal(tx *bolt.Tx, id kernel.RunID) (*driver.RunRecord,
 	// Blobs come from the cache when the run is in it; a run that is not
 	// (a restart, or the cache was full) reads them from the file and,
 	// on a cold miss, fills its entry.
-	cachedInput, cached := s.blobs.input(id)
-	var fill *runBlobs
+	cachedInput, cached := s.blobs.Input(id)
+	var fill *blobcache.Blobs
 	if !cached {
-		fill = &runBlobs{}
+		fill = &blobcache.Blobs{}
 	}
 	prefix := runPrefix(id)
 	active := tx.Bucket(activeBucket)
@@ -928,7 +929,7 @@ func (s *Store) getNonterminal(tx *bolt.Tx, id kernel.RunID) (*driver.RunRecord,
 			} else {
 				rec.Input = blobAt(active, k, v)
 				if fill != nil {
-					fill.input = rec.Input
+					fill.Input = rec.Input
 				}
 			}
 		case tagCancel:
@@ -956,15 +957,15 @@ func (s *Store) getNonterminal(tx *bolt.Tx, id kernel.RunID) (*driver.RunRecord,
 						return nil, fmt.Errorf("bbolt: malformed state key %q", k)
 					}
 				}
-				if st := s.blobs.state(id, step); st != nil {
+				if st := s.blobs.State(id, step); st != nil {
 					rec.Step(step).Forward.State = st
 				} else {
 					rec.Step(step).Forward.State = blobAt(active, k, v)
 					if fill != nil {
-						if fill.states == nil {
-							fill.states = make(map[kernel.StepID][]byte)
+						if fill.States == nil {
+							fill.States = make(map[kernel.StepID][]byte)
 						}
-						fill.states[step] = rec.Step(step).Forward.State
+						fill.States[step] = rec.Step(step).Forward.State
 					}
 				}
 				continue
@@ -985,7 +986,7 @@ func (s *Store) getNonterminal(tx *bolt.Tx, id kernel.RunID) (*driver.RunRecord,
 	}
 
 	if fill != nil {
-		s.blobs.fill(id, fill)
+		s.blobs.Fill(id, fill)
 	}
 
 	if err := overlayCursor(tx, rec); err != nil {
@@ -1125,7 +1126,7 @@ func (s *Store) ReapTerminal(_ context.Context, before time.Time, limit int) (in
 			if err := tx.Bucket(stagedBucket).Delete(id); err != nil {
 				return err
 			}
-			s.outputs.drop(kernel.RunID(id))
+			s.outputs.Drop(kernel.RunID(id))
 			deleted++
 		}
 		return nil

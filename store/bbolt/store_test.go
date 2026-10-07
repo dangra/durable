@@ -916,8 +916,8 @@ func TestBlobCacheServesReads(t *testing.T) {
 	// and the read returns them, while the file still holds the
 	// originals.
 	planted, plantedState := bytes.Repeat([]byte{7}, len(input)), bytes.Repeat([]byte{8}, len(state))
-	s.blobs.setInput("run-c", planted)
-	s.blobs.setState("run-c", "a/v1", plantedState)
+	s.blobs.SetInput("run-c", planted)
+	s.blobs.SetState("run-c", "a/v1", plantedState)
 	got, err := s.GetRun(ctx, "run-c")
 	if err != nil || !bytes.Equal(got.Input, planted) || !bytes.Equal(got.Step("a/v1").Forward.State, plantedState) {
 		t.Fatalf("GetRun = input %x…, state %x…, %v; want the cache's bytes", got.Input[:1], got.Step("a/v1").Forward.State[:1], err)
@@ -933,7 +933,7 @@ func TestBlobCacheServesReads(t *testing.T) {
 	if err := s.ApplyTransition(ctx, "run-c", driver.Transition{Cursor: driver.Cursor{Phase: durable.PhaseDone, UpdatedAt: now}, Outcome: &oc}); err != nil {
 		t.Fatal(err)
 	}
-	if _, cached := s.blobs.input("run-c"); cached {
+	if _, cached := s.blobs.Input("run-c"); cached {
 		t.Fatal("terminality must drop the run's cache entry")
 	}
 
@@ -946,13 +946,13 @@ func TestBlobCacheServesReads(t *testing.T) {
 		t.Fatal(err)
 	}
 	s2 := open(t, path)
-	if _, cached := s2.blobs.input("run-d"); cached {
+	if _, cached := s2.blobs.Input("run-d"); cached {
 		t.Fatal("a fresh store starts cold")
 	}
 	if got, err := s2.GetRun(ctx, "run-d"); err != nil || !bytes.Equal(got.Input, input) {
 		t.Fatalf("GetRun after reopen = %d bytes, %v", len(got.Input), err)
 	}
-	if in, cached := s2.blobs.input("run-d"); !cached || !bytes.Equal(in, input) {
+	if in, cached := s2.blobs.Input("run-d"); !cached || !bytes.Equal(in, input) {
 		t.Fatal("the first read must fill the cache")
 	}
 }
@@ -983,8 +983,8 @@ func TestOptions(t *testing.T) {
 	}
 	s := st.(*Store)
 	defer s.Close()
-	if s.blobs.limit != 0 || s.outputs.limit != 1<<20 {
-		t.Fatalf("limits = %d, %d", s.blobs.limit, s.outputs.limit)
+	if s.blobs.Limit() != 0 || s.outputs.Limit() != 1<<20 {
+		t.Fatalf("limits = %d, %d", s.blobs.Limit(), s.outputs.Limit())
 	}
 	// A disabled blob cache never caches; reads still come from the file.
 	ctx := context.Background()
@@ -993,7 +993,7 @@ func TestOptions(t *testing.T) {
 	if _, created, err := s.CreateRun(ctx, &driver.RunRecord{RunID: "r", PipelineID: "p", ResourceID: "r", Phase: durable.PhaseForward, Input: input, CreatedAt: now, UpdatedAt: now}, nil); err != nil || !created {
 		t.Fatal(err)
 	}
-	if _, cached := s.blobs.input("r"); cached {
+	if _, cached := s.blobs.Input("r"); cached {
 		t.Fatal("a zero limit must cache nothing")
 	}
 	if got, err := s.GetRun(ctx, "r"); err != nil || !bytes.Equal(got.Input, input) {
@@ -1026,11 +1026,11 @@ func TestOutputCache(t *testing.T) {
 		}
 	}
 	finish("a", 1)
-	if s.outputs.output("a") == nil {
+	if s.outputs.Output("a") == nil {
 		t.Fatal("terminality must cache a large output")
 	}
 	planted := bytes.Repeat([]byte{9}, 8192)
-	s.outputs.setOutput("a", planted)
+	s.outputs.SetOutput("a", planted)
 	if got, err := s.GetRun(ctx, "a"); err != nil || !bytes.Equal(got.Output, planted) {
 		t.Fatalf("GetRun = %x…, %v; want the cache's bytes", got.Output[:1], err)
 	}
@@ -1038,21 +1038,21 @@ func TestOutputCache(t *testing.T) {
 	// unless it was read last.
 	finish("b", 2)
 	finish("c", 3)
-	s.outputs.output("a")
+	s.outputs.Output("a")
 	finish("d", 4)
-	if s.outputs.output("b") != nil || s.outputs.output("a") == nil || s.outputs.output("d") == nil {
+	if s.outputs.Output("b") != nil || s.outputs.Output("a") == nil || s.outputs.Output("d") == nil {
 		t.Fatal("eviction must drop the least recently used entry")
 	}
 	// A miss reads the file and refills.
-	if got, err := s.GetRun(ctx, "b"); err != nil || got.Output[0] != 2 || s.outputs.output("b") == nil {
+	if got, err := s.GetRun(ctx, "b"); err != nil || got.Output[0] != 2 || s.outputs.Output("b") == nil {
 		t.Fatalf("GetRun(b) = %v; the miss must read the file and refill", err)
 	}
 	// Reap drops victims.
 	if n, err := s.ReapTerminal(ctx, now.Add(time.Second), 10); err != nil || n != 4 {
 		t.Fatalf("ReapTerminal = %d, %v", n, err)
 	}
-	if s.outputs.output("d") != nil || s.outputs.size != 0 {
-		t.Fatalf("reap must drop every victim's entry; size = %d", s.outputs.size)
+	if s.outputs.Output("d") != nil || s.outputs.Size() != 0 {
+		t.Fatalf("reap must drop every victim's entry; size = %d", s.outputs.Size())
 	}
 }
 
@@ -1076,7 +1076,7 @@ func TestBlobCacheEvictsColdRuns(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	cached := s.blobs.has
+	cached := s.blobs.Has
 	create("cold", 1) // a run that will sit for days
 	create("b", 2)
 	create("c", 3)
@@ -1104,8 +1104,8 @@ func TestBlobCacheEvictsColdRuns(t *testing.T) {
 	if _, created, err := s.CreateRun(ctx, big, nil); err != nil || !created {
 		t.Fatal(err)
 	}
-	if cached("big") || s.blobs.size > s.blobs.limit {
-		t.Fatalf("an oversized run must not be cached; size = %d", s.blobs.size)
+	if cached("big") || s.blobs.Size() > s.blobs.Limit() {
+		t.Fatalf("an oversized run must not be cached; size = %d", s.blobs.Size())
 	}
 	if got, err := s.GetRun(ctx, "big"); err != nil || len(got.Input) != 4*8192 {
 		t.Fatalf("GetRun(big) = %d bytes, %v", len(got.Input), err)
@@ -1143,7 +1143,7 @@ func TestGetRunHead(t *testing.T) {
 	}
 	// Forget the blobs, as a restart would, and prove a head leaves them
 	// alone.
-	s.blobs.drop("run-1")
+	s.blobs.Drop("run-1")
 	h, err := s.GetRunHead(ctx, "run-1")
 	if err != nil {
 		t.Fatalf("GetRunHead: %v", err)
@@ -1157,7 +1157,7 @@ func TestGetRunHead(t *testing.T) {
 	if h.PipelineID != "p" || h.Annotations["tenant"] != "t1" || h.LastError != "boom" || h.Cancel == nil || h.Cancel.Cause != "op" || !h.NextAttemptAt.Equal(now.Add(time.Minute)) {
 		t.Fatalf("head = %+v", h)
 	}
-	if s.blobs.has("run-1") {
+	if s.blobs.Has("run-1") {
 		t.Fatal("a head read must not fill the blob cache")
 	}
 	full, err := s.GetRun(ctx, "run-1")

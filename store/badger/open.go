@@ -2,6 +2,7 @@ package badger
 
 import (
 	"fmt"
+	"math"
 	"net/url"
 	"strconv"
 	"strings"
@@ -80,7 +81,7 @@ func parseBytes(v string) (int64, error) {
 		}
 	}
 	n, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64)
-	if err != nil || n < 0 {
+	if err != nil || n < 0 || n > math.MaxInt64/unit {
 		return 0, fmt.Errorf("%q is not a byte count", v)
 	}
 	return n * unit, nil

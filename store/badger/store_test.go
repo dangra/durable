@@ -672,7 +672,7 @@ func TestOptions(t *testing.T) {
 			t.Errorf("parseBytes(%q) = %d, %v; want %d", in, got, err, want)
 		}
 	}
-	for _, bad := range []string{"", "x", "-1", "1.5M", "1TiB"} {
+	for _, bad := range []string{"", "x", "-1", "1.5M", "1TiB", "9223372036854775807g", "8589934592g"} {
 		if _, err := parseBytes(bad); err == nil {
 			t.Errorf("parseBytes(%q) accepted", bad)
 		}
@@ -693,5 +693,41 @@ func TestOptions(t *testing.T) {
 	got, err := s.GetRun(ctx, "run-b")
 	if err != nil || !bytes.Equal(got.Input, big) || !bytes.Equal(got.Steps["a"].Forward.State, big) {
 		t.Fatalf("large blobs = input %d, state %d, %v", len(got.Input), len(got.Steps["a"].Forward.State), err)
+	}
+}
+
+// A cancel request that commits while a terminality commit is in flight
+// is not lost: the terminality commit conflicts and its retry folds the
+// request into the terminal record. The two transactions are
+// interleaved by hand: the terminality transaction reads and writes,
+// RequestCancel commits, then the terminality transaction commits.
+func TestCancelRacingTerminalityIsKept(t *testing.T) {
+	ctx := context.Background()
+	s := open(t, filepath.Join(t.TempDir(), "race"))
+	rec := &driver.RunRecord{RunID: "run-r", PipelineID: "p", ResourceID: "r", Phase: durable.PhaseForward}
+	if _, created, err := s.CreateRun(ctx, rec, nil); err != nil || !created {
+		t.Fatal(err)
+	}
+	oc := durable.OutcomeSuccess
+	terminal := driver.Transition{Cursor: driver.Cursor{Phase: durable.PhaseDone}, Outcome: &oc}
+
+	txn := s.db.NewTransaction(true)
+	defer txn.Discard()
+	if err := s.applyTransition(txn, "run-r", terminal); err != nil {
+		t.Fatal(err)
+	}
+	if accepted, err := s.RequestCancel(ctx, "run-r", driver.CancelRequest{Cause: "late"}); err != nil || !accepted {
+		t.Fatalf("RequestCancel = %v, %v", accepted, err)
+	}
+	if err := txn.Commit(); !errors.Is(err, bdg.ErrConflict) {
+		t.Fatalf("terminality commit = %v; want a conflict with the cancel that committed first", err)
+	}
+	// The retry, as ApplyTransition runs it, keeps the request.
+	if err := s.ApplyTransition(ctx, "run-r", terminal); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.GetRun(ctx, "run-r")
+	if err != nil || !got.Terminal() || got.Cancel == nil || got.Cancel.Cause != "late" {
+		t.Fatalf("terminal record = %+v, %v; want the accepted cancel in it", got, err)
 	}
 }

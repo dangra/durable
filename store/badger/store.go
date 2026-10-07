@@ -43,9 +43,10 @@
 // from its oldest key, stops at the first run that has not expired,
 // and deletes each victim's terminal row and index key: proportional
 // to the victims, decoding nothing. A run's head — what status,
-// waiting, lookups, and recovery need — is four point reads (meta,
-// cancel, failure, cursor) or the terminal row: no operation row is
-// decoded and no blob is touched.
+// waiting, lookups, and recovery need — is the terminal row, or for a
+// nonterminal run five point reads (the missed terminal row, then
+// meta, cancel, failure, cursor): no operation row is decoded and no
+// blob is touched.
 //
 // What the engine changes against the bbolt driver. An LSM tree
 // appends: a write costs its bytes once in the log and again per
@@ -63,6 +64,16 @@
 // in front of the disk, where bbolt follows a few pages of a B+ tree;
 // and compaction and value-log garbage collection run in the
 // background, where bbolt has no such work.
+//
+// Conflict detection sees what a transaction read: every point read,
+// a missing key included, but of a prefix walk only the seek key and
+// the rows it returned. A row another transaction inserts under a
+// walked prefix is invisible to it. The one row that can appear that
+// way under a run's stage while a transition runs is the cancel request
+// (RequestCancel is the only writer besides the run's own worker), so
+// the terminality commit point-reads it: a cancel committing first
+// forces the commit to retry and fold it in, instead of the commit
+// deleting an accepted request.
 package badger
 
 import (
@@ -632,7 +643,12 @@ func (s *Store) CreateRun(_ context.Context, rec *driver.RunRecord, excluding []
 }
 
 func (s *Store) ApplyTransition(_ context.Context, id kernel.RunID, t driver.Transition) error {
-	return s.update(func(txn *bdg.Txn) error {
+	return s.update(func(txn *bdg.Txn) error { return s.applyTransition(txn, id, t) })
+}
+
+// applyTransition is ApplyTransition's body in a caller's transaction.
+func (s *Store) applyTransition(txn *bdg.Txn, id kernel.RunID, t driver.Transition) error {
+	{
 		// A terminal run accepts no further transitions, and the engine
 		// never sends one.
 		if ok, err := exists(txn, terminalKey(id)); err != nil {
@@ -652,7 +668,12 @@ func (s *Store) ApplyTransition(_ context.Context, id kernel.RunID, t driver.Tra
 			// and compacted by the shared rule, so the failed unwinds it
 			// keeps are the same ones the model keeps; then one terminal
 			// row is written and the nonterminal stage and the slot are
-			// deleted with it.
+			// deleted with it. The cancel row is point-read first so a
+			// concurrent RequestCancel conflicts with this commit (see
+			// the package doc): the prefix walk alone would not see it.
+			if _, err := exists(txn, activeKey(id, tagCancel)); err != nil {
+				return err
+			}
 			rec, err := s.getNonterminal(txn, id)
 			if err != nil {
 				return err
@@ -712,7 +733,7 @@ func (s *Store) ApplyTransition(_ context.Context, id kernel.RunID, t driver.Tra
 			}
 		}
 		return nil
-	})
+	}
 }
 
 func (s *Store) GetRun(_ context.Context, id kernel.RunID) (*driver.RunRecord, error) {

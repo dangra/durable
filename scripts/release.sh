@@ -29,8 +29,8 @@ die() { echo "release: $*" >&2; exit 1; }
 note() { echo "release: $*" >&2; }
 
 # In-tree modules besides the root, and the subset that gets tagged.
-modules() { find contrib examples -name go.mod | sort | xargs -n1 dirname; }
-tagged_modules() { find contrib -name go.mod | sort | xargs -n1 dirname; }
+modules() { find contrib store examples -name go.mod | sort | xargs -n1 dirname; }
+tagged_modules() { find contrib store -name go.mod | sort | xargs -n1 dirname; }
 module_path() { awk '$1 == "module" { print $2; exit }' "$1/go.mod"; }
 
 # require_version DIR MODPATH: the version DIR's go.mod requires MODPATH

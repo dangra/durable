@@ -89,6 +89,16 @@ jobs:
           go test -race -count=1 ./...
           go run .
 
+      # store/badger is its own module so Badger's dependency graph
+      # enters only the binaries that import the driver.
+      - name: Badger store module
+        working-directory: store/badger
+        run: |
+          go mod tidy -diff
+          go vet ./...
+          go test -race -count=1 ./...
+          go test -run xxx -bench . -benchtime 1x ./...
+
   # Half the old Build & test wall time was fuzzing; it gates nothing
   # downstream, so it runs as its own parallel lane.
   release-versions:
@@ -125,6 +135,7 @@ jobs:
           go test -fuzz=FuzzOps -fuzztime=10s ./internal/joinset/
           go test -fuzz=FuzzRoundTrip -fuzztime=10s ./store/internal/storagepb/
           go test -run xxx -fuzz=FuzzStoreContract -fuzztime=10s ./store/bbolt/
+          (cd store/badger && go test -run xxx -fuzz=FuzzStoreContract -fuzztime=10s ./)
 
   staticcheck:
     name: Staticcheck
@@ -141,6 +152,12 @@ jobs:
       # truth, bumped by dependabot's gomod updates).
       - name: Staticcheck
         run: go tool staticcheck ./...
+      # The tool directive lives in the root go.mod; the binary built
+      # from it checks the nested module from its own directory.
+      - name: Staticcheck (store/badger)
+        run: |
+          go build -o "$RUNNER_TEMP/staticcheck" honnef.co/go/tools/cmd/staticcheck
+          (cd store/badger && "$RUNNER_TEMP/staticcheck" ./...)
 
   govulncheck:
     name: Vulnerability scan
@@ -154,7 +171,9 @@ jobs:
         with:
           go-version-file: go.mod
       - name: govulncheck
-        run: go tool govulncheck ./...
+        run: |
+          go tool govulncheck ./...
+          go tool govulncheck -C store/badger ./...
 
   proto:
     name: Protobuf lint, breaking & drift

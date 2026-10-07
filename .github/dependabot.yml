@@ -19,6 +19,17 @@ updates:
         update-types: ["version-update:semver-major", "version-update:semver-minor"]
       - dependency-name: google.golang.org/protobuf
         update-types: ["version-update:semver-major", "version-update:semver-minor"]
+  # store/badger is its own module; same patch-only policy for its
+  # runtime dependency.
+  - package-ecosystem: gomod
+    directory: /store/badger
+    schedule:
+      interval: weekly
+    ignore:
+      - dependency-name: github.com/dgraph-io/badger/v4
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: google.golang.org/protobuf
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
   # Keeps the SHA-pinned actions in ci.yml current.
   - package-ecosystem: github-actions
     directory: /

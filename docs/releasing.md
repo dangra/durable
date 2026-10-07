@@ -1,11 +1,12 @@
 # Releasing
 
 durable is one repository holding several Go modules: the core
-`github.com/dangra/durable`, the contrib modules under `contrib/`, and
-the examples. Releases are **lockstep**: the core and every contrib
-module share one version, cut from one commit, one tag per module
-(`v0.4.0`, `contrib/durableotel/v0.4.0`). The examples are bumped but
-never tagged.
+`github.com/dangra/durable`, the contrib modules under `contrib/`, the
+store drivers that are modules of their own under `store/`
+(`store/badger`), and the examples. Releases are **lockstep**: the core
+and every contrib and store module share one version, cut from one
+commit, one tag per module (`v0.4.0`, `contrib/durableotel/v0.4.0`,
+`store/badger/v0.4.0`). The examples are bumped but never tagged.
 
 The shape follows opentelemetry-go's: a *prepare* commit that names the
 version, reviewed and tested as a normal PR, then tags at the merged
@@ -64,9 +65,11 @@ origin <tags>`); withdraw, fix on `master`, and cut the next patch
 version — do not retag a version that was ever visible, module proxies
 may have cached it.
 
-## Adding a contrib module
+## Adding a contrib or store module
 
-Give it a `go.mod` under `contrib/<name>/` with
+Give it a `go.mod` under `contrib/<name>/` or `store/<name>/` with
 `replace github.com/dangra/durable => ../..` and a `require` of the core
-at `VERSION`. `verify`, `prepare`, and `tag` discover contrib modules by
-walking `contrib/`; nothing else to register.
+at `VERSION`. `verify`, `prepare`, and `tag` discover tagged modules by
+walking `contrib/` and `store/`; nothing else to register. A store
+driver gets its own module when its dependency graph is one the core's
+consumers should not all carry (Badger's is).

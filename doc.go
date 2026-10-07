@@ -114,8 +114,9 @@
 //     typed events — for telemetry-adapter authors; contrib/durableotel
 //     is the packaged adapter most applications install instead.
 //   - store opens a store from a URI (store.Open("bbolt:///path")) via
-//     drivers that register a scheme; store/bbolt is the persistent
-//     driver, store/mem the in-memory one for ephemeral runs and tests.
+//     drivers that register a scheme; store/bbolt and store/badger (a
+//     separate module) are the persistent drivers, store/mem the
+//     in-memory one for ephemeral runs and tests.
 //     store/driver is the SPI — the Store interface and the durable
 //     record types — for implementers of new backends, in the spirit of
 //     database/sql/driver; users never import it.

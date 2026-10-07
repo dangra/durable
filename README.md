@@ -24,8 +24,9 @@ opening a store, binding the generated definitions, scheduling and
 waiting on runs. Generated code additionally imports `pipelinedef`, the
 type-erased definition it builds; the shared vocabulary lives in
 `kernel` and is aliased into `durable`. Stores are opened by URI through
-`store` with a blank import of the driver (`store/bbolt` persistent,
-`store/mem` for ephemeral runs); implementers use `store/driver`,
+`store` with a blank import of the driver (`store/bbolt` and
+`store/badger` persistent, `store/mem` for ephemeral runs);
+implementers use `store/driver`,
 telemetry adapters `observe`.
 
 **Requires Go 1.27+** (the typed `State` lookup is a generic method).

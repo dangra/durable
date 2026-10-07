@@ -750,8 +750,9 @@ waiting, lookups, await bookkeeping, and recovery read — in point reads
 that touch no Input, State, or Output, and register a URI scheme
 with `store.Register`, so applications open them through `store.Open`
 and link only the drivers they import.
-The in-memory `store/mem` is the executable reference, and `store/bbolt`
-is checked against it by differential fuzzing.
+The in-memory `store/mem` is the executable reference, and every
+persistent driver (`store/bbolt`, `store/badger`) is checked against it
+by the differential fuzzer in `store/internal/storetest`.
 
 The engine mutates durable state exclusively through atomic transitions:
 
